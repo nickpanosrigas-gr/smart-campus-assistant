@@ -1,11 +1,11 @@
-# Smart Campus Intelligent Assistant 🏛️🤖
+# Smart Campus Intelligent Assistant
 
 ## Overview
 This repository contains the prototype for an LLM-based Intelligent Assistant designed for Smart Campus management, developed as part of a university thesis. The system allows building managers to interact with building infrastructure and IoT systems (lighting, HVAC, occupancy, access control) using natural language queries.
 
 By integrating Google's Gemini 3.1-Flash via LangGraph, the assistant translates natural language into precise data requests, performs anomaly detection, queries semantic knowledge, and proposes automated infrastructure rules via ThingsBoard.
 
-## Architecture 🏗️
+## Architecture
 
 The system employs an **Agentic Supervisor (Multi-Agent)** architecture built on **LangGraph**:
 
@@ -14,7 +14,7 @@ The system employs an **Agentic Supervisor (Multi-Agent)** architecture built on
 3. **Action & Rule Agent (Write-Access):** Proposes infrastructure changes and constructs ThingsBoard Rule Chain JSONs. **Safety constraint:** Includes a Human-in-the-Loop (HITL) approval step before deploying any changes to the active ThingsBoard instance.
 4. **Semantic Memory (Qdrant Vector DB):** Utilizes Google's Embedding models to store and retrieve unstructured campus knowledge, including HVAC manuals, building topology (e.g., "Which rooms face South?"), and Standard Operating Procedures (SOPs).
 
-## Technology Stack 💻
+## Technology Stack
 
 * **Framework:** Python, LangChain, LangGraph
 * **LLM:** Google Gemini 3.1-Flash-Preview
@@ -22,7 +22,7 @@ The system employs an **Agentic Supervisor (Multi-Agent)** architecture built on
 * **Vector Database:** Qdrant (Local/Docker or Cloud)
 * **IoT Platform:** ThingsBoard (REST API & Rule Engine)
 
-## Project Structure 📁
+## Project Structure
 
 ```text
 smart-campus-assistant/
