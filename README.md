@@ -47,6 +47,10 @@ smart-campus-assistant/
 │   ├── door_window_api.py      # Binary state sensors (Open/Closed)
 │   └── knowledge_query.py      # Qdrant Vector DB semantic search tool
 │
+├── clients/                    # Tool clients
+│   ├── __init__.py
+│   └── thingsboard_client.py   # Shared logic for ThingsBoard Tools
+│
 ├── database/                   # Vector DB Management
 │   ├── __init__.py
 │   ├── qdrant_client.py        # Qdrant connection and initialization
