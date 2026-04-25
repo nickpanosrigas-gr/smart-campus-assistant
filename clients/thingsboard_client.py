@@ -136,8 +136,8 @@ if __name__ == "__main__":
         tb_client = ThingsBoardClient()
 
         # Testing with the Door/Window Sensor you provided
-        TEST_DEVICE_ID = "04bf5be0-0342-11f0-ab2a-1bdcb487461d"
-        TEST_KEYS = ["co2", "light_level", "pir", "humidity"]
+        TEST_DEVICE_ID = "34578b10-0343-11f0-ab2a-1bdcb487461d"
+        TEST_KEYS = ["light_level"]
 
         print(f"\nTesting with Device ID: {TEST_DEVICE_ID}")
         print(f"Requesting Telemetry Keys: {TEST_KEYS}")
@@ -145,7 +145,7 @@ if __name__ == "__main__":
         now_data = tb_client.get_now(TEST_DEVICE_ID, TEST_KEYS)
         print_chunk("Testing get_now() [Latest point]", now_data)
 
-        h24_data = tb_client.get_7d(TEST_DEVICE_ID, TEST_KEYS)
+        h24_data = tb_client.get_30d(TEST_DEVICE_ID, TEST_KEYS)
         print_chunk("Testing get_24h() [Raw points]", h24_data)
 
         print("\n✅ All ThingsBoard client tests completed successfully.\n")

@@ -139,36 +139,86 @@ Stable_Periods (No State Changes):
 ```
 
 ### 4. Occupancy (`occupancy.py`)
-Utilizes a **Polymorphic Schema** to handle different data shapes (Binary Desk Sensors, Continuous People Counters, and Queue Trackers) without breaking the established YAML structure.
+Utilizes a Polymorphic Schema to handle different data shapes (Binary Desk Sensors, Continuous People Counters, and Queue Trackers) and incorporates Auxiliary Motion Sensors to cross-validate data and detect anomalies (like "Ghost Occupancy" or stuck sensors) without breaking the established YAML structure.
 
 ```yaml
 Query_Context:
-  Domain: Occupancy
+  Domain: Occupancy & Presence
   Room: Classroom_101
   Timeframe: 24h (2h intervals)
-  Sensor_Type: People_Counter (Continuous Count)
+  Primary_Sensor: People_Counter (Continuous Count)
+  Auxiliary_Sensors: 2 (F0_Classroom_101-IAQ_Main-Motion, F0_Classroom_101-IAQ_Back-Motion)
 
 Global_Occupancy_Summary (Last 24h):
   Peak_Occupancy: 45 people
   Utilization_Profile: Active 6h / Empty 18h
+  Aux_Motion_Profile: Active 7h / Idle 17h (High Correlation)
 
-Timeline_Activity (Significant Movements):
+Timeline_Activity (Significant Movements & Anomalies):
 - bucket: '2026-04-24 08:00 - 10:00'
-  activity: 'Mass Arrival'
+  activity: 'Mass Arrival & Motion Sync'
   metrics:
-    Net_Change: +42 people
-    Peak_in_Bucket: 42
+    Net_Change: +42 people (Peak: 42)
+    Aux_Motion: 'Transition: [Idle -> Active at 08:05]. Sustained Active.'
 - bucket: '2026-04-24 10:00 - 12:00'
   activity: 'Mass Departure'
   metrics:
     Net_Change: -42 people (Room emptied at 10:15)
+    Aux_Motion: 'Transition: [Active -> Idle at 10:20].'
+- bucket: '2026-04-24 22:00 - 24:00'
+  activity: 'Anomaly: Uncorrelated Presence (Ghost Occupancy)'
+  details: 'Primary counter reads 0, but sustained motion detected. Likely cleaning crew, security patrol, or people counter missed entry.'
+  metrics:
+    Net_Change: 0 people (Primary reads 0)
+    Aux_Motion: 'Transition: [Idle -> Active at 22:15]. Toggled 14 times. Ended Idle at 23:30.'
 
 Stable_Periods:
-  - '2026-04-23 16:00 to 2026-04-24 08:00' (10 intervals): Status: Empty (0 people)
-  - '2026-04-24 12:00 to Present' (6 intervals): Status: Empty (0 people)
+  - '2026-04-23 16:00 to 2026-04-24 08:00' (10 intervals): 
+      Status: Empty (0 people) | Motion: Idle (0 toggles)
+  - '2026-04-24 12:00 to 22:00' (5 intervals): 
+      Status: Empty (0 people) | Motion: Idle (0 toggles)
 ```
 
-### 5. Real-Time Snapshots ("Now" Timeframe)
+### 5. Illumination (lights.py)
+Translates categorical 0-5 light intensity indices into semantic states (Dark to Overcast/Sunny). It focuses on significant state transitions (e.g., Sudden Spikes vs. Gradual Increases) to provide context-agnostic activity cues to the LLM.
+
+```yaml
+Query_Context:
+  Domain: Illumination (0-5 Index)
+  Room: Classroom_101
+  Timeframe: 24h (2h intervals)
+  Active_Sensors: 2 (F0_Classroom_101-IAQ_Main, F0_Classroom_101-IAQ_Back)
+
+Global_Illumination_Summary (Last 24h):
+  Peak_Level: 4 (Very Bright)
+  Lowest_Level: 0 (Dark)
+  Profile: Dark 14h / Illuminated 10h
+
+Timeline_Transitions:
+- bucket: '2026-04-24 06:00 - 08:00'
+  activity: 'Gradual Illumination Increase'
+  metrics:
+    Transition: '0 (Dark) -> 2 (Normal)'
+    Details: 'Steady rise across the bucket. (Typical of sunrise).'
+- bucket: '2026-04-24 08:00 - 10:00'
+  activity: 'Sudden Illumination Spike'
+  metrics:
+    Transition: '2 (Normal) -> 4 (Very Bright)'
+    Details: 'Rapid jump at 08:15. Sustained at level 4.'
+- bucket: '2026-04-24 18:00 - 20:00'
+  activity: 'Sudden Illumination Drop'
+  metrics:
+    Transition: '3 (Bright) -> 0 (Dark)'
+    Details: 'Immediate drop to 0 (Dark) at 18:30.'
+
+Stable_Periods:
+  - '2026-04-23 20:00 to 2026-04-24 06:00' (5 intervals): 
+      State: Maintained 0 (Dark)
+  - '2026-04-24 10:00 to 18:00' (4 intervals): 
+      State: Fluctuated between 3 (Bright) and 4 (Very Bright)
+```
+
+### 6. Real-Time Snapshots ("Now" Timeframe)
 When the LLM Orchestrator needs instant situational awareness, it passes `timeframe: "now"` to any tool. This branches the backend logic to skip historical aggregation entirely and return a token-efficient, zero-latency state check.
 
 ```yaml
@@ -207,8 +257,9 @@ smart-campus-assistant/
 │   ├── __init__.py
 │   ├── temp_humidity.py        # Combines Temp & Humidity with Indoor/Outdoor delta
 │   ├── air_quality.py          # Oxygen, CO2, TVOC, Particulate Matter
-│   ├── occupancy.py            # Polymorphic logic for people/desk/line counters
+│   ├── occupancy.py            # Polymorphic logic for people/desk/line counters + Aux Motion
 │   ├── door_window.py          # Binary state transitions (Open/Closed)
+│   ├── lights.py               # 0-5 Categorical illumination states and transitions
 │   └── knowledge.py            # Qdrant Vector DB semantic search tool
 │
 ├── clients/                    # Tool clients
