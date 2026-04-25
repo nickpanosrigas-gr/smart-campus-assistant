@@ -3,9 +3,6 @@ import logging
 import requests
 import json
 from typing import List, Dict, Any, Optional
-from collections import defaultdict
-
-# Import the credentials from your settings configuration
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -13,7 +10,7 @@ logger = logging.getLogger(__name__)
 class ThingsBoardClient:
     """
     Client for interacting with the ThingsBoard REST API.
-    Fetches RAW data to perform high-accuracy Min/Max/Avg calculations in Python.
+    Fetches RAW data. Aggregation and domain-logic are delegated to the specific LangGraph tools.
     """
     
     def __init__(self):
@@ -69,66 +66,19 @@ class ThingsBoardClient:
             "keys": ",".join(keys),
             "startTs": start_ts,
             "endTs": end_ts,
-            "limit": 100000,          # Force TB to return up to 100k raw points
+            "limit": 100000,  # Force TB to return up to 100k raw points
             "useStrictDataTypes": "false"
         }
         
         response = self._request("GET", endpoint, params=params)
         return response.json()
 
-    def _aggregate_raw_data(self, raw_data: Dict[str, List[Dict]], start_ts: int, end_ts: int, interval_ms: int) -> Dict[str, List[Dict]]:
-        """
-        Takes raw ThingsBoard telemetry and chunks it into specific timeframes.
-        Calculates the true min, max, and avg for each chunk.
-        """
-        aggregated_result = defaultdict(list)
-
-        for key, points in raw_data.items():
-            bins = defaultdict(list)
-            for pt in points:
-                ts = int(pt["ts"])
-                value = float(pt["value"])
-                
-                # ==========================================
-                # SANITIZATION: Drop hardware error codes
-                # ==========================================
-                if value >= 65535.0:
-                    continue # Skip this data point
-                
-                bin_index = (ts - start_ts) // interval_ms
-                bins[bin_index].append(value)
-            
-            total_bins = (end_ts - start_ts) // interval_ms
-            
-            for i in range(total_bins):
-                bin_values = bins.get(i)
-                bin_start_time = start_ts + (i * interval_ms)
-                
-                if bin_values:
-                    aggregated_result[key].append({
-                        "ts_start": bin_start_time,
-                        "min": round(min(bin_values), 2),
-                        "max": round(max(bin_values), 2),
-                        "avg": round(sum(bin_values) / len(bin_values), 2),
-                        "data_points_count": len(bin_values)
-                    })
-                else:
-                    aggregated_result[key].append({
-                        "ts_start": bin_start_time,
-                        "min": None, "max": None, "avg": None, "data_points_count": 0
-                    })
-                    
-        return dict(aggregated_result)
-
     # ==========================================
-    # TIME-FRAME FUNCTIONS (LangGraph Tools)
+    # TIME-FRAME FUNCTIONS (Returning Raw Data)
     # ==========================================
     
     def get_now(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
-        """
-        Fetches the absolute latest telemetry point for the requested keys.
-        By omitting startTs and endTs, ThingsBoard defaults to returning the latest values.
-        """
+        """Fetches the absolute latest telemetry point (No start/end constraints)."""
         endpoint = f"/api/plugins/telemetry/DEVICE/{device_id}/values/timeseries"
         params = {
             "keys": ",".join(keys),
@@ -138,96 +88,67 @@ class ThingsBoardClient:
         return response.json()
 
     def get_2h(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
-        """Fetches 2h raw data, chunks into 10-minute bins."""
+        """Fetches 2h of raw data."""
         end_ts = int(time.time() * 1000)
         start_ts = end_ts - (2 * 3600 * 1000)
-        interval = 10 * 60 * 1000 
-        raw_data = self._fetch_raw_telemetry(device_id, keys, start_ts, end_ts)
-        return self._aggregate_raw_data(raw_data, start_ts, end_ts, interval)
+        return self._fetch_raw_telemetry(device_id, keys, start_ts, end_ts)
 
     def get_24h(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
-        """Fetches 24h raw data, chunks into 2-hour bins."""
+        """Fetches 24h of raw data."""
         end_ts = int(time.time() * 1000)
         start_ts = end_ts - (24 * 3600 * 1000)
-        interval = 2 * 3600 * 1000
-        raw_data = self._fetch_raw_telemetry(device_id, keys, start_ts, end_ts)
-        return self._aggregate_raw_data(raw_data, start_ts, end_ts, interval)
+        return self._fetch_raw_telemetry(device_id, keys, start_ts, end_ts)
 
     def get_7d(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
-        """Fetches 7d raw data, chunks into 12-hour bins."""
+        """Fetches 7 days of raw data."""
         end_ts = int(time.time() * 1000)
         start_ts = end_ts - (7 * 24 * 3600 * 1000)
-        interval = 12 * 3600 * 1000
-        raw_data = self._fetch_raw_telemetry(device_id, keys, start_ts, end_ts)
-        return self._aggregate_raw_data(raw_data, start_ts, end_ts, interval)
+        return self._fetch_raw_telemetry(device_id, keys, start_ts, end_ts)
 
     def get_30d(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
-        """Fetches 30d raw data, chunks into 48-hour bins."""
+        """Fetches 30 days of raw data."""
         end_ts = int(time.time() * 1000)
         start_ts = end_ts - (30 * 24 * 3600 * 1000)
-        interval = 48 * 3600 * 1000
-        raw_data = self._fetch_raw_telemetry(device_id, keys, start_ts, end_ts)
-        return self._aggregate_raw_data(raw_data, start_ts, end_ts, interval)
+        return self._fetch_raw_telemetry(device_id, keys, start_ts, end_ts)
 
 
 # ==========================================
 # TEST EXECUTION BLOCK
 # ==========================================
 if __name__ == "__main__":
-    # Setup basic logging to see the initialization info
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     
-    # Format helper to print clean JSON chunks to the terminal
     def print_chunk(title: str, data: Dict):
         print(f"\n{'-'*50}\n▶ {title}\n{'-'*50}")
+        # Print a small preview of the raw data list
         preview = {}
-        for key, bins in data.items():
-            preview[key] = bins[:2] if isinstance(bins, list) else bins
+        for key, points in data.items():
+            preview[key] = points[:3] if isinstance(points, list) else points
+            if isinstance(points, list) and len(points) > 3:
+                preview[key].append({"...": f"({len(points) - 3} more raw points)"})
         print(json.dumps(preview, indent=2))
-        print(f"... (truncated for readability)")
 
     print("\n" + "="*50)
-    print("🧪 RUNNING THINGSBOARD CLIENT TESTS 🧪")
+    print("🧪 RUNNING RAW THINGSBOARD CLIENT TESTS 🧪")
     print("="*50)
 
     try:
-        # Initialize client (This will automatically try to authenticate using your settings)
         tb_client = ThingsBoardClient()
 
-        # Using an actual device ID from your campus_topology.json (F1_1.2-IAQ-1)
-        TEST_DEVICE_ID = "8a993270-0353-11f0-ab2a-1bdcb487461d"
-        TEST_KEYS = ["co2", "temperature"]
+        # Testing with the Door/Window Sensor you provided
+        TEST_DEVICE_ID = "04bf5be0-0342-11f0-ab2a-1bdcb487461d"
+        TEST_KEYS = ["co2", "light_level", "pir", "humidity"]
 
         print(f"\nTesting with Device ID: {TEST_DEVICE_ID}")
         print(f"Requesting Telemetry Keys: {TEST_KEYS}")
 
-        # 1. Test "Now" (Live Data)
         now_data = tb_client.get_now(TEST_DEVICE_ID, TEST_KEYS)
-        print_chunk("Testing get_now() [Absolute Latest via default endpoint]", now_data)
+        print_chunk("Testing get_now() [Latest point]", now_data)
 
-        # 2. Test 2 Hours (10-min bins)
-        h2_data = tb_client.get_2h(TEST_DEVICE_ID, TEST_KEYS)
-        print_chunk("Testing get_2h() [Aggregated into 10-min bins]", h2_data)
-
-        # 3. Test 24 Hours (2-hour bins)
-        h24_data = tb_client.get_24h(TEST_DEVICE_ID, TEST_KEYS)
-        print_chunk("Testing get_24h() [Aggregated into 2-hour bins]", h24_data)
-
-        # 4. Test 7 Days (12-hour bins)
-        d7_data = tb_client.get_7d(TEST_DEVICE_ID, TEST_KEYS)
-        print_chunk("Testing get_7d() [Aggregated into 12-hour bins]", d7_data)
-
-        # 5. Test 30 Days (48-hour bins)
-        d30_data = tb_client.get_30d(TEST_DEVICE_ID, TEST_KEYS)
-        print_chunk("Testing get_30d() [Aggregated into 48-hour bins]", d30_data)
+        h24_data = tb_client.get_7d(TEST_DEVICE_ID, TEST_KEYS)
+        print_chunk("Testing get_24h() [Raw points]", h24_data)
 
         print("\n✅ All ThingsBoard client tests completed successfully.\n")
 
-    except requests.exceptions.ConnectionError:
-        print("\n❌ ERROR: Could not connect to ThingsBoard.")
-        print("Ensure your local/cloud ThingsBoard instance is running and the URL in config/settings.py is correct.")
-    except requests.exceptions.HTTPError as e:
-        print(f"\n❌ HTTP ERROR: {e}")
-        print("Check your ThingsBoard credentials in config/settings.py.")
     except Exception as e:
         print(f"\n❌ UNEXPECTED ERROR: {e}")
