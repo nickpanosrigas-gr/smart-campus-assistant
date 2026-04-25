@@ -157,7 +157,7 @@ if __name__ == "__main__":
         # 3. Test get_available_rooms
         rooms = registry.get_available_rooms()
         print(f"\n[3] Available Rooms ({len(rooms)} total):")
-        print(f"    Sample: {rooms[:6]} ...")
+        print(f"    Sample: {rooms}")
 
         # 4. Test get_devices_by_room_and_type
         test_room = "1.2"
