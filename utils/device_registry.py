@@ -1,132 +1,222 @@
+import time
+import logging
+import requests
 import json
-import re
-from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Dict, Any, Optional
+from collections import defaultdict
+from config.settings import settings
 
-class DeviceRegistry:
-    def __init__(self, json_path: str = "data/campus_topology.json"):
-        self.json_path = Path(json_path)
-        
-        # Data structures for our tools
-        self.devices_by_type: Dict[str, Dict[str, str]] = {}
-        self.devices_by_room: Dict[str, Dict[str, str]] = {}
-        self.all_devices: Dict[str, str] = {}
-        
-        # Load and parse upon initialization
-        self._load_and_parse()
+logger = logging.getLogger(__name__)
 
-    def _extract_sensor_type(self, device_name: str) -> str:
+class ThingsBoardClient:
+    """
+    Client for interacting with the ThingsBoard REST API.
+    Fetches RAW data to perform high-accuracy Min/Max/Avg calculations in Python.
+    """
+    
+    def __init__(self):
+        # Ensure there's no trailing slash to prevent double-slash in URLs
+        self.base_url = settings.THINGSBOARD_BASE_URL.rstrip('/')
+        self.username = settings.THINGSBOARD_USERNAME
+        self.password = settings.THINGSBOARD_PASSWORD
+        self.token: Optional[str] = None
+        
+        self._authenticate()
+
+    def _authenticate(self) -> None:
+        """Authenticates with ThingsBoard using username/password and retrieves a new JWT token."""
+        url = f"{self.base_url}/api/auth/login"
+        payload = {"username": self.username, "password": self.password}
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        
+        try:
+            response = requests.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            self.token = response.json().get("token")
+            logger.info("Successfully authenticated with ThingsBoard API.")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to authenticate with ThingsBoard: {e}")
+            raise
+
+    def _request(self, method: str, endpoint: str, params: Optional[Dict] = None, **kwargs) -> requests.Response:
+        """Wrapper to handle automatic JWT token refreshing on 401 Unauthorized."""
+        url = f"{self.base_url}{endpoint}"
+        
+        if not self.token:
+            self._authenticate()
+            
+        headers = {"X-Authorization": f"Bearer {self.token}", "Accept": "application/json"}
+        response = requests.request(method, url, headers=headers, params=params, **kwargs)
+        
+        if response.status_code == 401:
+            logger.warning("ThingsBoard JWT token expired. Re-authenticating...")
+            self._authenticate()
+            headers["X-Authorization"] = f"Bearer {self.token}"
+            response = requests.request(method, url, headers=headers, params=params, **kwargs)
+            
+        response.raise_for_status()
+        return response
+
+    def _fetch_raw_telemetry(self, device_id: str, keys: List[str], start_ts: int, end_ts: int) -> Dict[str, Any]:
         """
-        Extracts the base sensor type from the device name.
-        Example: 'F0_Restaurant-IAQ-2' -> 'IAQ'
+        Fetches ALL raw data points without server-side aggregation.
+        Uses a massive limit to ensure no data is truncated.
         """
-        if '_' in device_name:
-            suffix = device_name.split('_', 1)[1]
-            if '-' in suffix:
-                type_part = suffix.split('-', 1)[1]
-                # Remove trailing dashes and numbers
-                base_type = re.sub(r'-?\d+$', '', type_part)
-                return base_type.upper()
-        return "UNKNOWN"
-
-    def _load_and_parse(self):
-        """Reads the JSON and builds the queryable dictionaries."""
-        if not self.json_path.exists():
-            print(f"Warning: Topology file {self.json_path} not found.")
-            return
-
-        with open(self.json_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-
-        buildings = data.get("campus", {}).get("buildings", {})
+        endpoint = f"/api/plugins/telemetry/DEVICE/{device_id}/values/timeseries"
+        params = {
+            "keys": ",".join(keys),
+            "startTs": start_ts,
+            "endTs": end_ts,
+            "limit": 100000,          # Force TB to return up to 100k raw points
+            "useStrictDataTypes": "false"
+        }
         
-        for building_name, building_data in buildings.items():
-            floors = building_data.get("floors", {})
-            for floor_id, floor_data in floors.items():
-                rooms = floor_data.get("rooms", {})
-                for room_id, room_data in rooms.items():
-                    devices = room_data.get("devices", {})
+        response = self._request("GET", endpoint, params=params)
+        return response.json()
+
+    def _aggregate_raw_data(self, raw_data: Dict[str, List[Dict]], start_ts: int, end_ts: int, interval_ms: int) -> Dict[str, List[Dict]]:
+        """
+        Takes raw ThingsBoard telemetry and chunks it into specific timeframes.
+        Calculates the true min, max, and avg for each chunk.
+        """
+        aggregated_result = defaultdict(list)
+
+        for key, points in raw_data.items():
+            bins = defaultdict(list)
+            for pt in points:
+                ts = int(pt["ts"])
+                value = float(pt["value"])
+                bin_index = (ts - start_ts) // interval_ms
+                bins[bin_index].append(value)
+            
+            total_bins = (end_ts - start_ts) // interval_ms
+            
+            for i in range(total_bins):
+                bin_values = bins.get(i)
+                bin_start_time = start_ts + (i * interval_ms)
+                
+                if bin_values:
+                    aggregated_result[key].append({
+                        "ts_start": bin_start_time,
+                        "min": round(min(bin_values), 2),
+                        "max": round(max(bin_values), 2),
+                        "avg": round(sum(bin_values) / len(bin_values), 2),
+                        "data_points_count": len(bin_values)
+                    })
+                else:
+                    aggregated_result[key].append({
+                        "ts_start": bin_start_time,
+                        "min": None, "max": None, "avg": None, "data_points_count": 0
+                    })
                     
-                    room_key = f"{floor_id}_{room_id}"
-                    if room_key not in self.devices_by_room:
-                        self.devices_by_room[room_key] = {}
-                        
-                    for device_name, device_id in devices.items():
-                        # 1. Save to flat dictionary
-                        self.all_devices[device_name] = device_id
-                        
-                        # 2. Save by Room
-                        self.devices_by_room[room_key][device_name] = device_id
-                        
-                        # 3. Save by Sensor Type
-                        sensor_type = self._extract_sensor_type(device_name)
-                        if sensor_type not in self.devices_by_type:
-                            self.devices_by_type[sensor_type] = {}
-                        self.devices_by_type[sensor_type][device_name] = device_id
+        return dict(aggregated_result)
 
-    # --- Base Getter Methods ---
+    # ==========================================
+    # TIME-FRAME FUNCTIONS (LangGraph Tools)
+    # ==========================================
+    
+    def get_now(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
+        """Fetches the absolute latest telemetry point for the requested keys."""
+        endpoint = f"/api/plugins/telemetry/DEVICE/{device_id}/values/timeseries"
+        params = {
+            "keys": ",".join(keys),
+            "useStrictDataTypes": "false"
+        }
+        response = self._request("GET", endpoint, params=params)
+        return response.json()
 
-    def get_devices_by_type(self, sensor_type: str) -> Dict[str, str]:
-        """Returns all devices of a specific type (e.g., 'IAQ', 'MC', 'DESK')."""
-        return self.devices_by_type.get(sensor_type.upper(), {})
+    def get_2h(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
+        """Fetches 2h raw data, chunks into 10-minute bins."""
+        end_ts = int(time.time() * 1000)
+        start_ts = end_ts - (2 * 3600 * 1000)
+        interval = 10 * 60 * 1000
+        raw_data = self._fetch_raw_telemetry(device_id, keys, start_ts, end_ts)
+        return self._aggregate_raw_data(raw_data, start_ts, end_ts, interval)
 
-    def get_devices_in_room(self, floor_id: str, room_id: str) -> Dict[str, str]:
-        """Returns all devices inside a specific room."""
-        room_key = f"{floor_id}_{room_id}"
-        return self.devices_by_room.get(room_key, {})
+    def get_24h(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
+        """Fetches 24h raw data, chunks into 2-hour bins."""
+        end_ts = int(time.time() * 1000)
+        start_ts = end_ts - (24 * 3600 * 1000)
+        interval = 2 * 3600 * 1000
+        raw_data = self._fetch_raw_telemetry(device_id, keys, start_ts, end_ts)
+        return self._aggregate_raw_data(raw_data, start_ts, end_ts, interval)
 
-    def get_device_id(self, device_name: str) -> Optional[str]:
-        """Gets a specific device ID by its exact name."""
-        return self.all_devices.get(device_name)
+    def get_7d(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
+        """Fetches 7d raw data, chunks into 12-hour bins."""
+        end_ts = int(time.time() * 1000)
+        start_ts = end_ts - (7 * 24 * 3600 * 1000)
+        interval = 12 * 3600 * 1000
+        raw_data = self._fetch_raw_telemetry(device_id, keys, start_ts, end_ts)
+        return self._aggregate_raw_data(raw_data, start_ts, end_ts, interval)
 
-    def get_available_types(self) -> List[str]:
-        """Returns a list of all parsed sensor types."""
-        return list(self.devices_by_type.keys())
-
-    # --- NEW GETTER METHODS ---
-
-    def get_total_device_count(self) -> int:
-        """Returns the total number of registered devices across the campus."""
-        return len(self.all_devices)
-
-    def get_devices_by_type_and_room(self, sensor_type: str, floor_id: str, room_id: str) -> Dict[str, str]:
-        """Returns devices of a specific type within a specific room."""
-        room_devices = self.get_devices_in_room(floor_id, room_id)
-        target_type = sensor_type.upper()
-        
-        # Filter the room's devices by the target type
-        return {name: dev_id for name, dev_id in room_devices.items() 
-                if self._extract_sensor_type(name) == target_type}
-
-    def get_devices_by_type_and_floor(self, sensor_type: str, floor_id: str) -> Dict[str, str]:
-        """Returns all devices of a specific type across an entire floor."""
-        devices_of_type = self.get_devices_by_type(sensor_type)
-        
-        # Because device names are formatted like 'F1_1.1-IAQ-1', we can filter by the 'F1_' prefix
-        prefix = f"{floor_id}_"
-        return {name: dev_id for name, dev_id in devices_of_type.items() if name.startswith(prefix)}
+    def get_30d(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
+        """Fetches 30d raw data, chunks into 48-hour bins."""
+        end_ts = int(time.time() * 1000)
+        start_ts = end_ts - (30 * 24 * 3600 * 1000)
+        interval = 48 * 3600 * 1000
+        raw_data = self._fetch_raw_telemetry(device_id, keys, start_ts, end_ts)
+        return self._aggregate_raw_data(raw_data, start_ts, end_ts, interval)
 
 
-# Instantiate a single global registry to be imported by other files
-registry = DeviceRegistry()
-
+# ==========================================
+# TEST EXECUTION BLOCK
+# ==========================================
 if __name__ == "__main__":
-    # --- Tests for the new methods ---
+    # Setup basic logging to see the initialization info
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     
-    # Total count and types
-    total_count = registry.get_total_device_count()
-    available_types = ", ".join(registry.get_available_types())
-    print(f"Total Campus Devices: {total_count} (Types: {available_types})")
-    
-    # Desks in Room 4.9 (Name and ID)
-    print("\nDesks in Room 4.9 (Floor F4):")
-    desks_4_9 = registry.get_devices_by_type_and_room("Desk", "F4", "4.9-lab")
-    print(f"Found {len(desks_4_9)} desks:")
-    for name, device_id in desks_4_9.items():
-        print(f" - {name}: {device_id}")
-    
-    # All IAQ sensors on Floor F2 (Now with IDs!)
-    print("\nAll IAQ sensors on Floor F2:")
-    f2_iaq = registry.get_devices_by_type_and_floor("IAQ", "F2")
-    for name, device_id in f2_iaq.items(): # Changed .keys() to .items()
-        print(f" - {name}: {device_id}")
+    # Format helper to print clean JSON chunks to the terminal
+    def print_chunk(title: str, data: Dict):
+        print(f"\n{'-'*50}\n▶ {title}\n{'-'*50}")
+        # We only print the first two bins to avoid flooding the terminal
+        preview = {}
+        for key, bins in data.items():
+            preview[key] = bins[:2] if isinstance(bins, list) else bins
+        print(json.dumps(preview, indent=2))
+        print(f"... (truncated for readability)")
+
+    print("\n" + "="*50)
+    print("🧪 RUNNING THINGSBOARD CLIENT TESTS 🧪")
+    print("="*50)
+
+    try:
+        # Initialize client (This will automatically try to authenticate using your settings)
+        tb_client = ThingsBoardClient()
+
+        # Using an actual device ID from your campus_topology.json (F1_1.2-IAQ-1)
+        TEST_DEVICE_ID = "8a993270-0353-11f0-ab2a-1bdcb487461d"
+        TEST_KEYS = ["co2", "temperature"]
+
+        print(f"\nTesting with Device ID: {TEST_DEVICE_ID}")
+        print(f"Requesting Telemetry Keys: {TEST_KEYS}")
+
+        # 1. Test "Now" (Absolute Latest Data)
+        now_data = tb_client.get_now(TEST_DEVICE_ID, TEST_KEYS)
+        print_chunk("Testing get_now() [Absolute Latest via /latest endpoint]", now_data)
+
+        # 2. Test 2 Hours (10-min bins)
+        h2_data = tb_client.get_2h(TEST_DEVICE_ID, TEST_KEYS)
+        print_chunk("Testing get_2h() [Aggregated into 10-min bins]", h2_data)
+
+        # 3. Test 24 Hours (2-hour bins)
+        h24_data = tb_client.get_24h(TEST_DEVICE_ID, TEST_KEYS)
+        print_chunk("Testing get_24h() [Aggregated into 2-hour bins]", h24_data)
+
+        # 4. Test 7 Days (12-hour bins)
+        d7_data = tb_client.get_7d(TEST_DEVICE_ID, TEST_KEYS)
+        print_chunk("Testing get_7d() [Aggregated into 12-hour bins]", d7_data)
+
+        # 5. Test 30 Days (48-hour bins)
+        d30_data = tb_client.get_30d(TEST_DEVICE_ID, TEST_KEYS)
+        print_chunk("Testing get_30d() [Aggregated into 48-hour bins]", d30_data)
+
+        print("\n✅ All ThingsBoard client tests completed successfully.\n")
+
+    except requests.exceptions.ConnectionError:
+        print("\n❌ ERROR: Could not connect to ThingsBoard.")
+        print("Ensure your local/cloud ThingsBoard instance is running and the URL in config/settings.py is correct.")
+    except requests.exceptions.HTTPError as e:
+        print(f"\n❌ HTTP ERROR: {e}")
+        print("Check your ThingsBoard credentials in config/settings.py.")
+    except Exception as e:
+        print(f"\n❌ UNEXPECTED ERROR: {e}")

@@ -1,213 +1,181 @@
+import json
 import logging
-from typing import Optional, Dict, Any, List
-import requests
-from datetime import datetime, timedelta
-from config.settings import settings
+import re
+from pathlib import Path
+from typing import Dict, List
 
-# Configure logging for the client
+# Configure logging for the module
 logger = logging.getLogger(__name__)
 
-class ThingsBoardClient:
+class DeviceRegistry:
     """
-    A centralized client for interacting with the ThingsBoard API.
-    Used as a baseline by tools to fetch telemetry, attributes, and alarms.
+    A registry to manage and query the campus device topology.
+    Loads the topology JSON into memory to provide fast, case-insensitive 
+    lookups for LangGraph tools.
     """
     
-    def __init__(self):
-        # Ensure there's no trailing slash to prevent double-slash in URLs
-        self.base_url = settings.THINGSBOARD_BASE_URL.rstrip('/')
-        self.username = settings.THINGSBOARD_USERNAME
-        self.password = settings.THINGSBOARD_PASSWORD
-        self.token: Optional[str] = None
-
-    def login(self) -> bool:
-        """Authenticates with ThingsBoard and stores the JWT token."""
-        url = f"{self.base_url}/api/auth/login"
-        payload = {
-            "username": self.username,
-            "password": self.password
-        }
+    def __init__(self, topology_path: str = "data/campus_topology.json"):
+        """
+        Initializes the registry and builds the in-memory cache.
         
+        Args:
+            topology_path (str): Relative or absolute path to the topology JSON file.
+        """
+        self.topology_path = Path(topology_path)
+        self._topology: Dict = {}
+        
+        # Cache structure: { "room_name": { "device_name": "device_id" } }
+        self._room_cache: Dict[str, Dict[str, str]] = {}
+        
+        self._load_topology()
+        self._build_room_cache()
+
+    def _load_topology(self) -> None:
+        """Loads and parses the JSON topology file from disk."""
+        if not self.topology_path.exists():
+            logger.error(f"Topology file not found at {self.topology_path}")
+            raise FileNotFoundError(f"Topology file missing: {self.topology_path}")
+            
         try:
-            # Added a timeout to prevent hanging
-            response = requests.post(url, json=payload, timeout=10)
-            response.raise_for_status() 
-            
-            # Extract and store the token
-            self.token = response.json().get("token")
-            logger.info("Successfully authenticated with ThingsBoard API.")
-            return True
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"Failed to connect to ThingsBoard: {e}")
-            self.token = None
-            return False
+            with open(self.topology_path, 'r', encoding='utf-8') as f:
+                self._topology = json.load(f)
+            logger.info(f"Successfully loaded topology from {self.topology_path}")
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse topology JSON: {e}")
+            raise
 
-    def _get_auth_headers(self) -> Dict[str, str]:
-        """Returns the necessary Authorization headers for API calls."""
-        if not self.token:
-            self.login()
-            
-        return {
-            "X-Authorization": f"Bearer {self.token}",
-            "Accept": "application/json",
-            "Content-Type": "application/json"
-        }
-
-    def _request(self, method: str, endpoint: str, **kwargs) -> Optional[Any]:
+    def _build_room_cache(self) -> None:
         """
-        Internal helper to execute API calls. 
-        Automatically handles 401 Unauthorized errors by re-authenticating and retrying.
+        Traverses the nested campus topology and flattens it into a 
+        fast-lookup dictionary keyed by lowercase room names.
         """
-        url = f"{self.base_url}{endpoint}"
-        headers = self._get_auth_headers()
-        
         try:
-            response = requests.request(method, url, headers=headers, timeout=15, **kwargs)
-            
-            # If the JWT token expired, try re-authenticating once
-            if response.status_code == 401:
-                logger.warning("ThingsBoard token might be expired. Re-authenticating...")
-                if self.login():
-                    headers = self._get_auth_headers()
-                    response = requests.request(method, url, headers=headers, timeout=15, **kwargs)
-            
-            response.raise_for_status()
-            
-            # Return JSON if content exists, else None
-            return response.json() if response.content else None
-            
-        except requests.exceptions.RequestException as e:
-            logger.error(f"ThingsBoard API request failed ({method} {endpoint}): {e}")
-            return None
+            buildings = self._topology.get("campus", {}).get("buildings", {})
+            for b_name, b_data in buildings.items():
+                for f_name, f_data in b_data.get("floors", {}).items():
+                    for r_name, r_data in f_data.get("rooms", {}).items():
+                        
+                        # Normalize room names to lowercase for robust tool querying
+                        room_key = str(r_name).strip().lower()
+                        devices = r_data.get("devices", {})
+                        
+                        # Handle potential duplicates if rooms have the same name
+                        if room_key not in self._room_cache:
+                            self._room_cache[room_key] = {}
+                        
+                        self._room_cache[room_key].update(devices)
+                        
+            logger.info(f"Successfully cached {len(self._room_cache)} rooms from topology.")
+        except Exception as e:
+            logger.error(f"Unexpected error while building room cache: {e}")
 
-    # ==========================================
-    # TOOL-FACING METHODS
-    # ==========================================
-
-    def get_device_telemetry(self, device_id: str, keys: str) -> Optional[Dict[str, Any]]:
-        """Fetch latest time-series data for a specific device."""
-        endpoint = f"/api/plugins/telemetry/DEVICE/{device_id}/values/timeseries?keys={keys}"
-        return self._request("GET", endpoint)
-
-    def get_historical_telemetry(self, device_id: str, keys: str, start_ts: int, end_ts: int, limit: int = 50000) -> Optional[Dict[str, Any]]:
-        """Fetches historical time-series data for a specific device between two timestamps."""
-        endpoint = (
-            f"/api/plugins/telemetry/DEVICE/{device_id}/values/timeseries"
-            f"?keys={keys}&startTs={start_ts}&endTs={end_ts}&limit={limit}"
-        )
-        return self._request("GET", endpoint)
-
-    def get_telemetry_for_timeframes(self, device_id: str, keys: str) -> Dict[str, Any]:
+    def get_devices_by_room_and_type(self, room: str, sensor_type: str) -> Dict[str, str]:
         """
-        Fetches historical telemetry aggregated into specific timeframes and splits.
-        Returns a dictionary containing the aggregated data for 1h, 24h, 7d, and 30d.
+        Retrieves all devices of a specific sensor type within a given room.
+        
+        Args:
+            room (str): The name of the room (e.g., "1.2", "restaurant", "DataCenter").
+            sensor_type (str): The sensor prefix/suffix (e.g., "IAQ", "MC", "PC", "Desk").
+            
+        Returns:
+            Dict[str, str]: A dictionary mapping device names to their ThingsBoard UUIDs.
         """
-        now = datetime.now()
-        end_ts = int(now.timestamp() * 1000)
+        room_key = str(room).strip().lower()
+        room_devices = self._room_cache.get(room_key, {})
         
-        # Define our desired timeframes, start times, and intervals (in milliseconds)
-        # ThingsBoard aggregates data into these splits using the 'interval' parameter.
-        configs = {
-            "1h": {
-                "start_ts": int((now - timedelta(hours=1)).timestamp() * 1000),
-                "interval": 5 * 60 * 1000  # 5 minutes in ms
-            },
-            "24h": {
-                "start_ts": int((now - timedelta(hours=24)).timestamp() * 1000),
-                "interval": 2 * 60 * 60 * 1000  # 2 hours in ms
-            },
-            "7d": {
-                "start_ts": int((now - timedelta(days=7)).timestamp() * 1000),
-                "interval": 12 * 60 * 60 * 1000  # 12 hours in ms
-            },
-            "30d": {
-                "start_ts": int((now - timedelta(days=30)).timestamp() * 1000),
-                "interval": 2 * 24 * 60 * 60 * 1000  # 2 days in ms
-            }
-        }
+        matched_devices = {}
         
-        results = {}
-        for timeframe, params in configs.items():
-            # agg=AVG calculates the average of the data points within the 'interval' split.
-            # You can change this to MAX, MIN, SUM, or NONE depending on your needs.
-            endpoint = (
-                f"/api/plugins/telemetry/DEVICE/{device_id}/values/timeseries"
-                f"?keys={keys}&startTs={params['start_ts']}&endTs={end_ts}"
-                f"&interval={params['interval']}&agg=AVG&limit=50000"
-            )
-            
-            data = self._request("GET", endpoint)
-            results[timeframe] = data if data is not None else {}
-            
-        return results
-    
-    def get_device_alarms(self, device_id: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """Fetches the recent active alarms/warnings for a specific device."""
-        endpoint = f"/api/alarm/DEVICE/{device_id}?pageSize={limit}&page=0&fetchOriginator=true"
-        response_data = self._request("GET", endpoint)
+        # Look for the exact sensor type format used in the JSON (e.g., "-IAQ")
+        target_marker = f"-{str(sensor_type).strip().upper()}"
         
-        if response_data and isinstance(response_data, dict):
-            return response_data.get("data", [])
-        return []
-        
-    def get_device_attributes(self, device_id: str) -> Optional[List[Dict[str, Any]]]:
-        """Fetches all attributes (metadata, status, location) for a specific device."""
-        endpoint = f"/api/plugins/telemetry/DEVICE/{device_id}/values/attributes"
-        return self._request("GET", endpoint)
-
-# ==========================================
-# EXPORTED INSTANCE
-# ==========================================
-tb_client = ThingsBoardClient()
-
-# Optional: Quick test execution block
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    
-    # Replace with an actual device ID and telemetry key from your ThingsBoard environment!
-    TEST_DEVICE_ID = "76ec3ff0-0340-11f0-ab2a-1bdcb487461d" 
-    TEST_TELEMETRY_KEY = "temperature" # Example key, change to yours
-    
-    print("\n--- 1. Fetching Device Attributes (Metadata/Status) ---")
-    attributes = tb_client.get_device_attributes(device_id=TEST_DEVICE_ID)
-    
-    if attributes is not None:
-        for attr in attributes:
-            if attr.get("key") == "active":
-                status = "ONLINE" if attr.get("value") else "OFFLINE"
-                print(f"Device Status: {status}")
-            
-            if attr.get("key") == "lastActivityTime":
-                timestamp = attr.get("value")
-                if timestamp:
-                    last_seen = datetime.fromtimestamp(timestamp / 1000).strftime('%Y-%m-%d %H:%M:%S')
-                    print(f"Last Seen: {last_seen}")
+        for device_name, device_id in room_devices.items():
+            if target_marker in device_name.upper():
+                matched_devices[device_name] = device_id
                 
-    print("\n--- 2. Fetching Device Alarms (Warnings) ---")
-    alarms = tb_client.get_device_alarms(device_id=TEST_DEVICE_ID)
-    if not alarms:
-        print("Good news! No active alarms for this device.")
-    else:
-        print(f"Found {len(alarms)} alarms!")
-        for alarm in alarms:
-            print(f"- [{alarm.get('severity')}] {alarm.get('type')} (Status: {alarm.get('status')})")
+        if not matched_devices:
+            logger.warning(f"No {sensor_type} sensors found in room '{room}'.")
+            
+        return matched_devices
 
-    print("\n--- 3. Fetching Aggregated Timeframes Data ---")
-    # Make sure TEST_TELEMETRY_KEY exists for your device otherwise it will return empty dicts
-    multi_timeframe_data = tb_client.get_telemetry_for_timeframes(device_id=TEST_DEVICE_ID, keys=TEST_TELEMETRY_KEY)
-    
-    for timeframe, data in multi_timeframe_data.items():
-        if not data:
-             print(f"[{timeframe}]: No data returned (Device might be inactive or key is wrong).")
-             continue
-             
-        # Find the specific key's data points
-        points = data.get(TEST_TELEMETRY_KEY, [])
-        print(f"[{timeframe}]: Retrieved {len(points)} aggregated data points (splits).")
+    def get_all_devices_in_room(self, room: str) -> Dict[str, str]:
+        """Returns all registered devices in a given room, regardless of type."""
+        room_key = str(room).strip().lower()
+        return self._room_cache.get(room_key, {})
+
+    def get_available_rooms(self) -> List[str]:
+        """Returns a list of all valid room names."""
+        return list(self._room_cache.keys())
+
+    def get_all_sensor_types(self) -> List[str]:
+        """
+        Dynamically extracts and returns a list of all unique sensor types 
+        (e.g., IAQ, MC, PC, DESK) found across the entire campus.
+        """
+        types = set()
+        # Regex to capture the alphabetical sensor type at the end of the string,
+        # ignoring any trailing numbers (e.g., matches "IAQ" in "F1_1.2-IAQ-1" and "PC" in "F0_Entrance-PC")
+        pattern = re.compile(r'-([A-Za-z]+)(?:-\d+)?$')
         
-        # Optional: print the latest point of each timeframe
-        if points:
-             latest = points[0] # Thingsboard usually returns newest first
-             ts = datetime.fromtimestamp(latest['ts'] / 1000).strftime('%m-%d %H:%M')
-             print(f"   -> Latest split point inside {timeframe}: {latest['value']} at {ts}")
+        for room_devices in self._room_cache.values():
+            for device_name in room_devices.keys():
+                match = pattern.search(device_name)
+                if match:
+                    types.add(match.group(1).upper())
+                    
+        return sorted(list(types))
+
+    def get_total_sensor_count(self) -> int:
+        """Returns the total number of sensors registered in the topology."""
+        return sum(len(devices) for devices in self._room_cache.values())
+
+
+# ==========================================
+# TEST EXECUTION BLOCK
+# ==========================================
+if __name__ == "__main__":
+    # Setup basic logging to see the initialization info
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+    
+    try:
+        # NOTE: Make sure your terminal is at the root of 'smart-campus-assistant' 
+        # so 'data/campus_topology.json' resolves correctly.
+        registry = DeviceRegistry(topology_path="data/campus_topology.json")
+        
+        print("\n" + "="*40)
+        print("🧪 RUNNING DEVICE REGISTRY TESTS 🧪")
+        print("="*40)
+
+        # 1. Test get_total_sensor_count
+        total_sensors = registry.get_total_sensor_count()
+        print(f"\n[1] Total Sensors in Campus: {total_sensors}")
+
+        # 2. Test get_all_sensor_types
+        sensor_types = registry.get_all_sensor_types()
+        print(f"\n[2] All Unique Sensor Types ({len(sensor_types)} total):")
+        print(f"    {sensor_types}")
+
+        # 3. Test get_available_rooms
+        rooms = registry.get_available_rooms()
+        print(f"\n[3] Available Rooms ({len(rooms)} total):")
+        print(f"    Sample: {rooms[:6]} ...")
+
+        # 4. Test get_devices_by_room_and_type
+        test_room = "1.2"
+        test_type = "IAQ"
+        iaq_in_1_2 = registry.get_devices_by_room_and_type(test_room, test_type)
+        print(f"\n[4] Querying '{test_type}' sensors in room '{test_room}':")
+        for name, uid in iaq_in_1_2.items():
+            print(f"    ✔️ {name} -> {uid}")
+
+        # 5. Test get_all_devices_in_room
+        test_room_2 = "restaurant"
+        restaurant_devices = registry.get_all_devices_in_room(test_room_2)
+        print(f"\n[5] Querying ALL sensors in room '{test_room_2}':")
+        for name, uid in restaurant_devices.items():
+            print(f"    ✔️ {name} -> {uid}")
+            
+        print("\n✅ All tests completed successfully.\n")
+
+    except FileNotFoundError:
+        print("\n❌ ERROR: Could not find 'data/campus_topology.json'.")
+        print("Make sure you run this script from the root project directory.")
