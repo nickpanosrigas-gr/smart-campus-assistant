@@ -14,11 +14,24 @@ The system employs a **Hybrid Agentic Supervisor** architecture built on **LangG
 3. **Action & Rule Agent (Write-Access):** Proposes infrastructure changes and constructs ThingsBoard Rule Chain JSONs. **Safety constraint:** Includes a Human-in-the-Loop (HITL) approval step before deploying any changes to the active ThingsBoard instance.
 4. **Semantic Memory:** Utilizes a Vector Database to store and retrieve unstructured campus knowledge, building topology, and Standard Operating Procedures (SOPs).
 
+## Core System Clients & Utilities
+
+To decouple the LLM logic from the IoT infrastructure, the system utilizes highly optimized singletons for API communication and campus topology resolution:
+
+* **ThingsBoard Client (`clients/thingsboard_client.py`):** A robust REST API wrapper that handles JWT authentication and automatic token refreshing. Crucially, it fetches **RAW telemetry data** with massive limits (up to 100k points) rather than relying on server-side aggregation, allowing the LangGraph tools to perform custom, domain-specific Pandas operations.
+* **Device Registry (`utils/device_registry.py`):** An in-memory cache layer loaded from `campus_topology.json`. It traverses the complex building hierarchy and flattens it into a fast, case-insensitive O(1) lookup table. It maps human-readable rooms (e.g., "Restaurant") to ThingsBoard device UUIDs based on dynamic sensor types (e.g., "-IAQ", "-PC"), allowing the LLM to query physical spaces without knowing database IDs.
+
 ## Data Processing Strategy
-To prevent LLM context-window bloat and reduce hallucinations, this architecture does not feed raw sensor data to the LLM. Instead, data is pre-processed using the following strategy:
-* **Timeframe Chunking:** Data is requested in strict historical timeframes (`1h`, `24h`, `7d`, `30d`) and downsampled into 12-14 bins (e.g., a 24h request is chunked into 2-hour bins).
-* **Anomaly Highlighting:** For historical chunks, average data points are omitted. Only anomalous spikes (min/max deviations) or state transitions are passed to the LLM.
-* **Real-Time Snapshots ("Now"):** When immediate situational awareness is needed, the `now` timeframe is explicitly called. This completely bypasses the historical timeline/bucket architecture and returns a lightweight, real-time snapshot, saving tokens and reducing latency.
+
+To prevent LLM context-window bloat and reduce hallucinations (especially "mathematical hallucinations" on discrete data), the architecture utilizes advanced Pandas processing before passing data to the LLM:
+
+* **Sensor Synchronization Grid:** When fusing data from multiple sensors in the same room, raw ticks are aligned to a uniform grid (e.g., 10-minute intervals) *before* aggregation. This prevents the "ping-pong" effect where staggered sensor transmission times cause the room's median state to rapidly fluctuate.
+* **Bucket Activity Classification:** For discrete states (like lights or door sensors), standard mathematical downsampling (like taking the median of a 2-hour block) destroys historical fidelity. Instead, data is chunked into logical buckets, and the internal ticks are chronologically scanned to classify the *volume* of activity:
+  * *Stable:* Added to a clean list of stable periods.
+  * *Clear Transitions (1-3 changes):* The exact minute of the state change is extracted and reported.
+  * *High Volatility (4+ changes):* The noise is compressed into a single token-efficient summary (e.g., "Fluctuating heavily").
+* **Long-Term Statistical Profiling (30d):** To prevent LLM attention degradation over massive timeframes, 30-day queries discard event logs entirely. Instead, data is shaped into a 2x2 Statistical Matrix (Weekdays vs. Weekends / Working vs. Non-Working hours), and only specific days that deviate violently from the monthly baseline are reported as anomalies.
+* **Real-Time Snapshots ("Now"):** When immediate situational awareness is needed, the `now` timeframe is explicitly called. This bypasses all historical bucketing and returns a zero-latency, lightweight snapshot of the current state.
 
 ## Tool Output Architectures
 
@@ -59,7 +72,71 @@ Stable_Periods:
   Status: Values stable. HVAC maintained optimal conditions successfully.
 ```
 
-### 2. Air Quality (`air_quality.py`)
+### 2. Ambient Lights (`lights.py`)
+Tracks indoor illumination using a discrete 0-5 scale. Uses state-transition logic mapped to semantic labels. It dynamically alters its output format based on the timeframe size.
+
+#### Scenario A: Weekly Event Log (7d Timeframe)
+Groups chronological events hierarchically by day, nesting the Stable Periods directly inside the day to prevent the LLM from losing context.
+
+```yaml
+Query_Context:
+  Domain: Ambient Light Intensity (0-5 Scale)
+  Room: restaurant
+  Timeframe: 7d (2h intervals)
+  Active_Sensors: 3 (F0_Restaurant-IAQ-1, F0_Restaurant-IAQ-2, F0_Restaurant-IAQ-3)
+
+Global_Illumination_Summary (Last 7d):
+  Level 0 (Dark): 46%
+  Level 1 (Dim): 28%
+  Level 2 (Normal): 26%
+
+Timeline_Activity:
+  '2026-04-24 (Friday)':
+    Timeline_Transitions:
+      - bucket: '08:00 - 10:00'
+        activity: 'Transition: [Level 0 (Dark) -> Level 2 (Normal) at 08:30].'
+      - bucket: '14:00 - 16:00'
+        activity: 'Fluctuating heavily between Level 1 (Dim) and Level 2 (Normal) (Toggled 5 times).'
+      - bucket: '16:00 - 18:00'
+        activity: 'Transition: [Level 1 (Dim) -> Level 0 (Dark) at 17:50].'
+    Stable_Periods:
+      - '00:00 to 08:00' (4 intervals): State: Level 0 (Dark)
+      - '10:00 to 14:00' (2 intervals): State: Level 2 (Normal)
+      - '18:00 to 24:00' (3 intervals): State: Level 0 (Dark)
+```
+
+#### Scenario B: Long-Term Profiling (30d Timeframe)
+Drops the event log entirely to prevent token bloat. Generates a 2x2 statistical matrix (Weekdays vs. Weekends / Working vs. Non-Working Hours) and extracts anomalous days to instantly flag energy waste or unusual usage to the LLM.
+
+```yaml
+Query_Context:
+  Domain: Ambient Light Intensity (0-5 Scale)
+  Room: restaurant
+  Timeframe: 30d (Long-Term Statistical Profile)
+  Active_Sensors: 3
+
+Total_Monthly_Average:
+  Level 0 (Dark): 65%, Level 1 (Dim): 10%, Level 2 (Normal): 25%
+
+Schedule_Profiling_Matrix:
+  Weekdays (Mon-Fri):
+    Working_Hours (08:00-22:00):
+      Baseline: Level 1 (Dim): 20%, Level 2 (Normal): 80%
+      Outliers: None detected.
+    Non-Working_Hours (22:00-08:00):
+      Baseline: Level 0 (Dark): 100%
+      Outliers:
+        - '2026-04-14 (Tuesday)': Level 0 (Dark): 40%, Level 2 (Normal): 60%  # Anomaly: Lights left on overnight
+  Weekends (Sat-Sun):
+    Working_Hours (08:00-22:00):
+      Baseline: Level 0 (Dark): 95%, Level 1 (Dim): 5%
+      Outliers: None detected.
+    Non-Working_Hours (22:00-08:00):
+      Baseline: Level 0 (Dark): 100%
+      Outliers: None detected.
+```
+
+### 3. Air Quality (`air_quality.py`)
 Utilizes fixed biological safety thresholds and uses contextual injects to determine source attribution (indoor vs outdoor pollution).
 
 ```yaml
@@ -99,7 +176,7 @@ Stable_Periods:
   Status: All metrics normal. Filtration successfully scrubbing poor outdoor air during these periods.
 ```
 
-### 3. Doors & Windows (`door_window.py`)
+### 4. Doors & Windows (`door_window.py`)
 Treats continuous states (like open windows for ventilation) as stable and only reports chronological state-transitions, aligning seamlessly with the continuous variables of other tools.
 
 ```yaml
@@ -134,43 +211,6 @@ Stable_Periods (No State Changes):
       State: Door_Main Closed, Win_Front Open, Win_Mid Open, Win_Back Closed
   - '2026-04-24 18:00 to Present' (3 intervals): 
       State: Door_Main Closed, Win_Front Open, Win_Mid Closed, Win_Back Closed
-```
-
-### 4. Ambient Lights (`lights.py`)
-Tracks indoor illumination using a discrete 0-5 scale. Uses state-transition logic to prevent mathematical hallucinations and maps integers to semantic labels (e.g., "Level 3 - Bright").
-
-```yaml
-Query_Context:
-  Domain: Ambient Light Intensity (0-5 Scale)
-  Room: Classroom_101
-  Timeframe: 24h (2h intervals)
-  Active_Sensors: 2 (F0_Class101-IAQ-1, F0_Class101-IAQ-2)
-
-Global_Illumination_Summary (Last 24h):
-  Level 0 (Dark): 60%
-  Level 3 (Bright): 25%
-  Level 4 (Very Bright): 15%
-  (Levels 1, 2, 5: 0%)
-
-Timeline_Transitions:
-- bucket: '2026-04-24 08:00 - 10:00'
-  activity:
-    Room_Aggregate: 'Transition: [Level 0 (Dark) -> Level 3 (Bright) at 08:15].'
-- bucket: '2026-04-24 12:00 - 14:00'
-  activity:
-    F0_Class101-IAQ-1: 'Transition: [Level 3 -> Level 5 (Overcast/Sunny)]. (Likely direct sunlight)'
-    F0_Class101-IAQ-2: 'Remained Level 3 (Bright).'
-- bucket: '2026-04-24 16:00 - 18:00'
-  activity:
-    Room_Aggregate: 'Transition: [Level 3/5 -> Level 0 (Dark) at 17:30].'
-
-Stable_Periods (No State Changes):
-  - '2026-04-23 16:00 to 2026-04-24 08:00' (10 intervals): 
-      State: Level 0 (Dark)
-  - '2026-04-24 10:00 to 12:00' (1 interval): 
-      State: Level 3 (Bright)
-  - '2026-04-24 18:00 to Present' (3 intervals): 
-      State: Level 0 (Dark)
 ```
 
 ### 5. Occupancy (`occupancy.py`)
@@ -324,12 +364,12 @@ smart-campus-assistant/
 │   ├── air_quality.py          # Oxygen, CO2, TVOC, Particulate Matter
 │   ├── occupancy.py            # Polymorphic logic (People/Desk/Line) with Motion fusion
 │   ├── door_window.py          # Binary state transitions (Open/Closed)
-│   ├── lights.py               # Ambient light state-transitions (0-5 scale)
+│   ├── lights.py               # Multimodal timelines (Daily Events vs. 30d Statistical Profile)
 │   └── knowledge.py            # Qdrant Vector DB semantic search tool
 │
 ├── clients/                    # Tool clients
 │   ├── __init__.py
-│   └── thingsboard_client.py   # Shared logic for ThingsBoard Tools
+│   └── thingsboard_client.py   # JWT Auth & High-Volume Raw Telemetry fetcher
 │
 ├── database/                   # Vector DB Management
 │   ├── __init__.py
@@ -339,6 +379,9 @@ smart-campus-assistant/
 ├── graph/                      # LangGraph Setup
 │   ├── __init__.py
 │   └── workflow.py             # Compiles nodes, edges, and HITL breakpoints
+│
+├── utils/
+│   └── device_registry.py      # O(1) in-memory Campus Topology resolver
 │
 ├── data/                       # Local Knowledge Base (Unstructured Data)
 │   ├── manuals/                # HVAC/Sensor PDFs

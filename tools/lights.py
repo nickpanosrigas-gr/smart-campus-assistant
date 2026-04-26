@@ -333,9 +333,15 @@ if __name__ == "__main__":
     print("Testing Lights Tool...")
     print("-" * 50)
     try:
+        print("\n[Testing Historical (now)]")
+        print(get_ambient_lights.invoke({"room": "restaurant", "timeframe": "now"}))
+        print("\n[Testing Historical (2h)]")
+        print(get_ambient_lights.invoke({"room": "restaurant", "timeframe": "2h"}))
+        print("\n[Testing Historical (24h)]")
+        print(get_ambient_lights.invoke({"room": "restaurant", "timeframe": "24h"}))
         print("\n[Testing Historical (7d)]")
-        print(get_ambient_lights.invoke({"room": "4.9", "timeframe": "7d"}))
+        print(get_ambient_lights.invoke({"room": "restaurant", "timeframe": "7d"}))
         print("\n[Testing Historical (30d)]")
-        print(get_ambient_lights.invoke({"room": "4.9", "timeframe": "30d"}))
+        print(get_ambient_lights.invoke({"room": "restaurant", "timeframe": "30d"}))
     except Exception as e:
         print(f"\nError during execution: {e}")
