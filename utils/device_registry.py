@@ -127,7 +127,8 @@ class DeviceRegistry:
     def get_total_sensor_count(self) -> int:
         """Returns the total number of sensors registered in the topology."""
         return sum(len(devices) for devices in self._room_cache.values())
-
+    
+registry = DeviceRegistry()
 
 # ==========================================
 # TEST EXECUTION BLOCK

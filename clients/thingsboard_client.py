@@ -111,6 +111,7 @@ class ThingsBoardClient:
         start_ts = end_ts - (30 * 24 * 3600 * 1000)
         return self._fetch_raw_telemetry(device_id, keys, start_ts, end_ts)
 
+tb_client = ThingsBoardClient()
 
 # ==========================================
 # TEST EXECUTION BLOCK
