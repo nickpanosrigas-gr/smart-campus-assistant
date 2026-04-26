@@ -25,7 +25,7 @@ To prevent LLM context-window bloat and reduce hallucinations, this architecture
 To maximize token efficiency and cross-tool correlation, the system returns YAML-formatted exception summaries. 
 
 ### 1. Temperature & Humidity (`temp_humidity.py`)
-Fuses multiple room sensors and incorporates dynamic baseline deviations, fixed limits, and external weather context.
+Fuses multiple room sensors and incorporates dynamic baseline deviations, fixed limits, and advanced external weather context (including solar heat gain and wind).
 
 ```yaml
 Query_Context:
@@ -35,30 +35,28 @@ Query_Context:
   Active_Sensors: 3 (F0_Restaurant-IAQ-1 to 3) + 1 (Roof_Weather_Station)
 
 External_Weather_Context (Last 24h):
-  Temp_avg: 31.5°C (Extreme Heat)
-  Hum_avg: 65.0%
+  Temp_avg: 16.3°C
+  Hum_avg: 46.3%
+  Solar_Radiation_Peak: 750 W/m² (High Solar Heat Gain)
+  Wind_Speed_avg: 1.2 m/s (Peak: 4.5 m/s)
+  Precipitation: 0 mm
 
 Global_Room_Baseline (Last 24h):
   Temp_avg: 22.4°C (Normal: 20°C - 25°C)
   Hum_avg: 45.2% (Normal: 30% - 60%)
 
 Timeline_Exceptions:
-- bucket: '2026-04-24 08:00 - 10:00'
+- bucket: '2026-04-26 12:00 - 14:00'
   trigger: 'Baseline Deviation (> +2.0°C)'
+  details: 'Room Temp spiked to 26.5°C despite mild outdoor temp (16°C). Correlates directly with Peak Solar Radiation and South-Facing windows.'
   room_aggregate:
-    Temp_max: 25.8°C
-    Temp_avg: 24.5°C
-- bucket: '2026-04-24 14:00 - 16:00'
-  trigger: 'Threshold Breach'
-  details: 'Room Temp reached 27.2°C. Correlates with Peak Outdoor Temp (34.0°C). Likely HVAC under-capacity or open doors.'
-  room_aggregate:
-    Temp_max: 27.2°C
-    Hum_max: 68%
+    Temp_max: 26.5°C
+    Temp_avg: 25.0°C
 
 Stable_Periods: 
-  - '2026-04-23 16:00 to 2026-04-24 08:00' (10 intervals)
-  - '2026-04-24 10:00 to 14:00' (2 intervals)
-  Status: Values stable. HVAC maintained ~10°C delta from outdoor temperature successfully.
+  - '2026-04-25 16:00 to 2026-04-26 12:00' (10 intervals)
+  - '2026-04-26 14:00 to Present' (1 interval)
+  Status: Values stable. HVAC maintained optimal conditions successfully.
 ```
 
 ### 2. Air Quality (`air_quality.py`)
@@ -138,84 +136,151 @@ Stable_Periods (No State Changes):
       State: Door_Main Closed, Win_Front Open, Win_Mid Closed, Win_Back Closed
 ```
 
-### 4. Occupancy (`occupancy.py`)
-Utilizes a Polymorphic Schema to handle different data shapes (Binary Desk Sensors, Continuous People Counters, and Queue Trackers) and incorporates Auxiliary Motion Sensors to cross-validate data and detect anomalies (like "Ghost Occupancy" or stuck sensors) without breaking the established YAML structure.
+### 4. Ambient Lights (`lights.py`)
+Tracks indoor illumination using a discrete 0-5 scale. Uses state-transition logic to prevent mathematical hallucinations and maps integers to semantic labels (e.g., "Level 3 - Bright").
 
 ```yaml
 Query_Context:
-  Domain: Occupancy & Presence
+  Domain: Ambient Light Intensity (0-5 Scale)
+  Room: Classroom_101
+  Timeframe: 24h (2h intervals)
+  Active_Sensors: 2 (F0_Class101-IAQ-1, F0_Class101-IAQ-2)
+
+Global_Illumination_Summary (Last 24h):
+  Level 0 (Dark): 60%
+  Level 3 (Bright): 25%
+  Level 4 (Very Bright): 15%
+  (Levels 1, 2, 5: 0%)
+
+Timeline_Transitions:
+- bucket: '2026-04-24 08:00 - 10:00'
+  activity:
+    Room_Aggregate: 'Transition: [Level 0 (Dark) -> Level 3 (Bright) at 08:15].'
+- bucket: '2026-04-24 12:00 - 14:00'
+  activity:
+    F0_Class101-IAQ-1: 'Transition: [Level 3 -> Level 5 (Overcast/Sunny)]. (Likely direct sunlight)'
+    F0_Class101-IAQ-2: 'Remained Level 3 (Bright).'
+- bucket: '2026-04-24 16:00 - 18:00'
+  activity:
+    Room_Aggregate: 'Transition: [Level 3/5 -> Level 0 (Dark) at 17:30].'
+
+Stable_Periods (No State Changes):
+  - '2026-04-23 16:00 to 2026-04-24 08:00' (10 intervals): 
+      State: Level 0 (Dark)
+  - '2026-04-24 10:00 to 12:00' (1 interval): 
+      State: Level 3 (Bright)
+  - '2026-04-24 18:00 to Present' (3 intervals): 
+      State: Level 0 (Dark)
+```
+
+### 5. Occupancy (`occupancy.py`)
+Utilizes a **Polymorphic Schema** to handle different data shapes (Binary Desk Sensors, Continuous People Counters, and Queue Trackers). Crucially, it fuses primary counting sensors with secondary binary **Motion Sensors** (from the IAQ monitors) to cross-validate presence and detect anomalies like "Ghost Occupancy" or security bypasses.
+
+#### Scenario A: Desk Sensor + Motion (Detecting Ghost Occupancy)
+```yaml
+Query_Context:
+  Domain: Occupancy
+  Room: Library_Study_Pod_1
+  Timeframe: 24h (2h intervals)
+  Primary_Sensor: Desk_Contact (Binary)
+  Supporting_Sensors: 1 (F0_LibraryPod1-IAQ Motion)
+
+Global_Occupancy_Summary (Last 24h):
+  State: Occupied 25% / Available 75%
+  Total_Sessions: 2
+  Motion_Context: Active 20% / Idle 80%
+
+Timeline_Activity:
+- bucket: '2026-04-24 10:00 - 12:00'
+  activity: 'Transition: [Available -> Occupied at 10:15].'
+  motion_state: 'Transition: [Idle -> Sustained Active]. (Validates human presence)'
+- bucket: '2026-04-24 14:00 - 16:00'
+  activity: 'Transition: [Occupied -> Available at 14:30]. Transition: [Available -> Occupied at 15:45].'
+  motion_state: 'Idle from 14:30 to 15:45. Active upon re-entry.'
+- bucket: '2026-04-24 18:00 - 20:00'
+  activity: 'Sustained Occupied'
+  motion_state: 'Anomaly: Sustained Idle (100% of bucket). (Warning: No movement detected, desk may be ghost-occupied)'
+
+Stable_Periods (No State Changes):
+  - '2026-04-23 16:00 to 2026-04-24 10:00' (9 intervals): 
+      State: Available. Motion: Idle.
+  - '2026-04-24 16:00 to 18:00' (1 interval): 
+      State: Occupied. Motion: Active.
+  - '2026-04-24 20:00 to Present' (2 intervals):
+      State: Occupied. Motion: Active.
+```
+
+#### Scenario B: People Counter + Motion (Detecting Unregistered Entry)
+```yaml
+Query_Context:
+  Domain: Occupancy
   Room: Classroom_101
   Timeframe: 24h (2h intervals)
   Primary_Sensor: People_Counter (Continuous Count)
-  Auxiliary_Sensors: 2 (F0_Classroom_101-IAQ_Main-Motion, F0_Classroom_101-IAQ_Back-Motion)
+  Supporting_Sensors: 2 (F0_Class101-IAQ-1 Motion, F0_Class101-IAQ-2 Motion)
 
 Global_Occupancy_Summary (Last 24h):
   Peak_Occupancy: 45 people
   Utilization_Profile: Active 6h / Empty 18h
-  Aux_Motion_Profile: Active 7h / Idle 17h (High Correlation)
+  Motion_Context: Active 28% / Idle 72%
 
-Timeline_Activity (Significant Movements & Anomalies):
+Timeline_Activity (Significant Movements):
 - bucket: '2026-04-24 08:00 - 10:00'
-  activity: 'Mass Arrival & Motion Sync'
+  activity: 'Mass Arrival'
   metrics:
-    Net_Change: +42 people (Peak: 42)
-    Aux_Motion: 'Transition: [Idle -> Active at 08:05]. Sustained Active.'
+    Net_Change: +42 people
+    Peak_in_Bucket: 42
+  motion_state: 'Transition: [Idle -> Sustained Active at 08:15]'
 - bucket: '2026-04-24 10:00 - 12:00'
   activity: 'Mass Departure'
   metrics:
     Net_Change: -42 people (Room emptied at 10:15)
-    Aux_Motion: 'Transition: [Active -> Idle at 10:20].'
+  motion_state: 'Transition: [Sustained Active -> Idle at 10:20]'
 - bucket: '2026-04-24 22:00 - 24:00'
-  activity: 'Anomaly: Uncorrelated Presence (Ghost Occupancy)'
-  details: 'Primary counter reads 0, but sustained motion detected. Likely cleaning crew, security patrol, or people counter missed entry.'
+  activity: 'Anomaly: Unregistered Motion'
   metrics:
-    Net_Change: 0 people (Primary reads 0)
-    Aux_Motion: 'Transition: [Idle -> Active at 22:15]. Toggled 14 times. Ended Idle at 23:30.'
+    Net_Change: 0 people (Main counter registered no entry)
+  motion_state: 'Room_Aggregate: Toggled 14 times. (Possible security patrol or cleaning crew)'
 
 Stable_Periods:
   - '2026-04-23 16:00 to 2026-04-24 08:00' (10 intervals): 
-      Status: Empty (0 people) | Motion: Idle (0 toggles)
+      Status: Empty (0 people). Motion: Idle.
   - '2026-04-24 12:00 to 22:00' (5 intervals): 
-      Status: Empty (0 people) | Motion: Idle (0 toggles)
+      Status: Empty (0 people). Motion: Idle.
 ```
 
-### 5. Illumination (lights.py)
-Translates categorical 0-5 light intensity indices into semantic states (Dark to Overcast/Sunny). It focuses on significant state transitions (e.g., Sudden Spikes vs. Gradual Increases) to provide context-agnostic activity cues to the LLM.
-
+#### Scenario C: Line Counter + Motion (Distinguishing Staff vs Queue)
 ```yaml
 Query_Context:
-  Domain: Illumination (0-5 Index)
-  Room: Classroom_101
+  Domain: Occupancy
+  Room: Restaurant_Main_Counter
   Timeframe: 24h (2h intervals)
-  Active_Sensors: 2 (F0_Classroom_101-IAQ_Main, F0_Classroom_101-IAQ_Back)
+  Primary_Sensor: Line_Counter (Queue Length)
+  Supporting_Sensors: 1 (F0_Restaurant-IAQ-1 Motion)
 
-Global_Illumination_Summary (Last 24h):
-  Peak_Level: 4 (Very Bright)
-  Lowest_Level: 0 (Dark)
-  Profile: Dark 14h / Illuminated 10h
+Global_Occupancy_Summary (Last 24h):
+  Avg_Line_Length: 2 people
+  Peak_Line_Length: 28 people (Threshold Breach: > 15 people)
+  Motion_Context: Active 45% / Idle 55%
 
-Timeline_Transitions:
-- bucket: '2026-04-24 06:00 - 08:00'
-  activity: 'Gradual Illumination Increase'
+Timeline_Activity (Queue Spikes & Anomalies):
+- bucket: '2026-04-24 10:00 - 12:00'
+  activity: 'Pre-Shift Activity'
   metrics:
-    Transition: '0 (Dark) -> 2 (Normal)'
-    Details: 'Steady rise across the bucket. (Typical of sunrise).'
-- bucket: '2026-04-24 08:00 - 10:00'
-  activity: 'Sudden Illumination Spike'
+    Max_Queue: 0 people
+  motion_state: 'Transition: [Idle -> Sustained Active]. (Likely staff prep, no queue formed)'
+- bucket: '2026-04-24 12:00 - 14:00'
+  activity: 'Severe Queue Formation (Lunch Rush)'
   metrics:
-    Transition: '2 (Normal) -> 4 (Very Bright)'
-    Details: 'Rapid jump at 08:15. Sustained at level 4.'
-- bucket: '2026-04-24 18:00 - 20:00'
-  activity: 'Sudden Illumination Drop'
-  metrics:
-    Transition: '3 (Bright) -> 0 (Dark)'
-    Details: 'Immediate drop to 0 (Dark) at 18:30.'
+    Max_Queue: 28 people
+    Sustained_Over_Threshold: 45 minutes
+  motion_state: 'Sustained Active (Validates high traffic)'
 
 Stable_Periods:
-  - '2026-04-23 20:00 to 2026-04-24 06:00' (5 intervals): 
-      State: Maintained 0 (Dark)
-  - '2026-04-24 10:00 to 18:00' (4 intervals): 
-      State: Fluctuated between 3 (Bright) and 4 (Very Bright)
+  - '2026-04-23 16:00 to 2026-04-24 10:00' (9 intervals):
+      Status: Queue 0. Motion: Idle.
+  - '2026-04-24 14:00 to Present' (5 intervals):
+      Status: Queue remained short/manageable (< 5 people). Motion: Intermittent Active.
 ```
 
 ### 6. Real-Time Snapshots ("Now" Timeframe)
@@ -223,15 +288,15 @@ When the LLM Orchestrator needs instant situational awareness, it passes `timefr
 
 ```yaml
 Query_Context:
-  Domain: Doors & Windows
+  Domain: Occupancy
   Room: Classroom_101
   Timeframe: Now (Snapshot)
+  Primary_Sensor: People_Counter
+  Supporting_Sensors: Motion (Binary)
 
 Current_State:
-  Door_Main: Closed
-  Win_Front: Open
-  Win_Mid: Closed
-  Win_Back: Closed
+  Current_Occupancy: 12 people
+  Motion_Status: Active (Validates occupancy)
 ```
 
 ## Technology Stack
@@ -257,9 +322,9 @@ smart-campus-assistant/
 │   ├── __init__.py
 │   ├── temp_humidity.py        # Combines Temp & Humidity with Indoor/Outdoor delta
 │   ├── air_quality.py          # Oxygen, CO2, TVOC, Particulate Matter
-│   ├── occupancy.py            # Polymorphic logic for people/desk/line counters + Aux Motion
+│   ├── occupancy.py            # Polymorphic logic (People/Desk/Line) with Motion fusion
 │   ├── door_window.py          # Binary state transitions (Open/Closed)
-│   ├── lights.py               # 0-5 Categorical illumination states and transitions
+│   ├── lights.py               # Ambient light state-transitions (0-5 scale)
 │   └── knowledge.py            # Qdrant Vector DB semantic search tool
 │
 ├── clients/                    # Tool clients
