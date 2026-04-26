@@ -124,7 +124,7 @@ if __name__ == "__main__":
         # Print a small preview of the raw data list
         preview = {}
         for key, points in data.items():
-            preview[key] = points[:3] if isinstance(points, list) else points
+            preview[key] = points[:50] if isinstance(points, list) else points
             if isinstance(points, list) and len(points) > 3:
                 preview[key].append({"...": f"({len(points) - 3} more raw points)"})
         print(json.dumps(preview, indent=2))
@@ -137,8 +137,8 @@ if __name__ == "__main__":
         tb_client = ThingsBoardClient()
 
         # Testing with the Door/Window Sensor you provided
-        TEST_DEVICE_ID = "34578b10-0343-11f0-ab2a-1bdcb487461d"
-        TEST_KEYS = ["light_level"]
+        TEST_DEVICE_ID = "f8a24500-1acc-11f0-a6f6-451660aa424d"
+        TEST_KEYS = ["line_1_total_diff_in_out", "line_1_total_in", "line_1_period_in", "line_1_period_out"]
 
         print(f"\nTesting with Device ID: {TEST_DEVICE_ID}")
         print(f"Requesting Telemetry Keys: {TEST_KEYS}")
@@ -146,8 +146,8 @@ if __name__ == "__main__":
         now_data = tb_client.get_now(TEST_DEVICE_ID, TEST_KEYS)
         print_chunk("Testing get_now() [Latest point]", now_data)
 
-        h24_data = tb_client.get_30d(TEST_DEVICE_ID, TEST_KEYS)
-        print_chunk("Testing get_24h() [Raw points]", h24_data)
+        d30_data = tb_client.get_30d(TEST_DEVICE_ID, TEST_KEYS)
+        print_chunk("Testing get_30d() [Raw points]", d30_data)
 
         print("\n✅ All ThingsBoard client tests completed successfully.\n")
 
