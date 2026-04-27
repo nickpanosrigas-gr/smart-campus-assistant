@@ -13,16 +13,16 @@ logger = logging.getLogger(__name__)
 # Config mapping for API calls and pandas resampling
 TIMEFRAME_CONFIG = {
     "2h":  {"method": "get_2h", "bin_size": "10min"},
-    "24h": {"method": "get_24h", "bin_size": "2h"}, 
-    "7d":  {"method": "get_7d", "bin_size": "2h"},    
-    "30d": {"method": "get_30d", "bin_size": "2h"}  # 2h bin size to capture intraday peaks
+    "24h": {"method": "get_24h", "bin_size": "2h"},
+    "7d":  {"method": "get_7d", "bin_size": "2h"},
+    "30d": {"method": "get_30d", "bin_size": "2h"}
 }
 
 AVAILABLE_ROOMS = registry.get_available_rooms()
 
 class OccupancyInput(BaseModel):
     room: str = Field(
-        ..., 
+        ...,
         description=f"The specific room to check for occupancy."
     )
     timeframe: Literal["now", "2h", "24h", "7d", "30d"] = Field(
@@ -43,7 +43,7 @@ def fetch_and_resample(devices: Dict[str, str], keys: List[str], fetch_method, b
                 if key in raw_data and raw_data[key]:
                     df = pd.DataFrame(raw_data[key])
                     df['value'] = pd.to_numeric(df['value'])
-                    df['datetime'] = pd.to_datetime(df['ts'], unit='ms')
+                    df['datetime'] = pd.to_datetime(df['ts'], unit='ms', utc=True).dt.tz_convert('Europe/Athens').dt.tz_localize(None)
                     df.set_index('datetime', inplace=True)
                     df = df[['value']].rename(columns={'value': f"{device_name}_{key}"})
                     all_dfs.append(df)
@@ -360,6 +360,12 @@ def get_occupancy(room: str, timeframe: Literal["now", "2h", "24h", "7d", "30d"]
         for ts, row in day_df.iterrows():
             time_str = ts.strftime('%H:%M')
             
+            # Dynamically calculate the end time of this specific bucket
+            bucket_end_ts = ts + pd.to_timedelta(bin_size)
+            bucket_end_str = bucket_end_ts.strftime('%H:%M')
+            if bucket_end_str == "00:00": 
+                bucket_end_str = "24:00" # Formatting for midnight
+            
             motion_str = "Active" if row['motion'] > 0 else "Idle"
             if desk_devices:
                 prim_state = f"{int(row['primary'])}/{total_primary_sensors} Desks Occupied"
@@ -389,9 +395,9 @@ def get_occupancy(room: str, timeframe: Literal["now", "2h", "24h", "7d", "30d"]
             else:
                 stable_bins += 1
 
+        # Close out any remaining stable periods dynamically using the actual end of the last bucket
         if stable_bins > 0:
-            end_str = "24:00"
-            stable_periods.append(f"      - '{current_stable_start} to {end_str}' ({stable_bins} intervals): {current_stable_state}")
+            stable_periods.append(f"      - '{current_stable_start} to {bucket_end_str}' ({stable_bins} intervals): {current_stable_state}")
 
         if not transitions:
             output.append("    Timeline_Transitions: None (State was stable)")
@@ -411,14 +417,14 @@ if __name__ == "__main__":
     print("-" * 50)
     try:
         print("\n[Testing Historical (now)]")
-        print(get_occupancy.invoke({"room": "2.4", "timeframe": "now"}))
+        print(get_occupancy.invoke({"room": "1.2", "timeframe": "now"}))
         print("\n[Testing Historical (2h)]")
-        print(get_occupancy.invoke({"room": "2.4", "timeframe": "2h"}))
+        print(get_occupancy.invoke({"room": "1.2", "timeframe": "2h"}))
         print("\n[Testing Historical (24h)]")
-        print(get_occupancy.invoke({"room": "2.4", "timeframe": "24h"}))
+        print(get_occupancy.invoke({"room": "1.2", "timeframe": "24h"}))
         print("\n[Testing Historical (7d)]")
-        print(get_occupancy.invoke({"room": "2.4", "timeframe": "7d"}))
+        print(get_occupancy.invoke({"room": "1.2", "timeframe": "7d"}))
         print("\n[Testing Historical (30d)]")
-        print(get_occupancy.invoke({"room": "2.4", "timeframe": "30d"}))
+        print(get_occupancy.invoke({"room": "1.2", "timeframe": "30d"}))
     except Exception as e:
         print(f"\nError during execution: {e}")
