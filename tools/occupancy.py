@@ -13,16 +13,16 @@ logger = logging.getLogger(__name__)
 # Config mapping for API calls and pandas resampling
 TIMEFRAME_CONFIG = {
     "2h":  {"method": "get_2h", "bin_size": "10min"},
-    "24h": {"method": "get_24h", "bin_size": "2h"},
-    "7d":  {"method": "get_7d", "bin_size": "2h"},
-    "30d": {"method": "get_30d", "bin_size": "2h"}
+    "24h": {"method": "get_24h", "bin_size": "2h"}, 
+    "7d":  {"method": "get_7d", "bin_size": "2h"},    
+    "30d": {"method": "get_30d", "bin_size": "2h"}  # 2h bin size to capture intraday peaks
 }
 
 AVAILABLE_ROOMS = registry.get_available_rooms()
 
 class OccupancyInput(BaseModel):
     room: str = Field(
-        ...,
+        ..., 
         description=f"The specific room to check for occupancy."
     )
     timeframe: Literal["now", "2h", "24h", "7d", "30d"] = Field(
@@ -43,6 +43,7 @@ def fetch_and_resample(devices: Dict[str, str], keys: List[str], fetch_method, b
                 if key in raw_data and raw_data[key]:
                     df = pd.DataFrame(raw_data[key])
                     df['value'] = pd.to_numeric(df['value'])
+                    # Convert raw UTC milliseconds to Local Greek Time
                     df['datetime'] = pd.to_datetime(df['ts'], unit='ms', utc=True).dt.tz_convert('Europe/Athens').dt.tz_localize(None)
                     df.set_index('datetime', inplace=True)
                     df = df[['value']].rename(columns={'value': f"{device_name}_{key}"})
@@ -68,7 +69,8 @@ def fetch_and_resample(devices: Dict[str, str], keys: List[str], fetch_method, b
         if not last_known:
             return pd.Series(dtype=float)
             
-        end_ts = pd.Timestamp.now('UTC').tz_localize(None)
+        # Ensure the fallback timeline uses the same local timezone
+        end_ts = pd.Timestamp.now('Europe/Athens').tz_localize(None)
         td_map = {
             "2h": pd.Timedelta(hours=2), 
             "24h": pd.Timedelta(hours=24), 
@@ -265,36 +267,54 @@ def get_occupancy(room: str, timeframe: Literal["now", "2h", "24h", "7d", "30d"]
             outliers = []
             lines = [f"    {cell_name}:"]
             
+            # Find the maximum peak and daily motion average for each day within this specific mask
+            daily_groups = cell_df.groupby(pd.Grouper(freq='D'))
+            daily_peaks = {day: day_data['primary'].max() for day, day_data in daily_groups if not day_data.empty}
+            daily_motions = {day: (day_data['motion'] > 0).mean() * 100 for day, day_data in daily_groups if not day_data.empty}
+            
+            avg_peak = sum(daily_peaks.values()) / len(daily_peaks) if daily_peaks else 0
+            max_peak = max(daily_peaks.values()) if daily_peaks else 0
+            
             if desk_devices:
-                baseline_util = (cell_df['primary'] > 0).mean() * 100
-                stats = f"Utilization: {baseline_util:.0f}% | Motion Active: {motion_pct:.0f}%"
+                stats = f"Avg Daily Peak: {avg_peak:.1f}/{total_primary_sensors} Desks | Max Peak: {max_peak:.0f}/{total_primary_sensors} Desks | Motion Active: {motion_pct:.0f}%"
                 lines.append(f"      Baseline: {stats}")
                 
-                # Check Outliers for Desks (Utilization deviates > 25%)
-                daily_groups = cell_df.groupby(pd.Grouper(freq='D'))
-                for day, day_data in daily_groups:
-                    if day_data.empty: continue
-                    day_util = (day_data['primary'] > 0).mean() * 100
-                    if abs(day_util - baseline_util) > 25:
+                for day, peak in daily_peaks.items():
+                    day_motion = daily_motions.get(day, 0)
+                    
+                    # Triggers: Deviates by 50% from average (or min 3 desks), OR Motion deviates by > 25% from baseline
+                    is_peak_outlier = abs(peak - avg_peak) >= max(3, avg_peak * 0.5)
+                    is_motion_outlier = abs(day_motion - motion_pct) >= 25
+                    
+                    if is_peak_outlier or is_motion_outlier:
                         day_str = day.strftime('%Y-%m-%d (%A)')
-                        outliers.append(f"        - '{day_str}': Utilization {day_util:.0f}%")
+                        outlier_parts = []
+                        if is_peak_outlier:
+                            outlier_parts.append(f"Peak reached {peak:.0f}/{total_primary_sensors} Desks")
+                        if is_motion_outlier:
+                            outlier_parts.append(f"Motion Active: {day_motion:.0f}%")
+                            
+                        outliers.append(f"        - '{day_str}': " + " | ".join(outlier_parts))
             else:
-                # Find the maximum peak for each day within this specific mask
-                daily_groups = cell_df.groupby(pd.Grouper(freq='D'))
-                daily_peaks = {day: day_data['primary'].max() for day, day_data in daily_groups if not day_data.empty}
-                
-                avg_peak = sum(daily_peaks.values()) / len(daily_peaks) if daily_peaks else 0
-                max_peak = max(daily_peaks.values()) if daily_peaks else 0
-                
                 stats = f"Avg Daily Peak: {avg_peak:.1f} people | Max Peak: {max_peak:.0f} people | Motion Active: {motion_pct:.0f}%"
                 lines.append(f"      Baseline: {stats}")
                 
-                # Check Outliers for PCs/WOs (Peak deviates significantly from average)
                 for day, peak in daily_peaks.items():
-                    # Flags if peak is 50% larger/smaller than average AND absolute difference is at least 5 people
-                    if abs(peak - avg_peak) >= max(5, avg_peak * 0.5):
+                    day_motion = daily_motions.get(day, 0)
+                    
+                    # Triggers: Deviates by 50% from average (or min 5 people), OR Motion deviates by > 25% from baseline
+                    is_peak_outlier = abs(peak - avg_peak) >= max(5, avg_peak * 0.5)
+                    is_motion_outlier = abs(day_motion - motion_pct) >= 25
+                    
+                    if is_peak_outlier or is_motion_outlier:
                         day_str = day.strftime('%Y-%m-%d (%A)')
-                        outliers.append(f"        - '{day_str}': Peak reached {peak:.0f} people")
+                        outlier_parts = []
+                        if is_peak_outlier:
+                            outlier_parts.append(f"Peak reached {peak:.0f} people")
+                        if is_motion_outlier:
+                            outlier_parts.append(f"Motion Active: {day_motion:.0f}%")
+                            
+                        outliers.append(f"        - '{day_str}': " + " | ".join(outlier_parts))
                         
             if outliers:
                 lines.append("      Outliers:")
@@ -416,15 +436,17 @@ if __name__ == "__main__":
     print("Testing Occupancy Tool...")
     print("-" * 50)
     try:
-        print("\n[Testing Historical (now)]")
+        print("\n[Testing (now)]")
+        print(get_occupancy.invoke({"room": "restaurant", "timeframe": "now"}))
         print(get_occupancy.invoke({"room": "1.2", "timeframe": "now"}))
-        print("\n[Testing Historical (2h)]")
-        print(get_occupancy.invoke({"room": "1.2", "timeframe": "2h"}))
-        print("\n[Testing Historical (24h)]")
+        print(get_occupancy.invoke({"room": "4.9", "timeframe": "now"}))
+        print("\n[Testing (2h, 24h, 7d)]")
+        print(get_occupancy.invoke({"room": "restaurant", "timeframe": "2h"}))
         print(get_occupancy.invoke({"room": "1.2", "timeframe": "24h"}))
-        print("\n[Testing Historical (7d)]")
-        print(get_occupancy.invoke({"room": "1.2", "timeframe": "7d"}))
-        print("\n[Testing Historical (30d)]")
+        print(get_occupancy.invoke({"room": "4.9", "timeframe": "7d"}))
+        print("\n[Testing (30d)]")
+        print(get_occupancy.invoke({"room": "restaurant", "timeframe": "30d"}))
         print(get_occupancy.invoke({"room": "1.2", "timeframe": "30d"}))
+        print(get_occupancy.invoke({"room": "4.9", "timeframe": "30d"}))
     except Exception as e:
         print(f"\nError during execution: {e}")
