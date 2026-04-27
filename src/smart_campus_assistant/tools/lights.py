@@ -8,6 +8,9 @@ import logging
 from src.smart_campus_assistant.utils.device_registry import registry
 from src.smart_campus_assistant.clients.thingsboard_client import tb_client
 
+# Import Schemas
+from src.smart_campus_assistant.tools.schemas import CampusRooms, Timeframes
+
 logger = logging.getLogger(__name__)
 
 # Config mapping for API calls and pandas resampling
@@ -78,17 +81,17 @@ ROOMS = Literal[
 ]
 
 class LightsInput(BaseModel):
-    room: ROOMS = Field(
+    room: CampusRooms = Field(
         ..., 
-        description="The specific room to check for illumination levels."
+        description="The specific room to check for illumination levels. MUST be one of the exact allowed room names."
     )
-    timeframe: Literal["now", "2h", "24h", "7d", "30d"] = Field(
-        default="now", 
-        description="The time window for the data request. 'now' provides a real-time snapshot."
+    timeframe: Timeframes = Field(
+        ..., 
+        description="The time window for the data request. 'now' provides a real-time snapshot. '2h', '24h', '7d' provides data for that timeframe in smaller buckets. '30d' provies long-term statistics"
     )
 
 @tool("get_ambient_lights", args_schema=LightsInput)
-def get_ambient_lights(room: str, timeframe: Literal["now", "2h", "24h", "7d", "30d"]) -> str:
+def get_ambient_lights(room: CampusRooms, timeframe: Timeframes) -> str:
     """
     Tracks indoor illumination using a discrete 0-5 scale.
     Uses state-transition logic to prevent mathematical hallucinations and maps integers to semantic labels.

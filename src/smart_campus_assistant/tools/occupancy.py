@@ -8,6 +8,9 @@ import logging
 from src.smart_campus_assistant.utils.device_registry import registry
 from src.smart_campus_assistant.clients.thingsboard_client import tb_client
 
+# Import Schemas
+from src.smart_campus_assistant.tools.schemas import CampusRooms, Timeframes
+
 logger = logging.getLogger(__name__)
 
 # Config mapping for API calls and pandas resampling
@@ -18,18 +21,15 @@ TIMEFRAME_CONFIG = {
     "30d": {"method": "get_30d", "bin_size": "2h"}
 }
 
-AVAILABLE_ROOMS = registry.get_available_rooms()
-
 class OccupancyInput(BaseModel):
-    room: str = Field(
+    room: CampusRooms = Field(
         ..., 
-        description=f"The specific room to check for occupancy."
+        description="The specific room to check for illumination levels. MUST be one of the exact allowed room names."
     )
-    timeframe: Literal["now", "2h", "24h", "7d", "30d"] = Field(
-        default="now", 
-        description="The time window for the data request. 'now' provides a real-time snapshot."
+    timeframe: Timeframes = Field(
+        ..., 
+        description="The time window for the data request. 'now' provides a real-time snapshot. '2h', '24h', '7d' provides data for that timeframe in smaller buckets. '30d' provies long-term statistics"
     )
-
 def fetch_and_resample(devices: Dict[str, str], keys: List[str], fetch_method, bin_size: str, sensor_type: str, timeframe: str) -> pd.Series:
     """
     Helper to fetch telemetry for multiple devices, combine them, and resample.
@@ -124,7 +124,7 @@ def fetch_and_resample(devices: Dict[str, str], keys: List[str], fetch_method, b
     return pd.Series(dtype=float)
 
 @tool("get_occupancy", args_schema=OccupancyInput)
-def get_occupancy(room: str, timeframe: Literal["now", "2h", "24h", "7d", "30d"]) -> str:
+def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
     """
     Tracks room occupancy using a polymorphic schema. Automatically detects if the room uses 
     Desk Sensors, People Counters (PC), or Area Wait Counters (WO), and cross-validates 
