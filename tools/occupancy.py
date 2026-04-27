@@ -13,9 +13,9 @@ logger = logging.getLogger(__name__)
 # Config mapping for API calls and pandas resampling
 TIMEFRAME_CONFIG = {
     "2h":  {"method": "get_2h", "bin_size": "10min"},
-    "24h": {"method": "get_24h", "bin_size": "2h"}, 
+    "24h": {"method": "get_24h", "bin_size": "2h"},
     "7d":  {"method": "get_7d", "bin_size": "2h"},    
-    "30d": {"method": "get_30d", "bin_size": "2h"}  # 2h bin size to capture intraday peaks
+    "30d": {"method": "get_30d", "bin_size": "2h"}
 }
 
 AVAILABLE_ROOMS = registry.get_available_rooms()
