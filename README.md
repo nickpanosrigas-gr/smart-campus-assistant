@@ -352,46 +352,54 @@ Current_State:
 ```text
 smart-campus-assistant/
 │
-├── agents/                     # LangGraph Agent Definitions
-│   ├── __init__.py
-│   ├── supervisor.py           # The main routing logic
-│   ├── query_agent.py          # Read-only API and Analytics logic
-│   └── action_agent.py         # Write-access and Rule generation logic
-│
-├── tools/                      # Domain-Specific Tool Definitions
-│   ├── __init__.py
-│   ├── temp_humidity.py        # Combines Temp & Humidity with Indoor/Outdoor delta
-│   ├── air_quality.py          # Oxygen, CO2, TVOC, Particulate Matter
-│   ├── occupancy.py            # Polymorphic logic (People/Desk/Line) with Motion fusion
-│   ├── door_window.py          # Binary state transitions (Open/Closed)
-│   ├── lights.py               # Multimodal timelines (Daily Events vs. 30d Statistical Profile)
-│   └── knowledge.py            # Qdrant Vector DB semantic search tool
-│
-├── clients/                    # Tool clients
-│   ├── __init__.py
-│   └── thingsboard_client.py   # JWT Auth & High-Volume Raw Telemetry fetcher
-│
-├── database/                   # Vector DB Management
-│   ├── __init__.py
-│   ├── qdrant_client.py        # Qdrant connection and initialization
-│   └── document_loader.py      # Scripts to chunk and embed PDFs/Manuals
-│
-├── graph/                      # LangGraph Setup
-│   ├── __init__.py
-│   └── workflow.py             # Compiles nodes, edges, and HITL breakpoints
-│
-├── utils/
-│   └── device_registry.py      # O(1) in-memory Campus Topology resolver
+├── src/
+│   └── smart_campus_assistant/
+│       ├── __init__.py
+│       │
+│       ├── agents/                     # LangGraph Agent Definitions
+│       │   ├── __init__.py
+│       │   ├── supervisor.py           # The main routing logic
+│       │   ├── query_agent.py          # Read-only API and Analytics logic
+│       │   └── action_agent.py         # Write-access and Rule generation logic
+│       │
+│       ├── tools/                      # Domain-Specific Tool Definitions
+│       │   ├── __init__.py
+│       │   ├── temp_humidity.py        # Combines Temp & Humidity with Indoor/Outdoor delta
+│       │   ├── air_quality.py          # Oxygen, CO2, TVOC, Particulate Matter
+│       │   ├── occupancy.py            # Polymorphic logic (People/Desk/Line) with Motion fusion
+│       │   ├── door_window.py          # Binary state transitions (Open/Closed)
+│       │   ├── lights.py               # Multimodal timelines (Daily Events vs. 30d Statistical Profile)
+│       │   └── knowledge.py            # Qdrant Vector DB semantic search tool
+│       │
+│       ├── clients/                    # Tool clients
+│       │   ├── __init__.py
+│       │   └── thingsboard_client.py   # JWT Auth & High-Volume Raw Telemetry fetcher
+│       │
+│       ├── database/                   # Vector DB Management
+│       │   ├── __init__.py
+│       │   ├── qdrant_client.py        # Qdrant connection and initialization
+│       │   └── document_loader.py      # Scripts to chunk and embed PDFs/Manuals
+│       │
+│       ├── graph/                      # LangGraph Setup
+│       │   ├── __init__.py
+│       │   └── workflow.py             # Compiles nodes, edges, and HITL breakpoints
+│       │
+│       ├── utils/
+│       │   ├── __init__.py
+│       │   └── device_registry.py      # O(1) in-memory Campus Topology resolver
+│       │
+│       └── config/                     # Configuration
+│           ├── __init__.py
+│           └── settings.py             # Environment variables mapping
 │
 ├── data/                       # Local Knowledge Base (Unstructured Data)
 │   ├── manuals/                # HVAC/Sensor PDFs
 │   └── campus_topology.json    # Spatial definitions for resolving Room IDs
 │
-├── config/                     # Configuration
-│   ├── settings.py             # Environment variables mapping
-│   └── .env.example            # API keys (Gemini, ThingsBoard, Qdrant)
-│
+├── .env.example                # API keys template (Gemini, ThingsBoard, Qdrant)
+├── pyproject.toml              # Modern Python packaging and build configuration
+├── uv.lock                     # Locked dependency resolution (uv)
 ├── main.py                     # Entry point (CLI or API wrapper)
-├── requirements.txt            # Python dependencies
+├── requirements.txt            # Exported Python dependencies
 └── README.md                   # Project documentation
 ```
