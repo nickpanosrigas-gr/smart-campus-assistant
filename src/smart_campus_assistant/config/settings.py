@@ -1,4 +1,8 @@
+from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent.parent
+ENV_FILE_PATH = ROOT_DIR / ".env"
 
 class Settings(BaseSettings):
     # ThinksBoard
@@ -36,7 +40,10 @@ class Settings(BaseSettings):
     TELEGRAM_ALLOWED_USER_ID: int
     
     # Read from the .env file in the root directory
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
-
+    model_config = SettingsConfigDict(
+        env_file=str(ENV_FILE_PATH), 
+        env_file_encoding="utf-8", 
+        extra="ignore"
+    )
 # Instantiate settings to be imported across the project
 settings = Settings()

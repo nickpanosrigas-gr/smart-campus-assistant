@@ -5,8 +5,8 @@ from pydantic import BaseModel, Field
 import logging
 
 # Import project singletons
-from utils.device_registry import registry
-from clients.thingsboard_client import tb_client
+from src.smart_campus_assistant.utils.device_registry import registry
+from src.smart_campus_assistant.clients.thingsboard_client import tb_client
 
 logger = logging.getLogger(__name__)
 

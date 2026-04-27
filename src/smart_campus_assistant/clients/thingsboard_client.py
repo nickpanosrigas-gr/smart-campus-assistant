@@ -3,7 +3,7 @@ import logging
 import requests
 import json
 from typing import List, Dict, Any, Optional
-from config.settings import settings
+from smart_campus_assistant.config.settings import settings
 
 logger = logging.getLogger(__name__)
 

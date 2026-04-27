@@ -13,4 +13,13 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "qdrant-client>=1.17.1",
     "requests>=2.33.1",
+    "python-telegram-bot>=21.0",
+    "pytelegrambotapi>=4.32.0",
 ]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
