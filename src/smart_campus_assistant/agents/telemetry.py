@@ -38,10 +38,12 @@ def run_telemetry_agent(user_query: str) -> str:
     ]
     
     # 1. Ask the LLM to decide which tools to call based on the prompt
+    logger.info("Invoking LLM for telemetry tool routing...")
     ai_msg = llm_with_tools.invoke(messages)
     
     # 2. Check if the LLM decided to call any tools
     if not ai_msg.tool_calls:
+        logger.warning("LLM did not trigger any tools.")
         return f"Error: The LLM did not trigger any tools. Response: {ai_msg.content}"
     
     results = []
@@ -51,7 +53,7 @@ def run_telemetry_agent(user_query: str) -> str:
         tool_name = tool_call["name"]
         tool_args = tool_call["args"]
         
-        print(f"▶ [LLM Router]: Triggering {tool_name} with args: {tool_args}")
+        logger.info(f"Triggering {tool_name} with args: {tool_args}")
         
         # Match the requested tool to our actual Python functions
         tool_obj = next((t for t in tools if t.name == tool_name), None)
@@ -61,8 +63,10 @@ def run_telemetry_agent(user_query: str) -> str:
                 raw_output = tool_obj.invoke(tool_args)
                 results.append(str(raw_output))
             except Exception as e:
+                logger.error(f"Error executing {tool_name}: {e}")
                 results.append(f"Error executing {tool_name}: {e}")
         else:
+            logger.warning(f"Tool {tool_name} not found.")
             results.append(f"Error: Tool {tool_name} not found.")
             
     # 4. Return the combined raw strings
@@ -72,18 +76,16 @@ def run_telemetry_agent(user_query: str) -> str:
 # TEST EXECUTION BLOCK
 # ==========================================
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    print("Testing Telemetry Routing Node (Ollama)...")
-    print("-" * 50)
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s -  %(levelname)s - %(message)s')
+    logger.info("Testing Telemetry Routing Node (Ollama)...")
     
     # The compound double question
     query = "how many people are in the restaurant right now and can you give me some long term statistic on room 4.9 occupancy"
-    print(f"\n[User Query]: {query}\n")
+    logger.info(f"User Query: {query}")
     
     # Run our custom execution loop
     final_raw_output = run_telemetry_agent(query)
     
-    print("\n" + "="*50)
-    print("RAW TOOL OUTPUTS (Bypassing LLM Summary)")
-    print("="*50 + "\n")
+    logger.info("RAW TOOL OUTPUTS (Bypassing LLM Summary)")
+    # Keep standard print for the final payload structure
     print(final_raw_output)
