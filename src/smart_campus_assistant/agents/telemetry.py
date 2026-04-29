@@ -14,7 +14,9 @@ llm = ChatOllama(
     base_url=settings.OLLAMA_BASE_URL,
     model=settings.OLLAMA_MODEL,
     num_ctx=settings.OLLAMA_NUM_CTX, 
-    temperature=0
+    temperature=0,
+    think=False,
+    disable_thinking=True
 )
 
 # 2. Bind the tools strictly to the LLM
@@ -27,19 +29,19 @@ Your ONLY job is to analyze the user's request and trigger the correct telemetry
 If the user asks for multiple rooms or multiple timeframes, you MUST trigger multiple tool calls at the same time.
 Do not attempt to answer the user yourself; just call the tools."""
 
-def run_telemetry_agent(user_query: str) -> str:
+def run_telemetry_agent(query: str) -> str:
     """
     Custom agent router that forces raw tool output.
     Bypasses the LLM's tendency to summarize data by returning the tool execution directly.
     """
     messages = [
         SystemMessage(content=system_prompt),
-        HumanMessage(content=user_query)
+        HumanMessage(content=query) 
     ]
     
-    # 1. Ask the LLM to decide which tools to call based on the prompt
     logger.info("Invoking LLM for telemetry tool routing...")
-    ai_msg = llm_with_tools.invoke(messages)
+    # EXPLICITLY BLOCK Langfuse from bleeding into this routing decision
+    ai_msg = llm_with_tools.invoke(messages, config={"callbacks": []})
     
     # 2. Check if the LLM decided to call any tools
     if not ai_msg.tool_calls:
@@ -68,7 +70,7 @@ def run_telemetry_agent(user_query: str) -> str:
         else:
             logger.warning(f"Tool {tool_name} not found.")
             results.append(f"Error: Tool {tool_name} not found.")
-            
+    
     # 4. Return the combined raw strings
     return "\n\n" + "="*50 + "\n\n".join(results)
 

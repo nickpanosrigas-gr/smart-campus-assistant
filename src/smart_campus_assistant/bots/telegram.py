@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 # Initialize the bot object using your token
 bot = telebot.TeleBot(settings.TELEGRAM_BOT_TOKEN)
 
+MESSAGE_THREAD_MAP = {}
+
 # ==========================================
 # FORMATTING HELPER
 # ==========================================
@@ -108,6 +110,12 @@ def process_query_with_agent(message, user_query: str):
     """
     logger.info(f"Incoming query from User {message.from_user.id}: '{user_query}'")
     
+    # --- Thread Resolution Logic (Copied from homelab) ---
+    if message.reply_to_message and message.reply_to_message.message_id in MESSAGE_THREAD_MAP:
+        thread_id = MESSAGE_THREAD_MAP[message.reply_to_message.message_id]
+    else:
+        thread_id = str(message.message_id)
+        
     stop_typing = threading.Event()
     typing_thread = threading.Thread(
         target=keep_chat_action_alive, 
@@ -116,21 +124,57 @@ def process_query_with_agent(message, user_query: str):
     typing_thread.start()
 
     try:
-        # Call the Supervisor Agent
+        # --- LANGFUSE SHIM (Fixes Langchain path changes for v2) ---
+        import sys
+        import langchain_core.callbacks.base
+        import langchain_core.agents
+        import langchain_core.documents
+        
+        sys.modules['langchain.callbacks.base'] = langchain_core.callbacks.base
+        sys.modules['langchain.schema.agent'] = langchain_core.agents
+        sys.modules['langchain.schema.document'] = langchain_core.documents
+        
+        # --- Langfuse Setup (v2) ---
+        from langfuse.callback import CallbackHandler
+        
+        # Initialize handler explicitly with credentials for v2
+        langfuse_handler = CallbackHandler(
+            secret_key=settings.LANGFUSE_SECRET_KEY,
+            public_key=settings.LANGFUSE_PUBLIC_KEY,
+            host=settings.LANGFUSE_HOST,
+            user_id=str(message.from_user.id),
+            session_id=f"telegram_{thread_id}"
+        )
+
         logger.info("Invoking Supervisor Agent...")
-        reply_text = run_supervisor(user_query)
-            
+        
+        # Build the LangChain config dictionary natively
+        run_config = {
+            "callbacks": [langfuse_handler]
+        }
+        
+        # 1. Get the response from the LLM
+        reply_text = run_supervisor(user_query, config=run_config)
+        
+        # ==========================================
+        # 2. THIS IS THE BLOCK YOU WERE MISSING
+        # ==========================================
         if not reply_text or not str(reply_text).strip():
             reply_text = "Error: The AI returned an empty response."
         
         final_text = clean_markdown_for_telegram(str(reply_text))
         
         try:
-            bot.reply_to(message, final_text, parse_mode="Markdown")
+            # Send the actual message to Telegram!
+            sent_msg = bot.reply_to(message, final_text, parse_mode="Markdown")
+            MESSAGE_THREAD_MAP[sent_msg.message_id] = thread_id
             logger.info("Sent Bot Message Successfully.")
         except Exception as send_err:
             logger.error(f"Markdown Send Error: {send_err}")
-            bot.reply_to(message, f"[Format Error Retrying...]\n\n{final_text}")
+            # Fallback if Telegram rejects formatting
+            sent_msg = bot.reply_to(message, f"[Format Error Retrying...]\n\n{final_text}")
+            MESSAGE_THREAD_MAP[sent_msg.message_id] = thread_id
+        # ==========================================
         
     except Exception as e:
         logger.error(f"CRITICAL ERROR during agent execution: {str(e)}")

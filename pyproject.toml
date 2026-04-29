@@ -17,6 +17,7 @@ dependencies = [
     "requests>=2.33.1",
     "python-telegram-bot>=21.0",
     "pytelegrambotapi>=4.32.0",
+    "langfuse<3.0.0",
 ]
 
 [build-system]
