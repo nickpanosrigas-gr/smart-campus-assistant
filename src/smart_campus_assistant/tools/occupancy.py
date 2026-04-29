@@ -30,6 +30,7 @@ class OccupancyInput(BaseModel):
         ..., 
         description="The time window for the data request. 'now' provides a real-time snapshot. '2h', '24h', '7d' provides data for that timeframe in smaller buckets. '30d' provies long-term statistics"
     )
+
 def fetch_and_resample(devices: Dict[str, str], keys: List[str], fetch_method, bin_size: str, sensor_type: str, timeframe: str) -> pd.Series:
     """
     Helper to fetch telemetry for multiple devices, combine them, and resample.
@@ -127,8 +128,7 @@ def fetch_and_resample(devices: Dict[str, str], keys: List[str], fetch_method, b
 def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
     """
     Tracks room occupancy using a polymorphic schema. Automatically detects if the room uses 
-    Desk Sensors, People Counters (PC), or Area Wait Counters (WO), and cross-validates 
-    the primary count with secondary IAQ Motion (PIR) sensors.
+    Desk Sensors, People Counters (PC), Area Wait Counters (WO), or Motion Sensors (IAQ).
     """
     room_key = str(room).strip().lower()
     devices = registry.get_all_devices_in_room(room_key)
@@ -156,12 +156,21 @@ def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
         primary_devs = wo_devices
         primary_keys = ["people_count_max"]
         sensor_category = "wo"
+    elif iaq_devices:
+        primary_type = "IAQ_Motion (Binary Activity)"
+        primary_devs = iaq_devices
+        primary_keys = ["pir"]
+        sensor_category = "motion"
     else:
-        return f"Query_Context:\n  Room: {room}\nError: No primary occupancy sensor (PC, WO, or Desk) found."
+        return f"Query_Context:\n  Room: {room}\nError: No occupancy or motion sensors found."
 
     total_primary_sensors = len(primary_devs)
     iaq_sensor_names = list(iaq_devices.keys())
-    support_sensors_str = f"{len(iaq_sensor_names)} ({', '.join(iaq_sensor_names)} Motion)" if iaq_devices else "None"
+    
+    if sensor_category == "motion":
+        support_sensors_str = "None (Using Motion as Primary Indicator)"
+    else:
+        support_sensors_str = f"{len(iaq_sensor_names)} ({', '.join(iaq_sensor_names)} Motion)" if iaq_devices else "None"
 
     # ==========================================
     # BRANCH A: REAL-TIME SNAPSHOT ("NOW")
@@ -195,26 +204,31 @@ def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
                     val = float(raw[key][0]["value"])
                     if desk_devices:
                         if val > 0: primary_val += 1
+                    elif sensor_category == "motion":
+                        if val > 0: primary_val = 1
                     else:
                         primary_val += val
                 
         if has_data:
             if desk_devices:
                 output.append(f"  Current_Occupancy: {int(primary_val)}/{total_primary_sensors} Desks Occupied")
+            elif sensor_category == "motion":
+                output.append(f"  Current_State: {'Active' if primary_val > 0 else 'Idle'}")
             else:
                 output.append(f"  Current_Occupancy: {int(primary_val)} people")
         else:
             output.append("  Primary_Status: Offline / No Data")
 
-        motion_active = False
-        for name, uid in iaq_devices.items():
-            raw = tb_client.get_now(uid, ["pir"])
-            if "pir" in raw and raw["pir"]:
-                if float(raw["pir"][0]["value"]) > 0:
-                    motion_active = True
-                    
-        motion_str = "Active (Validates occupancy)" if motion_active else "Idle"
-        output.append(f"  Motion_Status: {motion_str}")
+        if sensor_category != "motion":
+            motion_active = False
+            for name, uid in iaq_devices.items():
+                raw = tb_client.get_now(uid, ["pir"])
+                if "pir" in raw and raw["pir"]:
+                    if float(raw["pir"][0]["value"]) > 0:
+                        motion_active = True
+                        
+            motion_str = "Active (Validates occupancy)" if motion_active else "Idle"
+            output.append(f"  Motion_Status: {motion_str}")
         
         return "\n".join(output)
 
@@ -229,10 +243,10 @@ def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
     motion_series = fetch_and_resample(iaq_devices, ["pir"], fetch_method, bin_size, sensor_type="motion", timeframe=timeframe)
 
     if primary_series.empty:
-        return f"Query_Context:\n  Room: {room}\nError: No historical occupancy data found for timeframe {timeframe}. Check if sensor is actively transmitting."
+        return f"Query_Context:\n  Room: {room}\nError: No historical data found for timeframe {timeframe}. Check if sensor is actively transmitting."
 
     df = pd.DataFrame({"primary": primary_series})
-    if not motion_series.empty:
+    if not motion_series.empty and sensor_category != "motion":
         df = df.join(motion_series.rename("motion"), how="outer")
     else:
         df["motion"] = 0.0
@@ -240,7 +254,7 @@ def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
     df.fillna(0, inplace=True)
 
     # ==========================================
-    # BRANCH C: 30-DAY STATISTICAL PROFILE WITH OUTLIERS
+    # BRANCH C: 30-DAY STATISTICAL PROFILE
     # ==========================================
     if timeframe == "30d":
         output = [
@@ -249,6 +263,7 @@ def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
             f"  Room: {room}",
             "  Timeframe: 30d (Long-Term Statistical Profile)",
             f"  Primary_Sensor: {primary_type}",
+            f"  Supporting_Sensors: {support_sensors_str}",
             "",
             "Schedule_Profiling_Matrix:"
         ]
@@ -263,59 +278,61 @@ def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
             if cell_df.empty:
                 return [f"    {cell_name}:", "      Baseline: No data", "      Outliers: None"]
             
-            motion_pct = (cell_df['motion'] > 0).mean() * 100
-            outliers = []
             lines = [f"    {cell_name}:"]
+            outliers = []
             
-            # Find the maximum peak and daily motion average for each day within this specific mask
-            daily_groups = cell_df.groupby(pd.Grouper(freq='D'))
-            daily_peaks = {day: day_data['primary'].max() for day, day_data in daily_groups if not day_data.empty}
-            daily_motions = {day: (day_data['motion'] > 0).mean() * 100 for day, day_data in daily_groups if not day_data.empty}
-            
-            avg_peak = sum(daily_peaks.values()) / len(daily_peaks) if daily_peaks else 0
-            max_peak = max(daily_peaks.values()) if daily_peaks else 0
-            
-            if desk_devices:
-                stats = f"Avg Daily Peak: {avg_peak:.1f}/{total_primary_sensors} Desks | Max Peak: {max_peak:.0f}/{total_primary_sensors} Desks | Motion Active: {motion_pct:.0f}%"
-                lines.append(f"      Baseline: {stats}")
+            if sensor_category == 'motion':
+                motion_pct = (cell_df['primary'] > 0).mean() * 100
+                lines.append(f"      Baseline: Active {motion_pct:.0f}% of timeframe")
                 
-                for day, peak in daily_peaks.items():
-                    day_motion = daily_motions.get(day, 0)
+                daily_groups = cell_df.groupby(pd.Grouper(freq='D'))
+                for day, day_data in daily_groups:
+                    if day_data.empty: continue
+                    day_motion = (day_data['primary'] > 0).mean() * 100
                     
-                    # Triggers: Deviates by 50% from average (or min 3 desks), OR Motion deviates by > 25% from baseline
-                    is_peak_outlier = abs(peak - avg_peak) >= max(3, avg_peak * 0.5)
-                    is_motion_outlier = abs(day_motion - motion_pct) >= 25
-                    
-                    if is_peak_outlier or is_motion_outlier:
+                    if abs(day_motion - motion_pct) >= 25:
                         day_str = day.strftime('%Y-%m-%d (%A)')
-                        outlier_parts = []
-                        if is_peak_outlier:
-                            outlier_parts.append(f"Peak reached {peak:.0f}/{total_primary_sensors} Desks")
-                        if is_motion_outlier:
-                            outlier_parts.append(f"Motion Active: {day_motion:.0f}%")
-                            
-                        outliers.append(f"        - '{day_str}': " + " | ".join(outlier_parts))
+                        outliers.append(f"        - '{day_str}': Activity level at {day_motion:.0f}%")
             else:
-                stats = f"Avg Daily Peak: {avg_peak:.1f} people | Max Peak: {max_peak:.0f} people | Motion Active: {motion_pct:.0f}%"
-                lines.append(f"      Baseline: {stats}")
+                motion_pct = (cell_df['motion'] > 0).mean() * 100
+                daily_groups = cell_df.groupby(pd.Grouper(freq='D'))
+                daily_peaks = {day: day_data['primary'].max() for day, day_data in daily_groups if not day_data.empty}
+                daily_motions = {day: (day_data['motion'] > 0).mean() * 100 for day, day_data in daily_groups if not day_data.empty}
                 
-                for day, peak in daily_peaks.items():
-                    day_motion = daily_motions.get(day, 0)
+                avg_peak = sum(daily_peaks.values()) / len(daily_peaks) if daily_peaks else 0
+                max_peak = max(daily_peaks.values()) if daily_peaks else 0
+                
+                if desk_devices:
+                    stats = f"Avg Daily Peak: {avg_peak:.1f}/{total_primary_sensors} Desks | Max Peak: {max_peak:.0f}/{total_primary_sensors} Desks | Motion Active: {motion_pct:.0f}%"
+                    lines.append(f"      Baseline: {stats}")
                     
-                    # Triggers: Deviates by 50% from average (or min 5 people), OR Motion deviates by > 25% from baseline
-                    is_peak_outlier = abs(peak - avg_peak) >= max(5, avg_peak * 0.5)
-                    is_motion_outlier = abs(day_motion - motion_pct) >= 25
-                    
-                    if is_peak_outlier or is_motion_outlier:
-                        day_str = day.strftime('%Y-%m-%d (%A)')
-                        outlier_parts = []
-                        if is_peak_outlier:
-                            outlier_parts.append(f"Peak reached {peak:.0f} people")
-                        if is_motion_outlier:
-                            outlier_parts.append(f"Motion Active: {day_motion:.0f}%")
-                            
-                        outliers.append(f"        - '{day_str}': " + " | ".join(outlier_parts))
+                    for day, peak in daily_peaks.items():
+                        day_motion = daily_motions.get(day, 0)
+                        is_peak_outlier = abs(peak - avg_peak) >= max(3, avg_peak * 0.5)
+                        is_motion_outlier = abs(day_motion - motion_pct) >= 25
                         
+                        if is_peak_outlier or is_motion_outlier:
+                            day_str = day.strftime('%Y-%m-%d (%A)')
+                            outlier_parts = []
+                            if is_peak_outlier: outlier_parts.append(f"Peak reached {peak:.0f}/{total_primary_sensors} Desks")
+                            if is_motion_outlier: outlier_parts.append(f"Motion Active: {day_motion:.0f}%")
+                            outliers.append(f"        - '{day_str}': " + " | ".join(outlier_parts))
+                else:
+                    stats = f"Avg Daily Peak: {avg_peak:.1f} people | Max Peak: {max_peak:.0f} people | Motion Active: {motion_pct:.0f}%"
+                    lines.append(f"      Baseline: {stats}")
+                    
+                    for day, peak in daily_peaks.items():
+                        day_motion = daily_motions.get(day, 0)
+                        is_peak_outlier = abs(peak - avg_peak) >= max(5, avg_peak * 0.5)
+                        is_motion_outlier = abs(day_motion - motion_pct) >= 25
+                        
+                        if is_peak_outlier or is_motion_outlier:
+                            day_str = day.strftime('%Y-%m-%d (%A)')
+                            outlier_parts = []
+                            if is_peak_outlier: outlier_parts.append(f"Peak reached {peak:.0f} people")
+                            if is_motion_outlier: outlier_parts.append(f"Motion Active: {day_motion:.0f}%")
+                            outliers.append(f"        - '{day_str}': " + " | ".join(outlier_parts))
+                            
             if outliers:
                 lines.append("      Outliers:")
                 lines.extend(outliers)
@@ -335,16 +352,20 @@ def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
         return "\n".join(output)
 
     # ==========================================
-    # BRANCH D: 2h, 24h, 7d (PER-DAY TIMELINE LOGIC)
+    # BRANCH D: 2h, 24h, 7d (TIMELINE LOGIC)
     # ==========================================
-    global_motion_pct = (df['motion'] > 0).mean() * 100
     peak_occ = df['primary'].max()
     avg_occ = df['primary'].mean()
     
-    if desk_devices:
-        global_summary = f"Peak_Occupancy: {peak_occ:.0f}/{total_primary_sensors} Desks | Avg_Occupancy: {avg_occ:.1f}/{total_primary_sensors} Desks"
+    if sensor_category == "motion":
+        global_motion_pct = (df['primary'] > 0).mean() * 100
+        global_summary = f"Activity_Profile: Active {global_motion_pct:.0f}% of the time"
     else:
-        global_summary = f"Peak_Occupancy: {peak_occ:.0f} people | Avg_Occupancy: {avg_occ:.1f} people"
+        global_motion_pct = (df['motion'] > 0).mean() * 100
+        if desk_devices:
+            global_summary = f"Peak_Occupancy: {peak_occ:.0f}/{total_primary_sensors} Desks | Avg_Occupancy: {avg_occ:.1f}/{total_primary_sensors} Desks\n  Motion_Context: Active {global_motion_pct:.0f}% / Idle {100-global_motion_pct:.0f}%"
+        else:
+            global_summary = f"Peak_Occupancy: {peak_occ:.0f} people | Avg_Occupancy: {avg_occ:.1f} people\n  Motion_Context: Active {global_motion_pct:.0f}% / Idle {100-global_motion_pct:.0f}%"
 
     output = [
         "Query_Context:",
@@ -356,7 +377,6 @@ def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
         "",
         f"Global_Occupancy_Summary (Last {timeframe}):",
         f"  {global_summary}",
-        f"  Motion_Context: Active {global_motion_pct:.0f}% / Idle {100-global_motion_pct:.0f}%",
         "",
         "Timeline_Activity:"
     ]
@@ -379,20 +399,21 @@ def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
         
         for ts, row in day_df.iterrows():
             time_str = ts.strftime('%H:%M')
-            
-            # Dynamically calculate the end time of this specific bucket
             bucket_end_ts = ts + pd.to_timedelta(bin_size)
             bucket_end_str = bucket_end_ts.strftime('%H:%M')
             if bucket_end_str == "00:00": 
-                bucket_end_str = "24:00" # Formatting for midnight
+                bucket_end_str = "24:00"
             
-            motion_str = "Active" if row['motion'] > 0 else "Idle"
-            if desk_devices:
-                prim_state = f"{int(row['primary'])}/{total_primary_sensors} Desks Occupied"
+            if sensor_category == "motion":
+                state_str = "Active" if row['primary'] > 0 else "Idle"
+                combined_state = f"Status: {state_str}."
             else:
-                prim_state = f"{int(row['primary'])} people"
-                
-            combined_state = f"Status: {prim_state}. Motion: {motion_str}."
+                motion_str = "Active" if row['motion'] > 0 else "Idle"
+                if desk_devices:
+                    prim_state = f"{int(row['primary'])}/{total_primary_sensors} Desks Occupied"
+                else:
+                    prim_state = f"{int(row['primary'])} people"
+                combined_state = f"Status: {prim_state}. Motion: {motion_str}."
             
             if prev_state is None:
                 prev_state = combined_state
@@ -402,8 +423,11 @@ def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
                 
             if combined_state != prev_state:
                 transitions.append(f"      - bucket: '{time_str}'")
-                transitions.append(f"        activity: 'Transitioned to {prim_state}'")
-                transitions.append(f"        motion_state: '{motion_str}'")
+                if sensor_category == "motion":
+                    transitions.append(f"        activity: 'Transitioned to {state_str}'")
+                else:
+                    transitions.append(f"        activity: 'Transitioned to {prim_state}'")
+                    transitions.append(f"        motion_state: '{motion_str}'")
                 
                 if stable_bins > 1:
                     stable_periods.append(f"      - '{current_stable_start} to {time_str}' ({stable_bins} intervals): {current_stable_state}")
@@ -415,7 +439,6 @@ def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
             else:
                 stable_bins += 1
 
-        # Close out any remaining stable periods dynamically using the actual end of the last bucket
         if stable_bins > 0:
             stable_periods.append(f"      - '{current_stable_start} to {bucket_end_str}' ({stable_bins} intervals): {current_stable_state}")
 
@@ -437,14 +460,17 @@ if __name__ == "__main__":
     print("-" * 50)
     try:
         print("\n[Testing (now)]")
+        print(get_occupancy.invoke({"room": "2.1", "timeframe": "now"}))
         print(get_occupancy.invoke({"room": "restaurant", "timeframe": "now"}))
         print(get_occupancy.invoke({"room": "1.2", "timeframe": "now"}))
         print(get_occupancy.invoke({"room": "4.9", "timeframe": "now"}))
         print("\n[Testing (2h, 24h, 7d)]")
+        print(get_occupancy.invoke({"room": "2.1", "timeframe": "2h"}))
         print(get_occupancy.invoke({"room": "restaurant", "timeframe": "2h"}))
         print(get_occupancy.invoke({"room": "1.2", "timeframe": "24h"}))
         print(get_occupancy.invoke({"room": "4.9", "timeframe": "7d"}))
         print("\n[Testing (30d)]")
+        print(get_occupancy.invoke({"room": "2.1", "timeframe": "30d"}))
         print(get_occupancy.invoke({"room": "restaurant", "timeframe": "30d"}))
         print(get_occupancy.invoke({"room": "1.2", "timeframe": "30d"}))
         print(get_occupancy.invoke({"room": "4.9", "timeframe": "30d"}))
