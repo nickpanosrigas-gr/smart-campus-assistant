@@ -34,7 +34,8 @@ TIMEFRAME_CONFIG = {
     "2h":  {"method": "get_2h", "bin_size": "10min", "prev_method": "get_2h_prev_30d"},
     "24h": {"method": "get_24h", "bin_size": "2h", "prev_method": "get_24h_prev_30d"}, 
     "7d":  {"method": "get_7d", "bin_size": "2h", "prev_method": "get_7d_prev_30d"},    
-    "30d": {"method": "get_30d", "bin_size": "2h", "prev_method": None} 
+    "30d": {"method": "get_30d", "bin_size": "2h", "prev_method": None},
+    "90d": {"method": "get_90d", "bin_size": "2h", "prev_method": None} 
 }
 
 # Sensor Key Configurations
@@ -85,7 +86,7 @@ ROOMS = Literal[
 
 class TempHumidityInput(BaseModel):
     room: CampusRooms = Field(..., description="The specific room to check.")
-    timeframe: Timeframes = Field(..., description="The time window. 'now', '2h', '24h', '7d', '30d'.")
+    timeframe: Timeframes = Field(..., description="The time window. 'now', '2h', '24h', '7d', '30d', '90d'.")
 
 # ==========================================
 # HELPER FUNCTIONS
@@ -192,11 +193,11 @@ def get_temp_humidity(room: CampusRooms, timeframe: Timeframes) -> str:
     config = TIMEFRAME_CONFIG[timeframe]
     bin_size = config["bin_size"]
     
-    # 1. Fetch Nested Baselines (For non-30d)
+    # 1. Fetch Nested Baselines (For non-30d/90d)
     indoor_baseline = {k: {} for k in IAQ_KEYS}
     weather_baseline = {k: {} for k in WEATHER_KEYS}
     
-    if timeframe != "30d":
+    if timeframe not in ["30d", "90d"]:
         prev_method = getattr(tb_client, config["prev_method"])
         
         if WEATHER_STATION_ID:
@@ -272,9 +273,9 @@ def get_temp_humidity(room: CampusRooms, timeframe: Timeframes) -> str:
     master_df = indoor_df.join(weather_df, how='outer') if not weather_df.empty else indoor_df
 
     # ==========================================
-    # BRANCH B: 30-DAY STATISTICAL PROFILE
+    # BRANCH B: 30-DAY / 90-DAY STATISTICAL PROFILE
     # ==========================================
-    if timeframe == "30d":
+    if timeframe in ["30d", "90d"]:
         is_weekday = master_df.index.dayofweek < 5
         is_weekend = master_df.index.dayofweek >= 5
         is_working = (master_df.index.hour >= 8) & (master_df.index.hour < 22)
@@ -284,7 +285,7 @@ def get_temp_humidity(room: CampusRooms, timeframe: Timeframes) -> str:
             "Query_Context:",
             "  Domain: Climate & Weather (Indoor_IAQ)",
             f"  Room: {room}",
-            "  Timeframe: 30d (Long-Term Matrix Profile)",
+            f"  Timeframe: {timeframe} (Long-Term Matrix Profile)",
             "",
             "Schedule_Profiling_Matrix:"
         ]
@@ -293,12 +294,20 @@ def get_temp_humidity(room: CampusRooms, timeframe: Timeframes) -> str:
             cell_df = master_df[mask]
             if cell_df.empty: return [f"  {name}:", "    No data."]
             
+            # Calculate baselines for the cell
             cell_base_i = cell_df[IAQ_KEYS].mean().to_dict() if not cell_df[IAQ_KEYS].empty else {}
-            cell_base_w = cell_df[[k for k in WEATHER_KEYS if k in cell_df.columns]].mean().to_dict()
+            w_cols = [k for k in WEATHER_KEYS if k in cell_df.columns]
+            cell_base_w = cell_df[w_cols].mean().to_dict() if w_cols and not cell_df[w_cols].empty else {}
             
             lines = [f"  {name}:"]
-            outliers = []
             
+            # 1. Print Baselines FIRST
+            lines.append("    Statistical_Baseline (Background):")
+            lines.append(f"      Weather_Normals: {format_baseline_str(cell_base_w, ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed'])}")
+            lines.append(f"      Indoor_Normals: {format_baseline_str(cell_base_i, IAQ_KEYS)}")
+            
+            # 2. Process Outliers
+            outliers = []
             daily_groups = cell_df.groupby(pd.Grouper(freq='D'))
             for day, day_data in daily_groups:
                 if day_data.empty: continue
@@ -340,13 +349,13 @@ def get_temp_humidity(room: CampusRooms, timeframe: Timeframes) -> str:
                     day_str = day.strftime('%Y-%m-%d (%A)')
                     outliers.append(f"      - '{day_str}': Room_Spikes: {' | '.join(spikes)} | Weather_Drivers: {' | '.join(drivers) if drivers else 'None'}")
             
+            # Print Outliers SECOND
             if outliers:
                 lines.append("    Outliers (Priority):")
                 lines.extend(outliers)
             else:
                 lines.append("    Outliers (Priority): None")
                 
-            lines.append(f"    Baseline (Background): {format_baseline_str(cell_base_i, ['temperature', 'humidity'])}")
             return lines
 
         output.extend(process_matrix_cell("Weekdays (Mon-Fri) Working_Hours (08:00-22:00)", is_weekday & is_working))
@@ -537,13 +546,17 @@ if __name__ == "__main__":
         print("\n" + "="*50)
         
         print("\n[Testing Historical (7d)]")
-        # Swapped to data_center just to test a different room profile
         print(get_temp_humidity.invoke({"room": "data_center", "timeframe": "7d"}))
         
         print("\n" + "="*50)
         
         print("\n[Testing Historical (30d)]")
         print(get_temp_humidity.invoke({"room": "restaurant", "timeframe": "30d"}))
+
+        print("\n" + "="*50)
+        
+        print("\n[Testing Historical (90d)]")
+        print(get_temp_humidity.invoke({"room": "restaurant", "timeframe": "90d"}))
         
         print("\n" + "-"*50)
         print("All Temp & Humidity tool tests completed successfully.")

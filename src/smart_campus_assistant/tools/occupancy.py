@@ -18,17 +18,18 @@ TIMEFRAME_CONFIG = {
     "2h":  {"method": "get_2h", "bin_size": "10min"},
     "24h": {"method": "get_24h", "bin_size": "2h"},
     "7d":  {"method": "get_7d", "bin_size": "2h"},    
-    "30d": {"method": "get_30d", "bin_size": "2h"}
+    "30d": {"method": "get_30d", "bin_size": "2h"},
+    "90d": {"method": "get_90d", "bin_size": "2h"}
 }
 
 class OccupancyInput(BaseModel):
     room: CampusRooms = Field(
         ..., 
-        description="The specific room to check for illumination levels. MUST be one of the exact allowed room names."
+        description="The specific room to check for occupancy levels. MUST be one of the exact allowed room names."
     )
     timeframe: Timeframes = Field(
         ..., 
-        description="The time window for the data request. 'now' provides a real-time snapshot. '2h', '24h', '7d' provides data for that timeframe in smaller buckets. '30d' provies long-term statistics"
+        description="The time window for the data request. 'now' provides a real-time snapshot. '2h', '24h', '7d' provides data for that timeframe in smaller buckets. '30d' and '90d' provide long-term statistics."
     )
 
 def fetch_and_resample(devices: Dict[str, str], keys: List[str], fetch_method, bin_size: str, sensor_type: str, timeframe: str) -> pd.Series:
@@ -76,7 +77,8 @@ def fetch_and_resample(devices: Dict[str, str], keys: List[str], fetch_method, b
             "2h": pd.Timedelta(hours=2), 
             "24h": pd.Timedelta(hours=24), 
             "7d": pd.Timedelta(days=7), 
-            "30d": pd.Timedelta(days=30)
+            "30d": pd.Timedelta(days=30),
+            "90d": pd.Timedelta(days=90)
         }
         start_ts = end_ts - td_map.get(timeframe, pd.Timedelta(hours=2))
         
@@ -254,14 +256,14 @@ def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
     df.fillna(0, inplace=True)
 
     # ==========================================
-    # BRANCH C: 30-DAY STATISTICAL PROFILE
+    # BRANCH C: 30-DAY & 90-DAY STATISTICAL PROFILE
     # ==========================================
-    if timeframe == "30d":
+    if timeframe in ["30d", "90d"]:
         output = [
             "Query_Context:",
             "  Domain: Occupancy",
             f"  Room: {room}",
-            "  Timeframe: 30d (Long-Term Statistical Profile)",
+            f"  Timeframe: {timeframe} (Long-Term Statistical Profile)",
             f"  Primary_Sensor: {primary_type}",
             f"  Supporting_Sensors: {support_sensors_str}",
             "",
@@ -273,7 +275,7 @@ def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
         is_working_hours = (df.index.hour >= 8) & (df.index.hour < 22)
         is_non_working = (df.index.hour < 8) | (df.index.hour >= 22)
         
-        def process_30d_cell(cell_name, mask):
+        def process_longterm_cell(cell_name, mask):
             cell_df = df[mask]
             if cell_df.empty:
                 return [f"    {cell_name}:", "      Baseline: No data", "      Outliers: None"]
@@ -342,18 +344,23 @@ def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
             return lines
 
         output.append("  Weekdays (Mon-Fri):")
-        output.extend(process_30d_cell("Working_Hours (08:00-22:00)", is_weekday & is_working_hours))
-        output.extend(process_30d_cell("Non-Working_Hours (22:00-08:00)", is_weekday & is_non_working))
+        output.extend(process_longterm_cell("Working_Hours (08:00-22:00)", is_weekday & is_working_hours))
+        output.extend(process_longterm_cell("Non-Working_Hours (22:00-08:00)", is_weekday & is_non_working))
         
         output.append("  Weekends (Sat-Sun):")
-        output.extend(process_30d_cell("Working_Hours (08:00-22:00)", is_weekend & is_working_hours))
-        output.extend(process_30d_cell("Non-Working_Hours (22:00-08:00)", is_weekend & is_non_working))
+        output.extend(process_longterm_cell("Working_Hours (08:00-22:00)", is_weekend & is_working_hours))
+        output.extend(process_longterm_cell("Non-Working_Hours (22:00-08:00)", is_weekend & is_non_working))
 
         return "\n".join(output)
 
     # ==========================================
     # BRANCH D: 2h, 24h, 7d (TIMELINE LOGIC)
     # ==========================================
+    is_weekday = df.index.dayofweek < 5
+    is_weekend = df.index.dayofweek >= 5
+    is_working_hours = (df.index.hour >= 8) & (df.index.hour < 22)
+    is_non_working = (df.index.hour < 8) | (df.index.hour >= 22)
+
     peak_occ = df['primary'].max()
     avg_occ = df['primary'].mean()
     
@@ -375,11 +382,38 @@ def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
         f"  Primary_Sensor: {primary_type}",
         f"  Supporting_Sensors: {support_sensors_str}",
         "",
-        f"Global_Occupancy_Summary (Last {timeframe}):",
-        f"  {global_summary}",
-        "",
-        "Timeline_Activity:"
+        "Statistical_Baseline (Present Contexts):"
     ]
+    
+    def add_context_summary(name, mask):
+        cell_df = df[mask]
+        if not cell_df.empty:
+            output.append(f"  {name}:")
+            if sensor_category == 'motion':
+                motion_pct = (cell_df['primary'] > 0).mean() * 100
+                output.append(f"    Baseline: Active {motion_pct:.0f}% of the time")
+            else:
+                motion_pct = (cell_df['motion'] > 0).mean() * 100
+                p_occ = cell_df['primary'].max()
+                a_occ = cell_df['primary'].mean()
+                if pd.isna(p_occ): p_occ = 0
+                if pd.isna(a_occ): a_occ = 0
+                
+                if desk_devices:
+                    output.append(f"    Baseline: Peak: {p_occ:.0f}/{total_primary_sensors} Desks | Avg: {a_occ:.1f}/{total_primary_sensors} Desks | Motion Active: {motion_pct:.0f}%")
+                else:
+                    output.append(f"    Baseline: Peak: {p_occ:.0f} people | Avg: {a_occ:.1f} people | Motion Active: {motion_pct:.0f}%")
+
+    add_context_summary("Weekdays (Mon-Fri) Working_Hours (08:00-22:00)", is_weekday & is_working_hours)
+    add_context_summary("Weekdays (Mon-Fri) Non-Working_Hours (22:00-08:00)", is_weekday & is_non_working)
+    add_context_summary("Weekends (Sat-Sun) Working_Hours (08:00-22:00)", is_weekend & is_working_hours)
+    add_context_summary("Weekends (Sat-Sun) Non-Working_Hours (22:00-08:00)", is_weekend & is_non_working)
+
+    output.append("")
+    output.append(f"Global_Occupancy_Summary (Last {timeframe}):")
+    output.append(f"  {global_summary}")
+    output.append("")
+    output.append("Timeline_Activity:")
 
     daily_groups = df.groupby(pd.Grouper(freq='D'))
     
@@ -474,5 +508,10 @@ if __name__ == "__main__":
         print(get_occupancy.invoke({"room": "restaurant", "timeframe": "30d"}))
         print(get_occupancy.invoke({"room": "1.2", "timeframe": "30d"}))
         print(get_occupancy.invoke({"room": "4.9", "timeframe": "30d"}))
+        print("\n[Testing (90d)]")
+        print(get_occupancy.invoke({"room": "2.1", "timeframe": "90d"}))
+        print(get_occupancy.invoke({"room": "restaurant", "timeframe": "90d"}))
+        print(get_occupancy.invoke({"room": "1.2", "timeframe": "90d"}))
+        print(get_occupancy.invoke({"room": "4.9", "timeframe": "90d"}))
     except Exception as e:
         print(f"\nError during execution: {e}")

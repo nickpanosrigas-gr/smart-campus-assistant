@@ -18,7 +18,8 @@ TIMEFRAME_CONFIG = {
     "2h":  {"method": "get_2h", "bin_size": "10min"},
     "24h": {"method": "get_24h", "bin_size": "2h"}, 
     "7d":  {"method": "get_7d", "bin_size": "2h"},    
-    "30d": {"method": "get_30d", "bin_size": "2h"}    
+    "30d": {"method": "get_30d", "bin_size": "2h"},
+    "90d": {"method": "get_90d", "bin_size": "2h"}    
 }
 
 # Semantic mapping for 0-5 scale
@@ -87,7 +88,7 @@ class LightsInput(BaseModel):
     )
     timeframe: Timeframes = Field(
         ..., 
-        description="The time window for the data request. 'now' provides a real-time snapshot. '2h', '24h', '7d' provides data for that timeframe in smaller buckets. '30d' provies long-term statistics"
+        description="The time window for the data request. 'now' provides a real-time snapshot. '2h', '24h', '7d' provides data for that timeframe in smaller buckets. '30d' and '90d' provide long-term statistics."
     )
 
 @tool("get_ambient_lights", args_schema=LightsInput)
@@ -167,9 +168,9 @@ def get_ambient_lights(room: CampusRooms, timeframe: Timeframes) -> str:
         return f"Query_Context:\n  Room: {room}\nError: Historical data was fetched but contained only invalid values."
 
     # ==========================================
-    # BRANCH C: 30-DAY STATISTICAL PROFILE
+    # BRANCH C: 30-DAY & 90-DAY STATISTICAL PROFILE
     # ==========================================
-    if timeframe == "30d":
+    if timeframe in ["30d", "90d"]:
         is_weekday = raw_series.index.dayofweek < 5
         is_weekend = raw_series.index.dayofweek >= 5
         is_working_hours = (raw_series.index.hour >= 8) & (raw_series.index.hour < 22)
@@ -179,10 +180,10 @@ def get_ambient_lights(room: CampusRooms, timeframe: Timeframes) -> str:
             "Query_Context:",
             "  Domain: Ambient Light Intensity (0-5 Scale)",
             f"  Room: {room}",
-            "  Timeframe: 30d (Long-Term Statistical Profile)",
+            f"  Timeframe: {timeframe} (Long-Term Statistical Profile)",
             f"  Active_Sensors: {active_sensors_str}",
             "",
-            "Total_Monthly_Average:",
+            "Total_Monthly_Average:" if timeframe == "30d" else "Total_Quarterly_Average:",
             f"  {format_distribution(raw_series)}",
             "",
             "Schedule_Profiling_Matrix:"
@@ -219,6 +220,11 @@ def get_ambient_lights(room: CampusRooms, timeframe: Timeframes) -> str:
     # ==========================================
     # BRANCH D: 2h, 24h, 7d (PER-DAY TIMELINE LOGIC)
     # ==========================================
+    is_weekday = raw_series.index.dayofweek < 5
+    is_weekend = raw_series.index.dayofweek >= 5
+    is_working_hours = (raw_series.index.hour >= 8) & (raw_series.index.hour < 22)
+    is_non_working = (raw_series.index.hour < 8) | (raw_series.index.hour >= 22)
+
     output = [
         "Query_Context:",
         "  Domain: Ambient Light Intensity (0-5 Scale)",
@@ -226,12 +232,22 @@ def get_ambient_lights(room: CampusRooms, timeframe: Timeframes) -> str:
         f"  Timeframe: {timeframe} ({bin_size} intervals)",
         f"  Active_Sensors: {active_sensors_str}",
         "",
-        f"Global_Illumination_Summary (Last {timeframe}):"
+        "Statistical_Baseline (Present Contexts):"
     ]
     
-    total_raw_dist = format_distribution(raw_series)
-    output.extend([f"  {item}" for item in total_raw_dist.split(", ")])
-    output.append("\nTimeline_Activity:")
+    def add_context_summary(name, mask):
+        cell_series = raw_series[mask]
+        if not cell_series.empty:
+            output.append(f"  {name}:")
+            output.append(f"    Baseline: {format_distribution(cell_series)}")
+
+    add_context_summary("Weekdays (Mon-Fri) Working_Hours (08:00-22:00)", is_weekday & is_working_hours)
+    add_context_summary("Weekdays (Mon-Fri) Non-Working_Hours (22:00-08:00)", is_weekday & is_non_working)
+    add_context_summary("Weekends (Sat-Sun) Working_Hours (08:00-22:00)", is_weekend & is_working_hours)
+    add_context_summary("Weekends (Sat-Sun) Non-Working_Hours (22:00-08:00)", is_weekend & is_non_working)
+    
+    output.append("")
+    output.append("Timeline_Activity:")
 
     daily_groups = raw_series.groupby(pd.Grouper(freq='D'))
     
@@ -346,5 +362,7 @@ if __name__ == "__main__":
         print(get_ambient_lights.invoke({"room": "restaurant", "timeframe": "7d"}))
         print("\n[Testing Historical (30d)]")
         print(get_ambient_lights.invoke({"room": "restaurant", "timeframe": "30d"}))
+        print("\n[Testing Historical (90d)]")
+        print(get_ambient_lights.invoke({"room": "restaurant", "timeframe": "90d"}))
     except Exception as e:
         print(f"\nError during execution: {e}")

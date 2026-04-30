@@ -207,6 +207,12 @@ class ThingsBoardClient:
         start_ts = end_ts - (30 * 24 * 3600 * 1000)
         return self._fetch_raw_telemetry(device_id, keys, start_ts, end_ts)
     
+    def get_90d(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
+        """Fetches 90 days of raw data."""
+        end_ts = int(time.time() * 1000)
+        start_ts = end_ts - (90 * 24 * 3600 * 1000)
+        return self._fetch_raw_telemetry(device_id, keys, start_ts, end_ts)
+    
     # ========================================================
     # CONTEXTUAL BASELINE FUNCTIONS (Prev 30d Contextual Avgs)
     # ========================================================
@@ -268,8 +274,8 @@ if __name__ == "__main__":
         now_data = tb_client.get_now(TEST_DEVICE_ID, TEST_KEYS)
         print_chunk("Testing get_now() [Latest point]", now_data)
 
-        d30_data = tb_client.get_30d(TEST_DEVICE_ID, TEST_KEYS)
-        print_chunk("Testing get_30d() [Raw points]", d30_data)
+        d90_data = tb_client.get_90d(TEST_DEVICE_ID, TEST_KEYS)
+        print_chunk("Testing get_90d() [Raw points]", d90_data)
         
         d7_prev_30d_data = tb_client.get_7d_prev_30d(TEST_DEVICE_ID, TEST_KEYS)
         print_chunk("Testing get_7d_prev_30d [Contextual Averages]", d7_prev_30d_data)
