@@ -72,6 +72,33 @@ class ThingsBoardClient:
         
         response = self._request("GET", endpoint, params=params)
         return response.json()
+    
+    def _fetch_aggregated_telemetry(self, device_id: str, keys: List[str], start_ts: int, end_ts: int, agg: str = "AVG") -> Dict[str, Any]:
+        """
+        Fetches server-side aggregated data (e.g., averages) over a specific time window.
+        By setting the interval to the total time window, it returns a single summary point.
+        """
+        endpoint = f"/api/plugins/telemetry/DEVICE/{device_id}/values/timeseries"
+        
+        # Interval is required for aggregations. 
+        # Setting interval = (end_ts - start_ts) forces TB to return exactly ONE averaged point for the whole period.
+        interval = end_ts - start_ts
+        
+        # Fallback to 1 day (86400000 ms) if interval is somehow 0 to avoid API errors
+        if interval <= 0:
+            interval = 86400000
+            
+        params = {
+            "keys": ",".join(keys),
+            "startTs": start_ts,
+            "endTs": end_ts,
+            "interval": interval,
+            "agg": agg,
+            "useStrictDataTypes": "false"
+        }
+        
+        response = self._request("GET", endpoint, params=params)
+        return response.json()
 
     # ==========================================
     # TIME-FRAME FUNCTIONS (Returning Raw Data)
@@ -110,6 +137,34 @@ class ThingsBoardClient:
         end_ts = int(time.time() * 1000)
         start_ts = end_ts - (30 * 24 * 3600 * 1000)
         return self._fetch_raw_telemetry(device_id, keys, start_ts, end_ts)
+    
+    # ==========================================
+    # BASELINE AGGREGATION FUNCTIONS (Prev 30d)
+    # ==========================================
+
+    def get_now_prev_30d(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
+        """Fetches the 30-day average immediately prior to 'now'."""
+        end_ts = int(time.time() * 1000)
+        start_ts = end_ts - (30 * 24 * 3600 * 1000)
+        return self._fetch_aggregated_telemetry(device_id, keys, start_ts, end_ts)
+
+    def get_2h_prev_30d(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
+        """Fetches the 30-day average immediately prior to the last 2 hours."""
+        end_ts = int(time.time() * 1000) - (2 * 3600 * 1000) # Ends 2 hours ago
+        start_ts = end_ts - (30 * 24 * 3600 * 1000)          # Starts 30 days before that
+        return self._fetch_aggregated_telemetry(device_id, keys, start_ts, end_ts)
+
+    def get_24h_prev_30d(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
+        """Fetches the 30-day average immediately prior to the last 24 hours."""
+        end_ts = int(time.time() * 1000) - (24 * 3600 * 1000) # Ends 24 hours ago
+        start_ts = end_ts - (30 * 24 * 3600 * 1000)           # Starts 30 days before that
+        return self._fetch_aggregated_telemetry(device_id, keys, start_ts, end_ts)
+
+    def get_7d_prev_30d(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
+        """Fetches the 30-day average immediately prior to the last 7 days."""
+        end_ts = int(time.time() * 1000) - (7 * 24 * 3600 * 1000) # Ends 7 days ago
+        start_ts = end_ts - (30 * 24 * 3600 * 1000)               # Starts 30 days before that
+        return self._fetch_aggregated_telemetry(device_id, keys, start_ts, end_ts)
 
 tb_client = ThingsBoardClient()
 
@@ -130,7 +185,7 @@ if __name__ == "__main__":
         print(json.dumps(preview, indent=2))
 
     print("\n" + "="*50)
-    print("🧪 RUNNING RAW THINGSBOARD CLIENT TESTS 🧪")
+    print("RUNNING RAW THINGSBOARD CLIENT TESTS")
     print("="*50)
 
     try:
@@ -148,8 +203,11 @@ if __name__ == "__main__":
 
         d30_data = tb_client.get_30d(TEST_DEVICE_ID, TEST_KEYS)
         print_chunk("Testing get_30d() [Raw points]", d30_data)
+        
+        d7_prev_30d_data = tb_client.get_7d_prev_30d(TEST_DEVICE_ID, TEST_KEYS)
+        print_chunk("Testing get_7d_prev_30d [Latest point]", d7_prev_30d_data)
 
-        print("\n✅ All ThingsBoard client tests completed successfully.\n")
+        print("\nAll ThingsBoard client tests completed successfully.\n")
 
     except Exception as e:
-        print(f"\n❌ UNEXPECTED ERROR: {e}")
+        print(f"\nUNEXPECTED ERROR: {e}")
