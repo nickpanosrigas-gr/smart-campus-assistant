@@ -143,7 +143,7 @@ if __name__ == "__main__":
         registry = DeviceRegistry(topology_path="data/campus_topology.json")
         
         print("\n" + "="*40)
-        print("🧪 RUNNING DEVICE REGISTRY TESTS 🧪")
+        print("RUNNING DEVICE REGISTRY TESTS")
         print("="*40)
 
         # 1. Test get_total_sensor_count
@@ -175,8 +175,8 @@ if __name__ == "__main__":
         for name, uid in restaurant_devices.items():
             print(f"    ✔️ {name} -> {uid}")
             
-        print("\n✅ All tests completed successfully.\n")
+        print("\nAll tests completed successfully.\n")
 
     except FileNotFoundError:
-        print("\n❌ ERROR: Could not find 'data/campus_topology.json'.")
+        print("\nERROR: Could not find 'data/campus_topology.json'.")
         print("Make sure you run this script from the root project directory.")
