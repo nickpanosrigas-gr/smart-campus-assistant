@@ -168,6 +168,53 @@ class ThingsBoardClient:
         # Our context calculator doesn't care if it's hourly or raw, 
         # it just looks at the timestamp of every point and buckets it perfectly.
         return self._calculate_contextual_averages(raw_data)
+    
+    def _calculate_contextual_raw_lists(self, raw_data: Dict[str, Any], work_start_hr: int = 8, work_end_hr: int = 22) -> Dict[str, Dict[str, List[float]]]:
+        """
+        Sorts raw data points into 4 context buckets and returns the FULL lists of values,
+        skipping the averaging step.
+        """
+        results = {}
+        
+        for key, points in raw_data.items():
+            buckets = {
+                "weekday_work": [],
+                "weekday_nonwork": [],
+                "weekend_work": [],
+                "weekend_nonwork": []
+            }
+            
+            for pt in points:
+                dt = datetime.fromtimestamp(pt["ts"] / 1000.0)
+                try:
+                    val = float(pt["value"])
+                except (ValueError, TypeError, KeyError):
+                    continue 
+
+                is_weekend = dt.weekday() >= 5 
+                is_working_hour = work_start_hr <= dt.hour < work_end_hr
+                
+                if not is_weekend and is_working_hour:
+                    buckets["weekday_work"].append(val)
+                elif not is_weekend and not is_working_hour:
+                    buckets["weekday_nonwork"].append(val)
+                elif is_weekend and is_working_hour:
+                    buckets["weekend_work"].append(val)
+                else:
+                    buckets["weekend_nonwork"].append(val)
+
+            results[key] = buckets
+            
+        return results
+
+    def _fetch_30d_context_baseline_full(self, device_id: str, keys: List[str], target_start_ts: int) -> Dict[str, Any]:
+        """
+        Fetches 30 days of RAW data prior to the target start, 
+        and returns the full, separated arrays for the 4 context buckets.
+        """
+        start_ts = target_start_ts - (30 * 24 * 3600 * 1000)
+        raw_data = self._fetch_raw_telemetry(device_id, keys, start_ts, target_start_ts)
+        return self._calculate_contextual_raw_lists(raw_data)
 
     # ==========================================
     # TIME-FRAME FUNCTIONS (Returning Raw Data)
@@ -236,6 +283,30 @@ class ThingsBoardClient:
         """Fetches the 30-day contextual average prior to the last 7 days."""
         target_start_ts = int(time.time() * 1000) - (7 * 24 * 3600 * 1000) 
         return self._fetch_30d_context_baseline(device_id, keys, target_start_ts)
+    
+    # ========================================================
+    # CONTEXTUAL BASELINE FUNCTIONS (Prev 30d Contextual FULL)
+    # ========================================================
+
+    def get_now_prev_30d_full(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
+        """Fetches the full 30-day contextual arrays prior to 'now'."""
+        target_start_ts = int(time.time() * 1000)
+        return self._fetch_30d_context_baseline_full(device_id, keys, target_start_ts)
+
+    def get_2h_prev_30d_full(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
+        """Fetches the full 30-day contextual arrays prior to the last 2 hours."""
+        target_start_ts = int(time.time() * 1000) - (2 * 3600 * 1000) 
+        return self._fetch_30d_context_baseline_full(device_id, keys, target_start_ts)
+
+    def get_24h_prev_30d_full(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
+        """Fetches the full 30-day contextual arrays prior to the last 24 hours."""
+        target_start_ts = int(time.time() * 1000) - (24 * 3600 * 1000) 
+        return self._fetch_30d_context_baseline_full(device_id, keys, target_start_ts)
+
+    def get_7d_prev_30d_full(self, device_id: str, keys: List[str]) -> Dict[str, Any]:
+        """Fetches the full 30-day contextual arrays prior to the last 7 days."""
+        target_start_ts = int(time.time() * 1000) - (7 * 24 * 3600 * 1000) 
+        return self._fetch_30d_context_baseline_full(device_id, keys, target_start_ts)
 
 tb_client = ThingsBoardClient()
 
@@ -279,6 +350,9 @@ if __name__ == "__main__":
         
         d7_prev_30d_data = tb_client.get_7d_prev_30d(TEST_DEVICE_ID, TEST_KEYS)
         print_chunk("Testing get_7d_prev_30d [Contextual Averages]", d7_prev_30d_data)
+        
+        d7_prev_30d_full_data = tb_client.get_7d_prev_30d_full(TEST_DEVICE_ID, TEST_KEYS)
+        print_chunk("Testing get_7d_prev_30d_full [Contextual Full Data]", d7_prev_30d_full_data)
 
         print("\nAll ThingsBoard client tests completed successfully.\n")
 

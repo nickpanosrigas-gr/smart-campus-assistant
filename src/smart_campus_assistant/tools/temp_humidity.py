@@ -75,7 +75,7 @@ UNITS = {
 DISPLAY_NAMES = {
     "temperature": "Temp", "humidity": "Hum", "pressure": "Pres",
     "air_temperature": "Out_Temp", "relative_humidity": "Out_Hum", 
-    "solar_radiation": "Peak_Solar", "precipitation": "Precip", "wind_speed": "Wind"
+    "solar_radiation": "Average_Solar", "precipitation": "Precip", "wind_speed": "Wind"
 }
 
 ROOMS = Literal[
