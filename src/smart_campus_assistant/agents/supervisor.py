@@ -9,6 +9,7 @@ from src.smart_campus_assistant.config.settings import settings
 
 # Import Agents and Tools
 from src.smart_campus_assistant.agents.telemetry import run_telemetry_agent
+from src.smart_campus_assistant.agents.scheduler import run_scheduler_agent
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,18 @@ def ask_telemetry_agent(query: str) -> str:
     """
     logger.info(f"[Telemetry Node]: Hitting API for query: '{query}'")
     return run_telemetry_agent(query)
+
+@tool
+def ask_scheduler_agent(query: str) -> str:
+    """
+    Call this agent to fetch academic schedules, class times, and university programs.
+    Use this for questions about when/where classes are happening, room occupancy schedules, or teacher availability.
+    CRITICAL INSTRUCTION: The 'query' MUST explicitly state the target (room, teacher, or course) and the timeframe (now, today, week, or a specific day).
+    - BAD Query: 'Where is the CS class?'
+    - GOOD Query: 'Find the room and time for Introduction to Computer Science for this week.'
+    """
+    logger.info(f"[Scheduler Node]: Hitting Registry for query: '{query}'")
+    return run_scheduler_agent(query)
 
 @tool
 def ask_diagnostics_agent(query: str) -> str:
@@ -74,7 +87,7 @@ llm = ChatOllama(
 )
 
 # Bind the sub-agents to the LLM
-sub_systems = [ask_telemetry_agent, ask_diagnostics_agent, ask_rule_agent, query_knowledge_base]
+sub_systems = [ask_telemetry_agent, ask_scheduler_agent, ask_diagnostics_agent, ask_rule_agent, query_knowledge_base]
 supervisor_llm = llm.bind_tools(sub_systems)
 
 supervisor_prompt = """You are the Supreme Supervisor Agent for a Smart Campus.
