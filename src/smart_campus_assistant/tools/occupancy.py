@@ -8,8 +8,15 @@ import logging
 from src.smart_campus_assistant.utils.device_registry import registry
 from src.smart_campus_assistant.clients.thingsboard_client import tb_client
 
-# Import Schemas
-from src.smart_campus_assistant.tools.schemas import CampusRooms, Timeframes
+Rooms = Literal[
+    'parkin.c', 'parkin.b', 'data_center', 'entrance', 'restaurant', 
+    '1.1', '1.2', 'kitchen', '2.1', '2.2', '2.3', '2.4', 
+    '3.7', '3.8', '3.9', '4.9', '5.6', '5.7'
+]
+
+Timeframes = Literal[
+    'now', '2h', '24h', '7d', '30d', '90d'
+]
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +30,7 @@ TIMEFRAME_CONFIG = {
 }
 
 class OccupancyInput(BaseModel):
-    room: CampusRooms = Field(
+    room: Rooms = Field(
         ..., 
         description="The specific room to check for occupancy levels. MUST be one of the exact allowed room names."
     )
@@ -127,7 +134,7 @@ def fetch_and_resample(devices: Dict[str, str], keys: List[str], fetch_method, b
     return pd.Series(dtype=float)
 
 @tool("get_occupancy", args_schema=OccupancyInput)
-def get_occupancy(room: CampusRooms, timeframe: Timeframes) -> str:
+def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
     """
     Tracks room occupancy using a polymorphic schema. Automatically detects if the room uses 
     Desk Sensors, People Counters (PC), Area Wait Counters (WO), or Motion Sensors (IAQ).

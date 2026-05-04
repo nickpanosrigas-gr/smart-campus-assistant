@@ -8,8 +8,15 @@ import logging
 from src.smart_campus_assistant.utils.device_registry import registry
 from src.smart_campus_assistant.clients.thingsboard_client import tb_client
 
-# Import Schemas
-from src.smart_campus_assistant.tools.schemas import CampusRooms, Timeframes
+Rooms = Literal[
+    'parkin.c', 'parkin.b', 'data_center', 'entrance', 'restaurant', 
+    '1.1', '1.2', 'kitchen', '2.1', '2.2', '2.3', '2.4', 
+    '3.7', '3.8', '3.9', '4.9', '5.6', '5.7'
+]
+
+Timeframes = Literal[
+    'now', '2h', '24h', '7d', '30d', '90d'
+]
 
 logger = logging.getLogger(__name__)
 
@@ -74,15 +81,8 @@ def get_group_outliers(series: pd.Series, baseline_counts: pd.Series) -> List[st
     
     return outliers
 
-# Allowed rooms derived from user requirements
-ROOMS = Literal[
-    'parkin.c', 'parkin.b', 'data_center', 'entrance', 'restaurant', 
-    '1.1', '1.2', 'kitchen', '2.1', '2.2', '2.3', '2.4', 
-    '3.7', '3.8', '3.9', '4.9', '5.6', '5.7'
-]
-
 class LightsInput(BaseModel):
-    room: CampusRooms = Field(
+    room: Rooms = Field(
         ..., 
         description="The specific room to check for illumination levels. MUST be one of the exact allowed room names."
     )
@@ -92,7 +92,7 @@ class LightsInput(BaseModel):
     )
 
 @tool("get_ambient_lights", args_schema=LightsInput)
-def get_ambient_lights(room: CampusRooms, timeframe: Timeframes) -> str:
+def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
     """
     Tracks indoor illumination using a discrete 0-5 scale.
     Uses state-transition logic to prevent mathematical hallucinations and maps integers to semantic labels.
