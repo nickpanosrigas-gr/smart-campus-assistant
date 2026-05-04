@@ -7,7 +7,7 @@ import logging
 # Updated Project Imports
 from src.smart_campus_assistant.config.settings import settings
 from src.smart_campus_assistant.bots.whisper import transcribe_audio
-from src.smart_campus_assistant.agents.supervisor import run_supervisor
+from src.smart_campus_assistant.graph.workflow import run_graph_supervisor
 
 logger = logging.getLogger(__name__)
 
@@ -154,7 +154,11 @@ def process_query_with_agent(message, user_query: str):
         }
         
         # 1. Get the response from the LLM
-        reply_text = run_supervisor(user_query, config=run_config)
+        reply_text = run_graph_supervisor(
+            user_query=user_query, 
+            thread_id=thread_id, 
+            run_config=run_config
+        )
         
         # ==========================================
         # 2. THIS IS THE BLOCK YOU WERE MISSING
