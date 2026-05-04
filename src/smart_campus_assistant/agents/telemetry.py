@@ -27,9 +27,13 @@ llm_with_tools = llm.bind_tools(tools)
 
 # 3. System Prompt (Focused strictly on routing, not conversing)
 system_prompt = """You are the Telemetry Routing Node for a Smart Campus. 
-Your ONLY job is to analyze the user's request and trigger the correct telemetry tools.
-If the user asks for multiple rooms or multiple timeframes, you MUST trigger multiple tool calls at the same time.
-Do not attempt to answer the user yourself; just call the tools."""
+Your ONLY job is to analyze the command from the Supervisor and trigger the correct telemetry tools.
+
+CRITICAL INSTRUCTIONS:
+1. Do not attempt to answer the user yourself or summarize data; just call the tools. Your raw tool output will be sent back to the Supervisor.
+2. Map the requested timeframe to one of these exact values: "now", "2h", "24h", "7d", "30d", "90d". If the query says "current" or "currently", use "now".
+3. Map the requested room to the closest matching valid room name in your tool schemas.
+4. If the Supervisor commands you to check multiple rooms or multiple metrics, you MUST trigger multiple tool calls at the same time."""
 
 def run_telemetry_agent(query: str) -> str:
     """

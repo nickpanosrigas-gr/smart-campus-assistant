@@ -20,8 +20,10 @@ logger = logging.getLogger(__name__)
 @tool
 def ask_telemetry_agent(query: str) -> str:
     """
-    Call this agent to fetch raw sensor data, historical metrics, or current states.
-    Use this for questions about occupancy, light levels, temperature, and humidity.
+    Call this agent to fetch raw sensor data, historical metrics, or current states (occupancy, lights, temp, humidity, air quality).
+    CRITICAL: Your 'query' MUST explicitly state the target ROOM NAME and the TIMEFRAME.
+    - BAD Query: 'How is the air quality?'
+    - GOOD Query: 'Fetch air quality for the restaurant for timeframe: now.'
     """
     logger.info(f"[Telemetry Node]: Hitting API for query: '{query}'")
     return run_telemetry_agent(query)
@@ -30,10 +32,9 @@ def ask_telemetry_agent(query: str) -> str:
 def ask_scheduler_agent(query: str) -> str:
     """
     Call this agent to fetch academic schedules, class times, and university programs.
-    Use this for questions about when/where classes are happening, room occupancy schedules, or teacher availability.
-    CRITICAL INSTRUCTION: The 'query' MUST explicitly state the target (room, teacher, or course) and the timeframe (now, today, week, or a specific day).
+    CRITICAL: Your 'query' MUST explicitly state the TARGET (exact room, exact teacher, exact course, or semester) and the TIMEFRAME (now, today, week, Monday, etc.).
     - BAD Query: 'Where is the CS class?'
-    - GOOD Query: 'Find the room and time for Introduction to Computer Science for this week.'
+    - GOOD Query: 'Find the room and time for course: Introduction to Computer Science for timeframe: week.'
     """
     logger.info(f"[Scheduler Node]: Hitting Registry for query: '{query}'")
     return run_scheduler_agent(query)
@@ -42,9 +43,9 @@ def ask_scheduler_agent(query: str) -> str:
 def ask_diagnostics_agent(query: str) -> str:
     """
     Call this agent for troubleshooting hardware, finding offline sensors, or checking battery levels.
-    CRITICAL INSTRUCTION: The 'query' MUST be a direct command targeting specific devices or rooms.
-    - BAD Query: 'Why is the AC not working in the kitchen?'
-    - GOOD Query: 'Run health checks on all HVAC and sensor devices in the kitchen.'
+    CRITICAL: Your 'query' MUST directly target specific device types or rooms.
+    - BAD Query: 'Why is the AC not working?'
+    - GOOD Query: 'Run diagnostic health checks on all HVAC sensors in the kitchen.'
     """
     logger.info(f"[Diagnostics Node]: Running health checks for: '{query}'")
     return "MOCK_DATA: All sensors are online. Battery levels normal."
@@ -53,9 +54,9 @@ def ask_diagnostics_agent(query: str) -> str:
 def ask_rule_agent(query: str) -> str:
     """
     Call this agent to create, update, or propose automation rules for ThingsBoard.
-    CRITICAL INSTRUCTION: The 'query' MUST be a precise statement of the IF/THEN automation logic.
-    - BAD Query: 'Can you make sure the lights turn off when we leave?'
-    - GOOD Query: 'Draft a Rule Chain: IF room occupancy is 0 THEN turn off lights.'
+    CRITICAL: Your 'query' MUST be a precise statement of the IF/THEN automation logic.
+    - BAD Query: 'Make sure the lights turn off when empty.'
+    - GOOD Query: 'Draft a Rule Chain: IF room 1.2 occupancy == 0 THEN set lights to 0.'
     """
     logger.info(f"[Rule Node]: Drafting Rule Chain for: '{query}'")
     return "MOCK_DATA: Successfully drafted rule."
@@ -63,14 +64,32 @@ def ask_rule_agent(query: str) -> str:
 @tool
 def query_knowledge_base(query: str) -> str:
     """
-    Call this tool to search the Vector Database (Qdrant) for manuals, topologies, or SOPs.
-    CRITICAL INSTRUCTION: The 'query' MUST be a concise set of search keywords, not a full sentence.
+    Call this tool to search the Vector Database for manuals, topologies, or SOPs.
+    CRITICAL: Your 'query' MUST be a concise list of search keywords, not a conversational sentence.
     - BAD Query: 'How do I reset the main router in the data center?'
     - GOOD Query: 'Data center main router hard reset procedure SOP.'
     """
     logger.info(f"[Knowledge Base]: Searching Vector DB for: '{query}'")
     return "MOCK_DATA: Found manual."
 
+
+# ==========================================
+# 2. CONFIGURE THE SUPERVISOR
+# ==========================================
+
+supervisor_prompt = """You are the Supreme Supervisor Agent for a Smart Campus.
+Your job is to route the user's request to the correct sub-agent, evaluate the raw data they return, and synthesize a clear, helpful final answer.
+
+CRITICAL INSTRUCTIONS:
+1. TRANSLATION RULE: Never pass the user's raw conversational question to a sub-agent. You must translate their intent into a highly specific, declarative data-fetching command.
+2. PARAMETER EXTRACTION: You must extract concrete parameters from the user's request (e.g., specific room names, times, days, names) and embed them explicitly in the 'query' you send to the sub-agent. 
+3. MULTI-ROUTING: If the user asks for multiple distinct things, you MUST trigger multiple sub-agent tools simultaneously.
+4. REFLECTION & RETRY (CRITICAL): When a sub-agent returns data, evaluate if it actually answers the user's question. 
+   - If the data is missing, incomplete, or returns an error (e.g., "Room not found"), DO NOT give up. 
+   - You MUST generate a NEW tool call with different, adjusted parameters (e.g., try a different timeframe, check a different room, or use a broader search term). 
+   - Keep retrying until you have the correct data or have exhausted logical alternatives.
+5. SYNTHESIS: Once you have successfully gathered all necessary data, synthesize it into a clean, conversational response. Do not expose raw YAML/JSON formatting to the user.
+6. FINAL FALLBACK: Only if you have retried multiple times and still cannot find the data, apologize to the user and explain exactly what you tried to look up and why it failed."""
 
 # ==========================================
 # 2. CONFIGURE THE SUPERVISOR
@@ -89,16 +108,6 @@ llm = ChatOllama(
 # Bind the sub-agents to the LLM
 sub_systems = [ask_telemetry_agent, ask_scheduler_agent, ask_diagnostics_agent, ask_rule_agent, query_knowledge_base]
 supervisor_llm = llm.bind_tools(sub_systems)
-
-supervisor_prompt = """You are the Supreme Supervisor Agent for a Smart Campus.
-Your job is to route the user's request to the correct sub-agent, read the data they return, and give the user a clear, helpful final answer.
-
-CRITICAL INSTRUCTIONS:
-1. TRANSLATION RULE: Never pass the user's raw question to a sub-agent. You must translate their intent into an explicit, declarative data-fetching command.
-2. If the user asks about a campus-wide metric (e.g., "brightest room in the campus"), you MUST explicitly command the sub-agent to "check ALL rooms".
-3. If the user asks for multiple distinct things, you MUST trigger multiple tools simultaneously.
-4. Once the tools return their data, synthesize it into a clean, conversational response. Do not expose raw YAML to the user unless necessary.
-5. If a tool returns an error, apologize and explain what went wrong."""
 
 def run_supervisor(user_query: str, config: dict = None) -> str:
     """The main execution loop for the Supervisor."""

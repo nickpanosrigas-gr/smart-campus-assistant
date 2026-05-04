@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from enum import Enum
 from typing import List, Dict, Literal
 from langchain_core.tools import tool
@@ -47,8 +48,12 @@ class SemesterScheduleInput(BaseModel):
 # --- FORMATTER ---
 
 def _format_yaml_response(domain: str, tool_name: str, filters: str, results: List[Dict], timeframe: str) -> str:
+    # Capture and format the current time
+    current_time_str = datetime.now().strftime("%A, %b %d, %Y at %I:%M %p")
+    
     lines = []
     lines.append("Query_Context:")
+    lines.append(f"  Current_Time: {current_time_str}")
     lines.append(f"  Domain: {domain}")
     lines.append(f"  Tool: {tool_name}")
     lines.append(f"  Filters: {filters} | Timeframe: {timeframe}")
