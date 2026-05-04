@@ -81,16 +81,17 @@ class ThingsBoardClient:
         response = self._request("GET", endpoint, params=params)
         return response.json()
     
-    def _fetch_aggregated_telemetry(self, device_id: str, keys: List[str], start_ts: int, end_ts: int, agg: str = "AVG") -> Dict[str, Any]:
+    def _fetch_aggregated_telemetry(self, device_id: str, keys: List[str], start_ts: int, end_ts: int, agg: str = "AVG", interval: Optional[int] = None) -> Dict[str, Any]:
         """
-        Fetches server-side aggregated data (e.g., averages) over a specific time window.
-        By setting the interval to the total time window, it returns a single summary point.
+        Fetches server-side aggregated data over a specific time window.
+        If interval is not provided, it defaults to the total time window to return a single summary point.
         """
         endpoint = f"/api/plugins/telemetry/DEVICE/{device_id}/values/timeseries"
         
-        interval = end_ts - start_ts
-        if interval <= 0:
-            interval = 86400000
+        if interval is None:
+            interval = end_ts - start_ts
+            if interval <= 0:
+                interval = 86400000
             
         params = {
             "keys": ",".join(keys),
@@ -260,6 +261,24 @@ class ThingsBoardClient:
         start_ts = end_ts - (90 * 24 * 3600 * 1000)
         return self._fetch_raw_telemetry(device_id, keys, start_ts, end_ts)
     
+    # ==========================================
+    # AGGREGATED SPLIT FUNCTIONS
+    # ==========================================
+    
+    def get_7d_2h_splits(self, device_id: str, keys: List[str], agg: str = "AVG") -> Dict[str, Any]:
+        """Fetches 7 days of data aggregated into 2-hour intervals."""
+        end_ts = int(time.time() * 1000)
+        start_ts = end_ts - (7 * 24 * 3600 * 1000)
+        interval_ms = 2 * 3600 * 1000  # 2 hours in milliseconds
+        return self._fetch_aggregated_telemetry(device_id, keys, start_ts, end_ts, agg=agg, interval=interval_ms)
+
+    def get_30d_2h_splits(self, device_id: str, keys: List[str], agg: str = "AVG") -> Dict[str, Any]:
+        """Fetches 30 days of data aggregated into 2-hour intervals."""
+        end_ts = int(time.time() * 1000)
+        start_ts = end_ts - (30 * 24 * 3600 * 1000)
+        interval_ms = 2 * 3600 * 1000  # 2 hours in milliseconds
+        return self._fetch_aggregated_telemetry(device_id, keys, start_ts, end_ts, agg=agg, interval=interval_ms)
+
     # ========================================================
     # CONTEXTUAL BASELINE FUNCTIONS (Prev 30d Contextual Avgs)
     # ========================================================
@@ -344,6 +363,10 @@ if __name__ == "__main__":
 
         now_data = tb_client.get_now(TEST_DEVICE_ID, TEST_KEYS)
         print_chunk("Testing get_now() [Latest point]", now_data)
+        
+        # Testing the new aggregation functions
+        d7_2h_data = tb_client.get_7d_2h_splits(TEST_DEVICE_ID, TEST_KEYS)
+        print_chunk("Testing get_7d_2h_splits() [Aggregated]", d7_2h_data)
 
         d90_data = tb_client.get_90d(TEST_DEVICE_ID, TEST_KEYS)
         print_chunk("Testing get_90d() [Raw points]", d90_data)

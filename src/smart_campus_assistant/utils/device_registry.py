@@ -166,14 +166,14 @@ if __name__ == "__main__":
         iaq_in_1_2 = registry.get_devices_by_room_and_type(test_room, test_type)
         print(f"\n[4] Querying '{test_type}' sensors in room '{test_room}':")
         for name, uid in iaq_in_1_2.items():
-            print(f"    ✔️ {name} -> {uid}")
+            print(f"    {name} -> {uid}")
 
         # 5. Test get_all_devices_in_room
         test_room_2 = "restaurant"
         restaurant_devices = registry.get_all_devices_in_room(test_room_2)
         print(f"\n[5] Querying ALL sensors in room '{test_room_2}':")
         for name, uid in restaurant_devices.items():
-            print(f"    ✔️ {name} -> {uid}")
+            print(f"    {name} -> {uid}")
             
         print("\nAll tests completed successfully.\n")
 
