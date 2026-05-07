@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str
     TELEGRAM_ALLOWED_USER_ID: int
     
+    # Astral
+    LATITUDE: float
+    LONGITUDE: float
+    TIMEZONE: str
+    
     # Read from the .env file in the root directory
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE_PATH), 

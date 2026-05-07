@@ -2,7 +2,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # Configure logging for the module
 logger = logging.getLogger(__name__)
@@ -21,8 +21,8 @@ class DeviceRegistry:
         self.topology_path = Path(topology_path)
         self._topology: Dict = {}
         
-        # Cache structure: { "room_name": { "device_name": "device_id" } }
-        self._room_cache: Dict[str, Dict[str, str]] = {}
+        # Cache structure: { "room_name": { "device_name": {"id": "...", "zone": "...", "tag": "..."} } }
+        self._room_cache: Dict[str, Dict[str, dict]] = {}
         
         self._load_topology()
         self._build_room_cache()
@@ -52,29 +52,34 @@ class DeviceRegistry:
                         if room_key not in self._room_cache:
                             self._room_cache[room_key] = {}
                         
-                        self._room_cache[room_key].update(devices)
+                        # Normalize devices so that string IDs become {"id": string}
+                        for d_name, d_val in devices.items():
+                            if isinstance(d_val, str):
+                                self._room_cache[room_key][d_name] = {"id": d_val}
+                            else:
+                                self._room_cache[room_key][d_name] = d_val
                         
             logger.info(f"Successfully cached {len(self._room_cache)} rooms from topology.")
         except Exception as e:
             logger.error(f"Unexpected error while building room cache: {e}")
 
-    def get_devices_by_room_and_type(self, room: str, sensor_type: str) -> Dict[str, str]:
+    def get_devices_by_room_and_type(self, room: str, sensor_type: str) -> Dict[str, dict]:
         room_key = str(room).strip().lower()
         room_devices = self._room_cache.get(room_key, {})
         matched_devices = {}
         
         target_marker = f"-{str(sensor_type).strip().upper()}"
         
-        for device_name, device_id in room_devices.items():
+        for device_name, device_data in room_devices.items():
             if target_marker in device_name.upper():
-                matched_devices[device_name] = device_id
+                matched_devices[device_name] = device_data
                 
         if not matched_devices:
             logger.warning(f"No {sensor_type} sensors found in room '{room}'.")
             
         return matched_devices
 
-    def get_all_devices_in_room(self, room: str) -> Dict[str, str]:
+    def get_all_devices_in_room(self, room: str) -> Dict[str, dict]:
         room_key = str(room).strip().lower()
         return self._room_cache.get(room_key, {})
 
@@ -97,9 +102,9 @@ class DeviceRegistry:
         return sum(len(devices) for devices in self._room_cache.values())
 
     # ==========================================
-    # NEW INFRASTRUCTURE MAPPING METHOD
+    # INFRASTRUCTURE MAPPING METHOD
     # ==========================================
-    def get_energy_meters_for_target(self, target: str) -> Dict[str, str]:
+    def get_energy_meters_for_target(self, target: str) -> Dict[str, dict]:
         """
         Maps a standard room name (e.g., '2.4') to its floor's energy meter, 
         or maps a special target (e.g., 'hvac', 'car_lift') to its specific meters.
@@ -114,9 +119,10 @@ class DeviceRegistry:
             for b_name, b_data in self._topology.get("campus", {}).get("buildings", {}).items():
                 for f_name, f_data in b_data.get("floors", {}).items():
                     infra_devices = f_data.get("rooms", {}).get("infrastructure", {}).get("devices", {})
-                    for d_name, d_id in infra_devices.items():
+                    for d_name, d_val in infra_devices.items():
                         if search_term in d_name.lower().replace("_", ""):
-                            matched_meters[d_name] = d_id
+                            # Normalize string IDs to dicts to match new JSON format
+                            matched_meters[d_name] = {"id": d_val} if isinstance(d_val, str) else d_val
             return matched_meters
             
         # 2. If it's a standard room, find its floor, then get the "FLOOR" meter from infrastructure
@@ -126,14 +132,34 @@ class DeviceRegistry:
                     
                     # We found the floor this room is on. Now pull its infrastructure meters
                     infra_devices = f_data.get("rooms", {}).get("infrastructure", {}).get("devices", {})
-                    for d_name, d_id in infra_devices.items():
+                    for d_name, d_val in infra_devices.items():
                         # Only grab the meter that tracks the whole floor, ignore lifts/hvacs in this sweep
                         if "FLOOR" in d_name.upper():
-                            matched_meters[d_name] = d_id
+                            # Normalize string IDs to dicts to match new JSON format
+                            matched_meters[d_name] = {"id": d_val} if isinstance(d_val, str) else d_val
                     return matched_meters
         
         return matched_meters
-    
+
+    # ==========================================
+    # NEW FLOOR LOOKUP METHOD
+    # ==========================================
+    def get_floor_for_room(self, room: str) -> Optional[str]:
+        """
+        Takes a room name as input and returns the floor ID that the room is located on.
+        """
+        room_lower = str(room).strip().lower()
+        buildings = self._topology.get("campus", {}).get("buildings", {})
+        
+        for b_name, b_data in buildings.items():
+            for f_name, f_data in b_data.get("floors", {}).items():
+                rooms = f_data.get("rooms", {})
+                if room_lower in [str(r).lower() for r in rooms.keys()]:
+                    return f_name
+                    
+        logger.warning(f"Room '{room}' not found. Cannot determine floor.")
+        return None
+
 registry = DeviceRegistry()
 
 # ==========================================
@@ -163,9 +189,14 @@ if __name__ == "__main__":
         test_hvac = "hvac"
         print(f"  Target '{test_hvac}' -> {registry.get_energy_meters_for_target(test_hvac)}")
 
-        # Test Ground Floor Mapping
+        # Test Infrastructure Mapping
         test_room_3 = "infrastructure"
         print(f"  Target '{test_room_3}' -> {registry.get_all_devices_in_room(test_room_3)}")
+        
+        print("\n[Testing Floor Lookup]")
+        print(f"  Room 'parkin.c' is on floor -> {registry.get_floor_for_room('parkin.c')}")
+        print(f"  Room 'restaurant' is on floor -> {registry.get_floor_for_room('restaurant')}")
+        print(f"  Room '4.9' is on floor -> {registry.get_floor_for_room('4.9')}")
         
         print("\nAll tests completed successfully.\n")
 

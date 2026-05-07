@@ -18,6 +18,8 @@ dependencies = [
     "python-telegram-bot>=21.0",
     "pytelegrambotapi>=4.32.0",
     "langfuse<3.0.0",
+    "astral>=3.2",
+    "pytz>=2026.2",
 ]
 
 [build-system]

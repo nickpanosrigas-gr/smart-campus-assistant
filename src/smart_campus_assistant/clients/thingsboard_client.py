@@ -327,6 +327,17 @@ class ThingsBoardClient:
         target_start_ts = int(time.time() * 1000) - (7 * 24 * 3600 * 1000) 
         return self._fetch_30d_context_baseline_full(device_id, keys, target_start_ts)
 
+    # ========================================================
+    # GET SERVER ATTRIBUTES
+    # ========================================================
+    
+    def get_server_attributes(self, device_id: str, keys: List[str] = None) -> List[Dict[str, Any]]:
+        """Fetches specified server-scope attributes for a device."""
+        endpoint = f"/api/plugins/telemetry/DEVICE/{device_id}/values/attributes/SERVER_SCOPE"
+        params = {"keys": ",".join(keys)} if keys else {}
+        response = self._request("GET", endpoint, params=params)
+        return response.json()
+    
 tb_client = ThingsBoardClient()
 
 # ==========================================
