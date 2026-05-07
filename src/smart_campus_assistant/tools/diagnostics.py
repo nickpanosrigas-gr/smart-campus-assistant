@@ -229,8 +229,8 @@ class DeviceAuditInput(BaseModel):
     target: CampusRooms = Field(..., description="The specific room to run diagnostics on.")
     sensor_type: Optional[str] = Field(None, description="Optional. Filter by sensor type (e.g., 'IAQ', 'PC', 'DESK').")
 
-@tool("run_device_diagnostic_audit", args_schema=DeviceAuditInput)
-def run_device_diagnostic_audit(target: CampusRooms, sensor_type: Optional[str] = None) -> str:
+@tool("get_diagnostics", args_schema=DeviceAuditInput)
+def get_diagnostics(target: CampusRooms, sensor_type: Optional[str] = None) -> str:
     """
     Deep-dive diagnostic audit for a specific room. 
     Checks Connectivity (Offline/RSSI), Power (Battery Drain), and Hardware Health (Flatlines/Tampers).
@@ -355,8 +355,8 @@ def run_device_diagnostic_audit(target: CampusRooms, sensor_type: Optional[str] 
 class EmptyInput(BaseModel):
     pass
 
-@tool("run_building_diagnostic_summary", args_schema=EmptyInput)
-def run_building_diagnostic_summary() -> str:
+@tool("get_campus_diagnostics", args_schema=EmptyInput)
+def get_campus_diagnostics() -> str:
     """
     Triage report for the entire campus. Aggregates all healthy data into single lines 
     and explicitly lists ONLY the devices that require human intervention.
@@ -475,13 +475,13 @@ if __name__ == "__main__":
     
     try:
         print("\n[Testing Targeted Audit (Room 1.2)]")
-        print(run_device_diagnostic_audit.invoke({"target": "1.2"}))
+        print(get_diagnostics.invoke({"target": "1.2"}))
 
         print("\n[Testing Targeted Audit (Room entrance, PC sensors)]")
-        print(run_device_diagnostic_audit.invoke({"target": "entrance", "sensor_type": "PC"}))
+        print(get_diagnostics.invoke({"target": "entrance", "sensor_type": "PC"}))
 
         print("\n[Testing Campus-Wide Summary]")
-        print(run_building_diagnostic_summary.invoke({}))
+        print(get_campus_diagnostics.invoke({}))
         
         print("\n" + "-"*50)
         print("All Diagnostics tool tests completed successfully.")

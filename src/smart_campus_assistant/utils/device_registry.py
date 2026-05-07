@@ -17,9 +17,6 @@ class DeviceRegistry:
     def __init__(self, topology_path: str = "data/campus_topology.json"):
         """
         Initializes the registry and builds the in-memory cache.
-        
-        Args:
-            topology_path (str): Relative or absolute path to the topology JSON file.
         """
         self.topology_path = Path(topology_path)
         self._topology: Dict = {}
@@ -31,7 +28,6 @@ class DeviceRegistry:
         self._build_room_cache()
 
     def _load_topology(self) -> None:
-        """Loads and parses the JSON topology file from disk."""
         if not self.topology_path.exists():
             logger.error(f"Topology file not found at {self.topology_path}")
             raise FileNotFoundError(f"Topology file missing: {self.topology_path}")
@@ -45,21 +41,14 @@ class DeviceRegistry:
             raise
 
     def _build_room_cache(self) -> None:
-        """
-        Traverses the nested campus topology and flattens it into a 
-        fast-lookup dictionary keyed by lowercase room names.
-        """
         try:
             buildings = self._topology.get("campus", {}).get("buildings", {})
             for b_name, b_data in buildings.items():
                 for f_name, f_data in b_data.get("floors", {}).items():
                     for r_name, r_data in f_data.get("rooms", {}).items():
-                        
-                        # Normalize room names to lowercase for robust tool querying
                         room_key = str(r_name).strip().lower()
                         devices = r_data.get("devices", {})
                         
-                        # Handle potential duplicates if rooms have the same name
                         if room_key not in self._room_cache:
                             self._room_cache[room_key] = {}
                         
@@ -70,22 +59,10 @@ class DeviceRegistry:
             logger.error(f"Unexpected error while building room cache: {e}")
 
     def get_devices_by_room_and_type(self, room: str, sensor_type: str) -> Dict[str, str]:
-        """
-        Retrieves all devices of a specific sensor type within a given room.
-        
-        Args:
-            room (str): The name of the room (e.g., "1.2", "restaurant", "DataCenter").
-            sensor_type (str): The sensor prefix/suffix (e.g., "IAQ", "MC", "PC", "Desk").
-            
-        Returns:
-            Dict[str, str]: A dictionary mapping device names to their ThingsBoard UUIDs.
-        """
         room_key = str(room).strip().lower()
         room_devices = self._room_cache.get(room_key, {})
-        
         matched_devices = {}
         
-        # Look for the exact sensor type format used in the JSON (e.g., "-IAQ")
         target_marker = f"-{str(sensor_type).strip().upper()}"
         
         for device_name, device_id in room_devices.items():
@@ -98,22 +75,14 @@ class DeviceRegistry:
         return matched_devices
 
     def get_all_devices_in_room(self, room: str) -> Dict[str, str]:
-        """Returns all registered devices in a given room, regardless of type."""
         room_key = str(room).strip().lower()
         return self._room_cache.get(room_key, {})
 
     def get_available_rooms(self) -> List[str]:
-        """Returns a list of all valid room names."""
         return list(self._room_cache.keys())
 
     def get_all_sensor_types(self) -> List[str]:
-        """
-        Dynamically extracts and returns a list of all unique sensor types 
-        (e.g., IAQ, MC, PC, DESK) found across the entire campus.
-        """
         types = set()
-        # Regex to capture the alphabetical sensor type at the end of the string,
-        # ignoring any trailing numbers (e.g., matches "IAQ" in "F1_1.2-IAQ-1" and "PC" in "F0_Entrance-PC")
         pattern = re.compile(r'-([A-Za-z]+)(?:-\d+)?$')
         
         for room_devices in self._room_cache.values():
@@ -125,8 +94,45 @@ class DeviceRegistry:
         return sorted(list(types))
 
     def get_total_sensor_count(self) -> int:
-        """Returns the total number of sensors registered in the topology."""
         return sum(len(devices) for devices in self._room_cache.values())
+
+    # ==========================================
+    # NEW INFRASTRUCTURE MAPPING METHOD
+    # ==========================================
+    def get_energy_meters_for_target(self, target: str) -> Dict[str, str]:
+        """
+        Maps a standard room name (e.g., '2.4') to its floor's energy meter, 
+        or maps a special target (e.g., 'hvac', 'car_lift') to its specific meters.
+        """
+        target_lower = target.lower().strip()
+        special_targets = ['hvac', 'car_lift', 'front_lift', 'back_lift']
+        matched_meters = {}
+        
+        # 1. If it's a special target, sweep all infrastructure rooms for matching PPC/GEN meters
+        if target_lower in special_targets:
+            search_term = target_lower.replace("_", "")
+            for b_name, b_data in self._topology.get("campus", {}).get("buildings", {}).items():
+                for f_name, f_data in b_data.get("floors", {}).items():
+                    infra_devices = f_data.get("rooms", {}).get("infrastructure", {}).get("devices", {})
+                    for d_name, d_id in infra_devices.items():
+                        if search_term in d_name.lower().replace("_", ""):
+                            matched_meters[d_name] = d_id
+            return matched_meters
+            
+        # 2. If it's a standard room, find its floor, then get the "FLOOR" meter from infrastructure
+        for b_name, b_data in self._topology.get("campus", {}).get("buildings", {}).items():
+            for f_name, f_data in b_data.get("floors", {}).items():
+                if target_lower in [str(r).lower() for r in f_data.get("rooms", {}).keys()]:
+                    
+                    # We found the floor this room is on. Now pull its infrastructure meters
+                    infra_devices = f_data.get("rooms", {}).get("infrastructure", {}).get("devices", {})
+                    for d_name, d_id in infra_devices.items():
+                        # Only grab the meter that tracks the whole floor, ignore lifts/hvacs in this sweep
+                        if "FLOOR" in d_name.upper():
+                            matched_meters[d_name] = d_id
+                    return matched_meters
+        
+        return matched_meters
     
 registry = DeviceRegistry()
 
@@ -134,49 +140,30 @@ registry = DeviceRegistry()
 # TEST EXECUTION BLOCK
 # ==========================================
 if __name__ == "__main__":
-    # Setup basic logging to see the initialization info
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     
     try:
-        # NOTE: Make sure your terminal is at the root of 'smart-campus-assistant' 
-        # so 'data/campus_topology.json' resolves correctly.
         registry = DeviceRegistry(topology_path="data/campus_topology.json")
         
         print("\n" + "="*40)
         print("RUNNING DEVICE REGISTRY TESTS")
         print("="*40)
 
-        # 1. Test get_total_sensor_count
-        total_sensors = registry.get_total_sensor_count()
-        print(f"\n[1] Total Sensors in Campus: {total_sensors}")
-
-        # 2. Test get_all_sensor_types
-        sensor_types = registry.get_all_sensor_types()
-        print(f"\n[2] All Unique Sensor Types ({len(sensor_types)} total):")
-        print(f"    {sensor_types}")
-
-        # 3. Test get_available_rooms
-        rooms = registry.get_available_rooms()
-        print(f"\n[3] Available Rooms ({len(rooms)} total):")
-        print(f"    Sample: {rooms}")
-
-        # 4. Test get_devices_by_room_and_type
-        test_room = "1.2"
-        test_type = "IAQ"
-        iaq_in_1_2 = registry.get_devices_by_room_and_type(test_room, test_type)
-        print(f"\n[4] Querying '{test_type}' sensors in room '{test_room}':")
-        for name, uid in iaq_in_1_2.items():
-            print(f"    {name} -> {uid}")
-
-        # 5. Test get_all_devices_in_room
+        print("\n[Testing Energy Mapper]")
+        
+        # Test Standard Room Mapping
+        test_room = "2.4"
+        print(f"  Target '{test_room}' -> {registry.get_energy_meters_for_target(test_room)}")
+        
+        # Test Ground Floor Mapping
         test_room_2 = "restaurant"
-        restaurant_devices = registry.get_all_devices_in_room(test_room_2)
-        print(f"\n[5] Querying ALL sensors in room '{test_room_2}':")
-        for name, uid in restaurant_devices.items():
-            print(f"    {name} -> {uid}")
-            
+        print(f"  Target '{test_room_2}' -> {registry.get_energy_meters_for_target(test_room_2)}")
+
+        # Test Special Infrastructure Mapping
+        test_hvac = "hvac"
+        print(f"  Target '{test_hvac}' -> {registry.get_energy_meters_for_target(test_hvac)}")
+
         print("\nAll tests completed successfully.\n")
 
     except FileNotFoundError:
         print("\nERROR: Could not find 'data/campus_topology.json'.")
-        print("Make sure you run this script from the root project directory.")

@@ -10,6 +10,7 @@ from src.smart_campus_assistant.config.settings import settings
 # Import Agents and Tools
 from src.smart_campus_assistant.agents.telemetry import run_telemetry_agent
 from src.smart_campus_assistant.agents.scheduler import run_scheduler_agent
+from src.smart_campus_assistant.agents.facilities import run_facilities_agent
 
 logger = logging.getLogger(__name__)
 
@@ -40,15 +41,15 @@ def ask_scheduler_agent(query: str) -> str:
     return run_scheduler_agent(query)
 
 @tool
-def ask_diagnostics_agent(query: str) -> str:
+def ask_facilities_agent(query: str) -> str:
     """
-    Call this agent for troubleshooting hardware, finding offline sensors, or checking battery levels.
-    CRITICAL: Your 'query' MUST directly target specific device types or rooms.
-    - BAD Query: 'Why is the AC not working?'
-    - GOOD Query: 'Run diagnostic health checks on all HVAC sensors in the kitchen.'
+    Call this agent for energy infrastructure (power outages, kWh consumption, live kW load) AND hardware diagnostics (offline sensors, battery levels, network health).
+    CRITICAL: Your 'query' MUST explicitly state the TARGET (e.g., HVAC, 3rd_floor, kitchen sensors) and the TIMEFRAME (now, 7d, etc.).
+    - BAD Query: 'Is the AC broken?'
+    - GOOD Query: 'Check live energy status and run diagnostics on the HVAC for timeframe: now.'
     """
-    logger.info(f"[Diagnostics Node]: Running health checks for: '{query}'")
-    return "MOCK_DATA: All sensors are online. Battery levels normal."
+    logger.info(f"[Facilities Node]: Running infrastructure check for: '{query}'")
+    return run_facilities_agent(query)
 
 @tool
 def ask_rule_agent(query: str) -> str:
@@ -106,7 +107,7 @@ llm = ChatOllama(
 )
 
 # Bind the sub-agents to the LLM
-sub_systems = [ask_telemetry_agent, ask_scheduler_agent, ask_diagnostics_agent, ask_rule_agent, query_knowledge_base]
+sub_systems = [ask_telemetry_agent, ask_scheduler_agent, ask_facilities_agent, ask_rule_agent, query_knowledge_base]
 supervisor_llm = llm.bind_tools(sub_systems)
 
 def run_supervisor(user_query: str, config: dict = None) -> str:
