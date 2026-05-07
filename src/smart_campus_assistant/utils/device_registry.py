@@ -163,6 +163,10 @@ if __name__ == "__main__":
         test_hvac = "hvac"
         print(f"  Target '{test_hvac}' -> {registry.get_energy_meters_for_target(test_hvac)}")
 
+        # Test Ground Floor Mapping
+        test_room_3 = "infrastructure"
+        print(f"  Target '{test_room_3}' -> {registry.get_all_devices_in_room(test_room_3)}")
+        
         print("\nAll tests completed successfully.\n")
 
     except FileNotFoundError:

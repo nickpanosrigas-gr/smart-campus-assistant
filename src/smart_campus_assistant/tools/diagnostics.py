@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 CampusRooms = Literal[
     'parkin.c', 'parkin.b', 'data_center', 'entrance', 'restaurant', 
     '1.1', '1.2', 'kitchen', '2.1', '2.2', '2.3', '2.4', 
-    '3.7', '3.8', '3.9', '4.9', '5.6', '5.7', 'roof'
+    '3.7', '3.8', '3.9', '4.9', '5.6', '5.7', 'roof', 'infrastructure'
 ]
 
 # ==========================================
