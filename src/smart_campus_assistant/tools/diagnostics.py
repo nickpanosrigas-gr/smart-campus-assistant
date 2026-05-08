@@ -53,6 +53,20 @@ def _get_device_attributes(device_id: str) -> dict:
         logger.error(f"Failed to fetch attributes for {device_id}: {e}")
         return {}
 
+def _format_meta(meta: Any) -> str:
+    """Formats the device registry metadata into a clean display string."""
+    if not isinstance(meta, dict):
+        return ""
+        
+    parts = []
+    if meta.get("zone"): parts.append(f"Zone: {meta['zone']}")
+    if meta.get("tag"): parts.append(f"Tag: {meta['tag']}")
+    if meta.get("group"): parts.append(f"Group: {meta['group']}")
+    
+    if parts:
+        return f" [{', '.join(parts)}]"
+    return ""
+
 def _audit_device(device_name: str, device_id: str) -> dict:
     """
     Fetches diagnostic data using optimized methods. 
@@ -63,11 +77,11 @@ def _audit_device(device_name: str, device_id: str) -> dict:
     is_pc_or_wo = "-PC" in device_name.upper() or "-WO" in device_name.upper()
     is_weather = "WEATHER" in device_name.upper()
     
-    bat_keys = ["battery_level", "battery"]
+    bat_keys = ["battery"]
     other_keys = [
         "rssi", "loRaSNR", "tamper_alarm", "tamper", "tamper_status", 
         "temperature", "humidity", "co2", "air_temperature",
-        "line_1_period_in", "line_1_period_out", "people_count_max"
+        "line_1_period_in", "line_1_period_out", "people_count_max", "buzzer_status"
     ]
     
     # 1. Connectivity Audit via Server Attributes (Bulletproof method)
@@ -179,8 +193,15 @@ def _audit_device(device_name: str, device_id: str) -> dict:
                     tamper_time = datetime.fromtimestamp(t_ts / 1000.0).strftime("%H:%M:%S EEST")
                     break
 
-        # Flatline Checks (Trace duration backwards through the full 7-day data)
+        # Flatline & Hardware Fault Checks
         for k in ["temperature", "humidity", "co2", "air_temperature"]:
+            # 1. 65535 Hardware Fault Check
+            curr_val = _safe_extract_float(latest_data, [k])
+            if curr_val == 65535.0:
+                anomalies.append(f"[{k.upper()}_HARDWARE_FAULT] Error Code 65535 (Sensor Element Disconnected/Short-Circuit)")
+                continue  # Skip flatline check since we already explicitly diagnosed a broken sensor
+            
+            # 2. Flatline Checks (Trace duration backwards through the full 7-day data)
             if k in other_data and other_data[k]:
                 df_k = pd.DataFrame(other_data[k])
                 df_k['value'] = pd.to_numeric(df_k['value'], errors='coerce')
@@ -259,14 +280,21 @@ def get_diagnostics(target: CampusRooms, sensor_type: Optional[str] = None) -> s
     anomaly_lines = []
     tamper_lines = []
 
-    for name, uid in devices.items():
+    for name, meta in devices.items():
+        # Safely extract ID from the new dict structure
+        uid = meta.get("id") if isinstance(meta, dict) else meta
+        
+        # Build the metadata display string
+        meta_str = _format_meta(meta)
+        name_disp = f"{name}{meta_str}"
+        
         data = _audit_device(name, uid)
         
         # 1. Connectivity
         if data["is_online"]:
             online_count += 1
         else:
-            offline_lines.append(f"    - {name}: (Offline {data['offline_duration_str']})")
+            offline_lines.append(f"    - {name_disp}: (Offline {data['offline_duration_str']})")
             continue # If offline, suppress all other false-positive warnings
             
         # 2. Power
@@ -275,21 +303,23 @@ def get_diagnostics(target: CampusRooms, sensor_type: Optional[str] = None) -> s
         elif data["battery"] is not None:
             if data["is_weather"]:
                 if data["battery"] < 2.4:
-                    power_warnings.append(f"    - {name}: {data['battery']:.2f}V remaining | Est. {int(data['est_days'])} days")
+                    power_warnings.append(f"    - {name_disp}: [LOW_BATTERY] {data['battery']:.2f}V remaining | Est. {int(data['est_days'])} days")
             else:
                 battery_vals.append(data["battery"])
-                if data["battery"] < 15 or data["est_days"] < 14:
-                    power_warnings.append(f"    - {name}: {data['battery']:.1f}% remaining | Est. {int(data['est_days'])} days")
+                if data["battery"] < 15.0:
+                    power_warnings.append(f"    - {name_disp}: [LOW_BATTERY] {data['battery']:.1f}% remaining | Est. {int(data['est_days'])} days")
+                elif data["est_days"] < 14:
+                    power_warnings.append(f"    - {name_disp}: [HIGH_DRAIN_RATE_ANOMALY] {data['battery']:.1f}% remaining | Est. {int(data['est_days'])} days")
                 
         # 3. Hardware
         has_anomaly = False
         if data["anomalies"]:
             has_anomaly = True
             for a in data["anomalies"]:
-                anomaly_lines.append(f"    - {name}: {a}")
+                anomaly_lines.append(f"    - {name_disp}: {a}")
                 
         if data["tamper"]:
-            tamper_lines.append(f"    - {name}: Tamper alarm triggered at {data['tamper_time']}")
+            tamper_lines.append(f"    - {name_disp}: Tamper alarm triggered at {data['tamper_time']}")
             
         if not has_anomaly and not data["tamper"]:
             operational_count += 1
@@ -369,8 +399,9 @@ def get_campus_diagnostics() -> str:
     # Setup batch processing tasks
     tasks = []
     for room in all_rooms:
-        for name, uid in registry.get_all_devices_in_room(room).items():
-            tasks.append((room, name, uid))
+        for name, meta in registry.get_all_devices_in_room(room).items():
+            uid = meta.get("id") if isinstance(meta, dict) else meta
+            tasks.append((room, name, uid, meta))
             
     total_scanned = len(tasks)
     
@@ -384,10 +415,13 @@ def get_campus_diagnostics() -> str:
 
     # Execute all device checks simultaneously using ThreadPoolExecutor
     with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
-        future_to_task = {executor.submit(_audit_device, name, uid): (room, name) for room, name, uid in tasks}
+        future_to_task = {executor.submit(_audit_device, name, uid): (room, name, meta) for room, name, uid, meta in tasks}
         
         for future in concurrent.futures.as_completed(future_to_task):
-            room, name = future_to_task[future]
+            room, name, meta = future_to_task[future]
+            meta_str = _format_meta(meta)
+            name_disp = f"'{name}'{meta_str}"
+            
             try:
                 data = future.result()
                 
@@ -395,26 +429,28 @@ def get_campus_diagnostics() -> str:
                 if data["is_online"]:
                     online_count += 1
                 else:
-                    offline_list.append(f"    - {room}: '{name}' (Offline {data['offline_duration_str']})")
+                    offline_list.append(f"    - {room}: {name_disp} (Offline {data['offline_duration_str']})")
                     continue # Skip power/hardware alerts for offline devices
                     
                 # Power
                 if not data["is_plugged_in"] and data["battery"] is not None:
                     if data["is_weather"]:
                         if data["battery"] < 2.4:
-                            power_list.append(f"    - {room}: '{name}' ({data['battery']:.2f}V remaining | Est. {int(data['est_days'])} days)")
+                            power_list.append(f"    - {room}: {name_disp} [LOW_BATTERY] ({data['battery']:.2f}V remaining | Est. {int(data['est_days'])} days)")
                     else:
                         battery_vals.append(data["battery"])
-                        if data["battery"] < 15 or data["est_days"] < 14:
-                            power_list.append(f"    - {room}: '{name}' ({data['battery']:.1f}% remaining | Est. {int(data['est_days'])} days)")
+                        if data["battery"] < 15.0:
+                            power_list.append(f"    - {room}: {name_disp} [LOW_BATTERY] ({data['battery']:.1f}% remaining | Est. {int(data['est_days'])} days)")
+                        elif data["est_days"] < 14:
+                            power_list.append(f"    - {room}: {name_disp} [HIGH_DRAIN_RATE_ANOMALY] ({data['battery']:.1f}% remaining | Est. {int(data['est_days'])} days)")
                         
                 # Hardware
                 if data["anomalies"]:
                     for a in data["anomalies"]:
-                        anomaly_list.append(f"    - {room}: '{name}' {a}")
+                        anomaly_list.append(f"    - {room}: {name_disp} {a}")
                         
                 if data["tamper"]:
-                    tamper_list.append(f"    - {room}: '{name}' (Casing opened at {data['tamper_time']})")
+                    tamper_list.append(f"    - {room}: {name_disp} (Casing opened at {data['tamper_time']})")
                     
             except Exception as e:
                 logger.error(f"Concurrent execution failed for {name} in {room}: {e}")

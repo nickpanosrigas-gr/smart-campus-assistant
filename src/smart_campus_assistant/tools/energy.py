@@ -126,7 +126,9 @@ def get_energy_infrastructure(room: Rooms, timeframe: Timeframes) -> str:
     fetch_method = getattr(tb_client, config["method"])
 
     meter_dfs = {}
-    for name, d_id in meters.items():
+    for name, meta in meters.items():
+        d_id = meta.get("id") if isinstance(meta, dict) else meta
+        
         raw = fetch_method(d_id, ENERGY_KEYS)
         df = process_energy_telemetry(raw, bin_size)
         if not df.empty: meter_dfs[name] = df
