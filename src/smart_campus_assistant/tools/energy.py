@@ -31,7 +31,7 @@ ENERGY_KEYS = [
 Rooms = Literal[
     'car_lift', 'front_lift', 'back_lift', 'hvac', 'entrance', 'restaurant', 
     '1.1', '1.2', 'kitchen', '2.1', '2.2', '2.3', '2.4', 
-    '3.7', '3.8', '3.9', '4.9', '5.6', '5.7'
+    '3.7', '3.8', '3.9', '4.9', '5.6', '5.7', 'infrastructure', 'roof'
 ]
 
 Timeframes = Literal['now', '2h', '24h', '7d', '30d', '90d']
@@ -291,8 +291,8 @@ if __name__ == "__main__":
         {"room": "hvac", "timeframe": "now"},          
         {"room": "car_lift", "timeframe": "2h"},      
         {"room": "3.8", "timeframe": "24h"},          # Testing standard room mapping to floor
-        {"room": "restaurant", "timeframe": "7d"},    # Testing standard room mapping to floor
-        {"room": "hvac", "timeframe": "30d"},         
+        {"room": "infrastructure", "timeframe": "7d"},    # Testing standard room mapping to floor
+        {"room": "roof", "timeframe": "30d"},         
         {"room": "front_lift", "timeframe": "90d"}    
     ]
 
