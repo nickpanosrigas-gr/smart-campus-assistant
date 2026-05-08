@@ -14,17 +14,21 @@ logger = logging.getLogger(__name__)
 # ==========================================
 # DYNAMIC WEATHER STATION DISCOVERY
 # ==========================================
-def find_weather_station_id() -> Optional[str]:
-    """Sweeps the DeviceRegistry to find the ThingsBoard UUID for the Weather Station."""
+def find_weather_station() -> Optional[tuple[str, str, Dict]]:
+    """Sweeps the DeviceRegistry to find the Weather Station name, ID, and data."""
     for room in registry.get_available_rooms():
         devices = registry.get_all_devices_in_room(room)
-        for name, d_id in devices.items():
+        for name, d_val in devices.items():
             if "WEATHER" in name.upper():
-                return d_id
-    logger.error("Could not find a Weather Station in the campus_topology.json!")
+                if isinstance(d_val, dict):
+                    return name, d_val.get("id"), d_val
+                return name, d_val, {"id": d_val}
     return None
 
-WEATHER_STATION_ID = find_weather_station_id()
+weather_info = find_weather_station()
+WEATHER_STATION_NAME = weather_info[0] if weather_info else None
+WEATHER_STATION_ID = weather_info[1] if weather_info else None
+WEATHER_STATION_DATA = weather_info[2] if weather_info else {}
 
 TIMEFRAME_CONFIG = {
     "now": {"method": "get_now", "bin_size": None, "prev_method": "get_now_prev_30d"},
@@ -72,7 +76,7 @@ UNITS = {
 DISPLAY_NAMES = {
     "temperature": "Temp", "humidity": "Hum", "pressure": "Pres",
     "air_temperature": "Out_Temp", "relative_humidity": "Out_Hum", 
-    "solar_radiation": "Average_Solar", "precipitation": "Precip", "wind_speed": "Wind"
+    "solar_radiation": "Avg_Solar", "precipitation": "Precip", "wind_speed": "Wind"
 }
 
 Rooms = Literal[
@@ -117,13 +121,13 @@ def format_val(key: str, val: float, baseline: float = None, room: str = "") -> 
     limit_tag = ""
     limit = get_limit(key, room)
     if limit:
-        if val > limit["max"]: limit_tag = " [MAX_EXCEEDED]"
-        elif val < limit["min"]: limit_tag = " [MIN_EXCEEDED]"
+        if val > limit["max"]: limit_tag = "[MAX!]"
+        elif val < limit["min"]: limit_tag = "[MIN!]"
             
     if baseline is not None and not pd.isna(baseline):
         diff = val - baseline
         diff_str = f"{diff:+.1f}" if diff % 1 else f"{int(diff):+}"
-        return f"{name} {val_str}{unit} ({diff_str}{unit}){limit_tag}"
+        return f"{name} {val_str}{unit}({diff_str}){limit_tag}"
         
     return f"{name}: {val_str}{unit}{limit_tag}"
 
@@ -186,11 +190,74 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
     """
     Tracks indoor Temperature, Humidity, and Pressure, correlated with Outdoor Weather.
     Splits baselines via a schedule matrix and strictly enforces absolute safety limits.
+    Groups consecutive anomalous intervals into blocks to preserve LLM token context.
     """
-    iaq_devices = registry.get_devices_by_room_and_type(room, "IAQ")
-    if not iaq_devices:
+    all_iaq_devices = registry.get_devices_by_room_and_type(room, "IAQ")
+    if not all_iaq_devices:
         return f"Query_Context:\n  Room: {room}\nError: No IAQ sensors found in this room."
 
+    # ==========================================
+    # SERVER ATTRIBUTE ACTIVE/OFFLINE CHECK
+    # ==========================================
+    active_iaq_devices = {}
+    offline_sensors = []
+    
+    for device_name, device_data in all_iaq_devices.items():
+        device_id = device_data.get("id") if isinstance(device_data, dict) else device_data
+        if not device_id: 
+            offline_sensors.append(device_name)
+            continue
+            
+        try:
+            attrs = tb_client.get_server_attributes(device_id, ["active"])
+            is_active = any(attr.get("key") == "active" and str(attr.get("value")).lower() == "true" for attr in attrs)
+            if is_active:
+                active_iaq_devices[device_name] = device_data
+            else:
+                offline_sensors.append(device_name)
+        except Exception as e:
+            logger.warning(f"Could not fetch active status for {device_name}: {e}")
+            offline_sensors.append(device_name)
+
+    is_weather_active = False
+    if WEATHER_STATION_ID:
+        try:
+            w_attrs = tb_client.get_server_attributes(WEATHER_STATION_ID, ["active"])
+            is_weather_active = any(attr.get("key") == "active" and str(attr.get("value")).lower() == "true" for attr in w_attrs)
+        except Exception:
+            pass
+            
+    if not is_weather_active and WEATHER_STATION_NAME:
+        offline_sensors.append(WEATHER_STATION_NAME)
+
+    if not active_iaq_devices:
+        return f"Query_Context:\n  Room: {room}\nError: Found {len(all_iaq_devices)} IAQ sensors, but all are currently offline."
+
+    # Build Active Sensors Block
+    total_relevant = len(all_iaq_devices) + (1 if WEATHER_STATION_ID else 0)
+    active_count = len(active_iaq_devices) + (1 if is_weather_active else 0)
+    
+    active_sensors_lines = [f"  Active_Sensors: {active_count}/{total_relevant} Online"]
+    
+    if is_weather_active and WEATHER_STATION_NAME:
+        w_place = WEATHER_STATION_DATA.get("tag", "Unspecified")
+        active_sensors_lines.append(f"    - {WEATHER_STATION_NAME} (Weather): Tag: {w_place}")
+        
+    for name, data in active_iaq_devices.items():
+        if isinstance(data, dict):
+            z = data.get("zone", "Unspecified")
+            t = data.get("tag", "Unspecified")
+            place = f"Zone: {z}, Tag: {t}"
+        else:
+            place = "Unspecified"
+        active_sensors_lines.append(f"    - {name} (IAQ): {place}")
+
+    if offline_sensors:
+        active_sensors_lines.append(f"  Offline_Sensors: {', '.join(offline_sensors)}")
+
+    # ==========================================
+    # CORE LOGIC
+    # ==========================================
     config = TIMEFRAME_CONFIG[timeframe]
     bin_size = config["bin_size"]
     
@@ -201,14 +268,15 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
     if timeframe not in ["30d", "90d"]:
         prev_method = getattr(tb_client, config["prev_method"])
         
-        if WEATHER_STATION_ID:
+        if is_weather_active and WEATHER_STATION_ID:
             try:
                 weather_baseline = prev_method(WEATHER_STATION_ID, WEATHER_KEYS)
             except Exception as e:
                 logger.warning(f"Failed to fetch weather baseline: {e}")
             
         raw_bases = []
-        for d_id in iaq_devices.values():
+        for d_data in active_iaq_devices.values():
+            d_id = d_data.get("id") if isinstance(d_data, dict) else d_data
             try:
                 raw_bases.append(prev_method(d_id, IAQ_KEYS))
             except Exception:
@@ -230,24 +298,28 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
             "  Domain: Climate & Weather (Indoor_IAQ)",
             f"  Room: {room}",
             "  Timeframe: Now (Snapshot)",
-            f"  Active_Context: {current_ctx}",
+            f"  Active_Context: {current_ctx}"
+        ]
+        output.extend(active_sensors_lines)
+        output.extend([
             "",
             f"Statistical_Baseline ({current_ctx}):",
-            f"  Weather_Normals: {format_baseline_str(ctx_w_base, ['air_temperature', 'relative_humidity', 'solar_radiation', 'precipitation', 'wind_speed'])}",
-            f"  Indoor_Normals: {format_baseline_str(ctx_i_base, IAQ_KEYS)}",
+            f"  Weather: {format_baseline_str(ctx_w_base, ['air_temperature', 'relative_humidity', 'solar_radiation', 'precipitation', 'wind_speed'])}",
+            f"  Indoor: {format_baseline_str(ctx_i_base, IAQ_KEYS)}",
             "",
             "Current_State_With_Diffs (vs Baseline & Limits):"
-        ]
+        ])
         
-        if WEATHER_STATION_ID:
+        if is_weather_active and WEATHER_STATION_ID:
             w_curr = extract_current_values(tb_client.get_now(WEATHER_STATION_ID, WEATHER_KEYS), WEATHER_KEYS)
             w_parts = [format_val(k, w_curr.get(k), ctx_w_base.get(k), room) for k in ['air_temperature', 'relative_humidity', 'solar_radiation', 'precipitation', 'wind_speed'] if w_curr.get(k) is not None]
-            output.append(f"  Weather_Current: {' | '.join(w_parts) if w_parts else 'Offline'}")
+            output.append(f"  Weather: {' | '.join(w_parts) if w_parts else 'Offline / No Data'}")
         else:
-            output.append("  Weather_Current: Not Configured in Topology")
+            output.append("  Weather: Offline / Not Configured")
         
-        output.append("  Indoor_Current (Room Sensors):")
-        for name, d_id in iaq_devices.items():
+        output.append("  Indoor (Room Sensors):")
+        for name, data in active_iaq_devices.items():
+            d_id = data.get("id") if isinstance(data, dict) else data
             i_curr = extract_current_values(tb_client.get_now(d_id, IAQ_KEYS), IAQ_KEYS)
             i_parts = [format_val(k, i_curr.get(k), ctx_i_base.get(k), room) for k in IAQ_KEYS if i_curr.get(k) is not None]
             output.append(f"    - {name}: {' | '.join(i_parts) if i_parts else 'Offline / No Data'}")
@@ -259,11 +331,12 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
     # ==========================================
     fetch_method = getattr(tb_client, config["method"])
     weather_df = pd.DataFrame()
-    if WEATHER_STATION_ID:
+    if is_weather_active and WEATHER_STATION_ID:
         weather_df = process_telemetry_to_df(fetch_method(WEATHER_STATION_ID, WEATHER_KEYS), WEATHER_KEYS, bin_size)
     
     indoor_dfs = []
-    for d_id in iaq_devices.values():
+    for d_data in active_iaq_devices.values():
+        d_id = d_data.get("id") if isinstance(d_data, dict) else d_data
         df = process_telemetry_to_df(fetch_method(d_id, IAQ_KEYS), IAQ_KEYS, bin_size)
         if not df.empty: indoor_dfs.append(df)
         
@@ -286,71 +359,132 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
             "Query_Context:",
             "  Domain: Climate & Weather (Indoor_IAQ)",
             f"  Room: {room}",
-            f"  Timeframe: {timeframe} (Long-Term Matrix Profile)",
-            "",
-            "Schedule_Profiling_Matrix:"
+            f"  Timeframe: {timeframe} (Long-Term Matrix Profile)"
         ]
+        output.extend(active_sensors_lines)
+        output.extend(["", "Schedule_Profiling_Matrix:"])
         
         def process_matrix_cell(name: str, mask: pd.Series):
             cell_df = master_df[mask]
             if cell_df.empty: return [f"  {name}:", "    No data."]
             
-            # Calculate baselines for the cell
             cell_base_i = cell_df[IAQ_KEYS].mean().to_dict() if not cell_df[IAQ_KEYS].empty else {}
             w_cols = [k for k in WEATHER_KEYS if k in cell_df.columns]
             cell_base_w = cell_df[w_cols].mean().to_dict() if w_cols and not cell_df[w_cols].empty else {}
             
             lines = [f"  {name}:"]
+            lines.append("    Baseline (Background):")
+            lines.append(f"      Weather: {format_baseline_str(cell_base_w, ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed'])}")
+            lines.append(f"      Indoor: {format_baseline_str(cell_base_i, IAQ_KEYS)}")
             
-            # 1. Print Baselines FIRST
-            lines.append("    Statistical_Baseline (Background):")
-            lines.append(f"      Weather_Normals: {format_baseline_str(cell_base_w, ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed'])}")
-            lines.append(f"      Indoor_Normals: {format_baseline_str(cell_base_i, IAQ_KEYS)}")
-            
-            # 2. Process Outliers
             outliers = []
             daily_groups = cell_df.groupby(pd.Grouper(freq='D'))
+            
+            prev_sig = None
+            streak_start = None
+            streak_end = None
+            streak_days = []
+            
+            def flush_streak():
+                s_keys_with_sign, d_keys_with_sign = prev_sig
+                s_keys = [k for k, sign in s_keys_with_sign]
+                d_keys = [k for k, sign in d_keys_with_sign]
+                
+                streak_df = pd.concat([cell_df[cell_df.index.normalize() == d.normalize()] for d in streak_days])
+                streak_mean = streak_df.mean()
+                
+                spikes = [format_val(k, streak_mean.get(k), cell_base_i.get(k), room) for k in s_keys]
+                drivers = [format_val(k, streak_mean.get(k), cell_base_w.get(k), room) for k in d_keys]
+                
+                date_str = streak_start.strftime('%m-%d')
+                if streak_start != streak_end:
+                    date_str += f" to {streak_end.strftime('%m-%d')}"
+                    
+                day_word = "day" if len(streak_days) == 1 else "days"
+                
+                parts = []
+                if spikes: parts.append(f"Indoor: {' | '.join(spikes)}")
+                if drivers: parts.append(f"Weather: {' | '.join(drivers)}")
+                
+                outliers.append(f"      - '{date_str}' ({len(streak_days)} {day_word}): {' | '.join(parts)}")
+
             for day, day_data in daily_groups:
                 if day_data.empty: continue
                 day_mean = day_data.mean()
-                spikes, drivers = [], []
+                spike_keys, driver_keys = [], []
                 
                 for k in IAQ_KEYS:
                     val = day_mean.get(k)
                     base = cell_base_i.get(k)
-                    is_spike = False
+                    is_spk = False
+                    sign = 0
                     if pd.notna(val):
-                        if base is not None and abs(val - base) >= THRESHOLDS.get(k, 999): is_spike = True
-                        
-                        limit_info = get_limit(k, room)
-                        if limit_info and (val < limit_info["min"] or val > limit_info["max"]): is_spike = True
-                        
-                        if is_spike: spikes.append(format_val(k, val, base, room))
+                        if base is not None and abs(val - base) >= THRESHOLDS.get(k, 999):
+                            is_spk = True
+                            sign = 1 if (val - base) > 0 else -1
+                        lim = get_limit(k, room)
+                        if lim:
+                            if val < lim["min"]: 
+                                is_spk = True
+                                sign = -1
+                            elif val > lim["max"]: 
+                                is_spk = True
+                                sign = 1
+                        if is_spk: spike_keys.append((k, sign))
                             
                 for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed']:
                     val = day_mean.get(k)
                     base = cell_base_w.get(k)
-                    is_spike = False
+                    is_spk = False
+                    sign = 0
                     if pd.notna(val):
                         if base is not None:
                             diff = val - base
-                            if k == 'solar_radiation':
-                                if diff >= 400.0: is_spike = True
-                            elif k == 'precipitation':
-                                if val > 0.5: is_spike = True
+                            if k == 'solar_radiation' and diff >= 400.0: 
+                                is_spk = True
+                                sign = 1
+                            elif k == 'precipitation' and val > 0.5: 
+                                is_spk = True
+                                sign = 1
                             elif abs(diff) >= THRESHOLDS.get(k, 999): 
-                                is_spike = True
-                                
-                        limit_info = get_limit(k, room)
-                        if limit_info and (val < limit_info["min"] or val > limit_info["max"]): is_spike = True
-                        
-                        if is_spike: drivers.append(format_val(k, val, base, room))
+                                is_spk = True
+                                sign = 1 if diff > 0 else -1
+                        lim = get_limit(k, room)
+                        if lim:
+                            if val < lim["min"]: 
+                                is_spk = True
+                                sign = -1
+                            elif val > lim["max"]: 
+                                is_spk = True
+                                sign = 1
+                        if is_spk: driver_keys.append((k, sign))
                             
-                if spikes:
-                    day_str = day.strftime('%Y-%m-%d (%A)')
-                    outliers.append(f"      - '{day_str}': Room_Spikes: {' | '.join(spikes)} | Weather_Drivers: {' | '.join(drivers) if drivers else 'None'}")
+                state_key = (tuple(spike_keys), tuple(driver_keys))
+                
+                if not spike_keys and not driver_keys:
+                    if prev_sig is not None:
+                        flush_streak()
+                        prev_sig = None
+                    continue
+                    
+                if prev_sig is None:
+                    prev_sig = state_key
+                    streak_start = day
+                    streak_end = day
+                    streak_days = [day]
+                elif state_key == prev_sig:
+                    streak_end = day
+                    streak_days.append(day)
+                else:
+                    flush_streak()
+                    prev_sig = state_key
+                    streak_start = day
+                    streak_end = day
+                    streak_days = [day]
+                    
+            if prev_sig is not None:
+                flush_streak()
             
-            # Print Outliers SECOND
             if outliers:
                 lines.append("    Outliers (Priority):")
                 lines.extend(outliers)
@@ -369,27 +503,25 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
     # ==========================================
     # BRANCH C: TIMELINE ACTIVITY (2h, 24h, 7d)
     # ==========================================
-    
-    # 1. Provide Contextual Baselines
     present_contexts = sorted(list(set(get_time_context(dt) for dt in master_df.index)))
     output = [
         "Query_Context:",
         "  Domain: Climate & Weather (Indoor_IAQ)",
         f"  Room: {room}",
-        f"  Timeframe: {timeframe} ({bin_size} intervals)",
-        "",
-        "Statistical_Baseline (Present Contexts):"
+        f"  Timeframe: {timeframe} ({bin_size} intervals)"
     ]
+    output.extend(active_sensors_lines)
+    output.extend(["", "Statistical_Baseline (Present Contexts):"])
     
     for ctx in present_contexts:
         ctx_w_base = {k: weather_baseline.get(k, {}).get(ctx) for k in WEATHER_KEYS}
         ctx_i_base = {k: indoor_baseline.get(k, {}).get(ctx) for k in IAQ_KEYS}
         output.append(f"  {ctx}:")
-        output.append(f"    Weather_Normals: {format_baseline_str(ctx_w_base, ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed'])}")
-        output.append(f"    Indoor_Normals: {format_baseline_str(ctx_i_base, IAQ_KEYS)}")
+        output.append(f"    Weather: {format_baseline_str(ctx_w_base, ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed'])}")
+        output.append(f"    Indoor: {format_baseline_str(ctx_i_base, IAQ_KEYS)}")
     output.append("")
     
-    # 2. Calculate true contextual average deviations (with Absolute Avg Val)
+    # Calculate true contextual average deviations
     period_i_deltas = {k: [] for k in IAQ_KEYS}
     period_i_vals = {k: [] for k in IAQ_KEYS}
     period_w_deltas = {k: [] for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed']}
@@ -414,28 +546,24 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
             avg_delta = np.mean(period_i_deltas[k])
             avg_val = np.mean(period_i_vals[k])
             if abs(avg_delta) >= THRESHOLDS.get(k, 0):
-                p_i_shifts.append(f"{DISPLAY_NAMES.get(k, k)} Avg_Shift {avg_val:.1f}{UNITS.get(k, '')} ({avg_delta:+.1f}{UNITS.get(k, '')})")
+                p_i_shifts.append(f"{DISPLAY_NAMES.get(k, k)} {avg_val:.1f}{UNITS.get(k, '')}({avg_delta:+.1f})")
                 
     p_w_shifts = []
     for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed']:
         if period_w_deltas[k]:
             avg_delta = np.mean(period_w_deltas[k])
             avg_val = np.mean(period_w_vals[k])
-            
             is_shift = False
-            if k == 'solar_radiation':
-                if avg_delta >= 400.0: is_shift = True
-            elif k == 'precipitation':
-                if avg_val > 0.5: is_shift = True
-            elif abs(avg_delta) >= THRESHOLDS.get(k, 0):
-                is_shift = True
+            if k == 'solar_radiation' and avg_delta >= 400.0: is_shift = True
+            elif k == 'precipitation' and avg_val > 0.5: is_shift = True
+            elif abs(avg_delta) >= THRESHOLDS.get(k, 0): is_shift = True
                 
             if is_shift:
-                p_w_shifts.append(f"{DISPLAY_NAMES.get(k, k)} Avg_Shift {avg_val:.1f}{UNITS.get(k, '')} ({avg_delta:+.1f}{UNITS.get(k, '')})")
+                p_w_shifts.append(f"{DISPLAY_NAMES.get(k, k)} {avg_val:.1f}{UNITS.get(k, '')}({avg_delta:+.1f})")
 
-    output.append(f"Period_Deviations (Last {timeframe} True Contextual Shift):")
-    output.append(f"  Weather_Shifts: {' | '.join(p_w_shifts) if p_w_shifts else 'None (Consistent with baselines)'}")
-    output.append(f"  Indoor_Shifts: {' | '.join(p_i_shifts) if p_i_shifts else 'None (Consistent with baselines)'}")
+    output.append(f"Period_Deviations (Last {timeframe}):")
+    output.append(f"  Weather_Shifts: {' | '.join(p_w_shifts) if p_w_shifts else 'None'}")
+    output.append(f"  Indoor_Shifts: {' | '.join(p_i_shifts) if p_i_shifts else 'None'}")
     output.append("")
     output.append("Timeline_Activity:")
 
@@ -446,69 +574,114 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
         
         day_key = day_start.strftime('%Y-%m-%d (%A)')
         anomalies = []
-        stable_intervals = 0
-        stable_start = None
         stable_periods = []
+        
+        prev_state = None
+        current_start = None
+        current_end = None
+        current_intervals = 0
+        current_ctx = None
+        period_timestamps = []
+        
+        def flush_timeline():
+            s_keys_with_sign, d_keys_with_sign, ctx_val = prev_state
+            if not s_keys_with_sign and not d_keys_with_sign:
+                stable_periods.append(f"      - '{current_start} to {current_end}' ({current_intervals} int): Matched Baseline")
+                return
+                
+            s_keys = [k for k, sign in s_keys_with_sign]
+            d_keys = [k for k, sign in d_keys_with_sign]
+                
+            period_df = day_df.loc[period_timestamps]
+            period_mean = period_df.mean()
+            
+            spikes = [format_val(k, period_mean.get(k), indoor_baseline.get(k, {}).get(ctx_val), room) for k in s_keys]
+            drivers = [format_val(k, period_mean.get(k), weather_baseline.get(k, {}).get(ctx_val), room) for k in d_keys]
+            
+            parts = []
+            if spikes: parts.append(f"Indoor: {' | '.join(spikes)}")
+            if drivers: parts.append(f"Weather: {' | '.join(drivers)}")
+            
+            anomalies.append(f"      - '{current_start} to {current_end}' ({current_intervals} int, {ctx_val}): {' | '.join(parts)}")
         
         for exact_time, row in day_df.iterrows():
             ctx = get_time_context(exact_time)
             time_str = exact_time.strftime('%H:%M')
             bucket_end = (exact_time + pd.to_timedelta(bin_size)).strftime('%H:%M')
+            if bucket_end == "00:00": bucket_end = "24:00"
             
-            spikes, drivers = [], []
+            spike_keys, driver_keys = [], []
             
-            # Check Indoor Spikes vs precise Context Baseline + Absolute Limits
             for k in IAQ_KEYS:
                 val = row.get(k)
                 base = indoor_baseline.get(k, {}).get(ctx)
                 is_spike = False
-                
+                sign = 0
                 if pd.notna(val):
-                    if base is not None and abs(val - base) >= THRESHOLDS.get(k, 999): is_spike = True
-                    
+                    if base is not None and abs(val - base) >= THRESHOLDS.get(k, 999):
+                        is_spike = True
+                        sign = 1 if (val - base) > 0 else -1
                     limit_info = get_limit(k, room)
-                    if limit_info and (val < limit_info["min"] or val > limit_info["max"]): is_spike = True
-                    
-                    if is_spike: spikes.append(format_val(k, val, base, room))
+                    if limit_info:
+                        if val < limit_info["min"]: 
+                            is_spike = True
+                            sign = -1
+                        elif val > limit_info["max"]: 
+                            is_spike = True
+                            sign = 1
+                    if is_spike: spike_keys.append((k, sign))
             
-            # Check Weather Drivers
             for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed']:
                 val = row.get(k)
                 base = weather_baseline.get(k, {}).get(ctx)
                 is_spike = False
-                
+                sign = 0
                 if pd.notna(val):
                     if base is not None:
                         diff = val - base
-                        if k == 'solar_radiation':
-                            if diff >= 400.0: is_spike = True
-                        elif k == 'precipitation':
-                            if val > 0.5: is_spike = True
+                        if k == 'solar_radiation' and diff >= 400.0: 
+                            is_spike = True
+                            sign = 1
+                        elif k == 'precipitation' and val > 0.5: 
+                            is_spike = True
+                            sign = 1
                         elif abs(diff) >= THRESHOLDS.get(k, 999): 
                             is_spike = True
-                            
+                            sign = 1 if diff > 0 else -1
                     limit_info = get_limit(k, room)
-                    if limit_info and (val < limit_info["min"] or val > limit_info["max"]): is_spike = True
-                    
-                    if is_spike: drivers.append(format_val(k, val, base, room))
+                    if limit_info:
+                        if val < limit_info["min"]: 
+                            is_spike = True
+                            sign = -1
+                        elif val > limit_info["max"]: 
+                            is_spike = True
+                            sign = 1
+                    if is_spike: driver_keys.append((k, sign))
 
-            if spikes:
-                if stable_intervals > 0:
-                    stable_periods.append(f"      - '{stable_start} to {time_str}' ({stable_intervals} intervals): State matched Baseline.")
-                    stable_intervals = 0
-                    stable_start = None
-                
-                anomalies.append(f"      - bucket: '{time_str} to {bucket_end}' (Context: {ctx})")
-                anomalies.append(f"        Room_Spikes: {' | '.join(spikes)}")
-                anomalies.append(f"        Weather_Drivers: {' | '.join(drivers) if drivers else 'None'}")
+            state_key = (tuple(spike_keys), tuple(driver_keys), ctx)
+            
+            if prev_state is None:
+                prev_state = state_key
+                current_start = time_str
+                current_end = bucket_end
+                current_ctx = ctx
+                current_intervals = 1
+                period_timestamps = [exact_time]
+            elif state_key == prev_state:
+                current_intervals += 1
+                current_end = bucket_end
+                period_timestamps.append(exact_time)
             else:
-                if stable_start is None: stable_start = time_str
-                stable_intervals += 1
+                flush_timeline()
+                prev_state = state_key
+                current_start = time_str
+                current_end = bucket_end
+                current_ctx = ctx
+                current_intervals = 1
+                period_timestamps = [exact_time]
                 
-        if stable_intervals > 0:
-            end_of_day = (day_start + pd.Timedelta(days=1)).strftime('%H:%M')
-            if end_of_day == "00:00": end_of_day = "24:00"
-            stable_periods.append(f"      - '{stable_start} to {end_of_day}' ({stable_intervals} intervals): State matched Baseline.")
+        if current_intervals > 0:
+            flush_timeline()
 
         output.append(f"  '{day_key}':")
         if anomalies:
