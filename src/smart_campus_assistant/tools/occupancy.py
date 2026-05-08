@@ -1,5 +1,5 @@
 import pandas as pd
-from typing import Literal, Dict, Any, List
+from typing import Literal, Dict, Any, List, Tuple
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 import logging
@@ -39,13 +39,17 @@ class OccupancyInput(BaseModel):
         description="The time window for the data request. 'now' provides a real-time snapshot. '2h', '24h', '7d' provides data for that timeframe in smaller buckets. '30d' and '90d' provide long-term statistics."
     )
 
-def fetch_and_resample(devices: Dict[str, str], keys: List[str], fetch_method, bin_size: str, sensor_type: str, timeframe: str) -> pd.Series:
+def fetch_and_resample(devices: Dict[str, Any], keys: List[str], fetch_method, bin_size: str, sensor_type: str, timeframe: str) -> Tuple[pd.Series, pd.DataFrame]:
     """
     Helper to fetch telemetry for multiple devices, combine them, and resample.
     Includes a fallback for sparse sensors (like People Counters) that only report on state-change.
+    Returns the aggregated series AND the detailed aligned dataframe.
     """
     all_dfs = []
-    for device_name, device_id in devices.items():
+    for device_name, device_data in devices.items():
+        device_id = device_data.get("id") if isinstance(device_data, dict) else device_data
+        if not device_id: continue
+        
         try:
             raw_data = fetch_method(device_id, keys)
             for key in keys:
@@ -63,10 +67,13 @@ def fetch_and_resample(devices: Dict[str, str], keys: List[str], fetch_method, b
     # SPARSE DATA FALLBACK
     if not all_dfs:
         if sensor_type == 'motion':
-            return pd.Series(dtype=float) 
+            return pd.Series(dtype=float), pd.DataFrame()
             
         last_known = {}
-        for device_name, device_id in devices.items():
+        for device_name, device_data in devices.items():
+            device_id = device_data.get("id") if isinstance(device_data, dict) else device_data
+            if not device_id: continue
+            
             try:
                 raw_now = tb_client.get_now(device_id, keys)
                 for key in keys:
@@ -76,7 +83,7 @@ def fetch_and_resample(devices: Dict[str, str], keys: List[str], fetch_method, b
                 pass
                 
         if not last_known:
-            return pd.Series(dtype=float)
+            return pd.Series(dtype=float), pd.DataFrame()
             
         # Ensure the fallback timeline uses the same local timezone
         end_ts = pd.Timestamp.now('Europe/Athens').tz_localize(None)
@@ -108,11 +115,11 @@ def fetch_and_resample(devices: Dict[str, str], keys: List[str], fetch_method, b
     aligned_df.fillna(0, inplace=True)
 
     if sensor_type == 'desk':
-        return aligned_df.sum(axis=1)
+        return aligned_df.sum(axis=1), aligned_df
     elif sensor_type == 'wo':
-        return aligned_df.sum(axis=1)
+        return aligned_df.sum(axis=1), aligned_df
     elif sensor_type == 'motion':
-        return aligned_df.max(axis=1)
+        return aligned_df.max(axis=1), aligned_df
     elif sensor_type == 'pc':
         in_cols = [c for c in aligned_df.columns if 'period_in' in c]
         out_cols = [c for c in aligned_df.columns if 'period_out' in c]
@@ -122,16 +129,18 @@ def fetch_and_resample(devices: Dict[str, str], keys: List[str], fetch_method, b
         
         net_change = total_in - total_out
         
-        # BOUNDED CUMULATIVE SUM (Fixes 30d Negative Debt Drift)
-        current_occ = 0
-        occ_list = []
-        for change in net_change:
-            current_occ = max(0, current_occ + change)
-            occ_list.append(current_occ)
-            
-        return pd.Series(occ_list, index=net_change.index)
+        # BOUNDED CUMULATIVE SUM WITH MIDNIGHT RESET (Fixes Multi-Day Sensor Drift)
+        occ_series = pd.Series(0.0, index=net_change.index)
+        if not net_change.empty:
+            for day_date, day_group in net_change.groupby(net_change.index.date):
+                current_occ = 0
+                for idx, change in day_group.items():
+                    current_occ = max(0, current_occ + change)
+                    occ_series[idx] = current_occ
+                    
+        return occ_series, aligned_df
 
-    return pd.Series(dtype=float)
+    return pd.Series(dtype=float), pd.DataFrame()
 
 @tool("get_occupancy", args_schema=OccupancyInput)
 def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
@@ -150,12 +159,8 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
     desk_devices = {k: v for k, v in devices.items() if "-DESK" in k.upper()}
     iaq_devices = {k: v for k, v in devices.items() if "-IAQ" in k.upper()}
 
-    if desk_devices:
-        primary_type = "Desk_Contact (Binary)"
-        primary_devs = desk_devices
-        primary_keys = ["occupancy"]
-        sensor_category = "desk"
-    elif pc_devices:
+    # CRITICAL: Precedence shifted so PC overrides Desk.
+    if pc_devices:
         primary_type = "People_Counter (Synthesized from In/Out Traffic)"
         primary_devs = pc_devices
         primary_keys = ["line_1_period_in", "line_1_period_out"]
@@ -165,6 +170,11 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
         primary_devs = wo_devices
         primary_keys = ["people_count_max"]
         sensor_category = "wo"
+    elif desk_devices:
+        primary_type = "Desk_Contact (Binary)"
+        primary_devs = desk_devices
+        primary_keys = ["occupancy"]
+        sensor_category = "desk"
     elif iaq_devices:
         primary_type = "IAQ_Motion (Binary Activity)"
         primary_devs = iaq_devices
@@ -174,12 +184,110 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
         return f"Query_Context:\n  Room: {room}\nError: No occupancy or motion sensors found."
 
     total_primary_sensors = len(primary_devs)
-    iaq_sensor_names = list(iaq_devices.keys())
     
-    if sensor_category == "motion":
-        support_sensors_str = "None (Using Motion as Primary Indicator)"
+    # Bundle non-primary sensors into the support string
+    support_parts = []
+    if sensor_category != "motion" and iaq_devices:
+        support_cnt = len(iaq_devices)
+        support_parts.append(f"{support_cnt} Motion Sensor{'s' if support_cnt != 1 else ''}")
+    if sensor_category != "desk" and desk_devices:
+        support_cnt = len(desk_devices)
+        support_parts.append(f"{support_cnt} Desk Sensor{'s' if support_cnt != 1 else ''}")
+    
+    support_sensors_str = ", ".join(support_parts) if support_parts else "None"
+
+    # ==========================================
+    # DESK ZONE EXTRACTION
+    # ==========================================
+    desk_zones_total = {}
+    desk_device_to_zone = {}
+    if desk_devices:
+        for name, data in desk_devices.items():
+            z = data.get("zone", "Unspecified")
+            desk_zones_total[z] = desk_zones_total.get(z, 0) + 1
+            desk_device_to_zone[name] = z
+
+    # ==========================================
+    # SERVER ATTRIBUTE ACTIVE/OFFLINE CHECK
+    # ==========================================
+    devices_to_check = {**primary_devs}
+    if sensor_category != "motion":
+        devices_to_check.update(iaq_devices)
+    if sensor_category != "desk":
+        devices_to_check.update(desk_devices)
+
+    active_devices = {}
+    offline_sensors = []
+    
+    for device_name, device_data in devices_to_check.items():
+        device_id = device_data.get("id") if isinstance(device_data, dict) else device_data
+        if not device_id:
+            offline_sensors.append(device_name)
+            continue
+            
+        try:
+            attrs = tb_client.get_server_attributes(device_id, ["active"])
+            is_active = any(attr.get("key") == "active" and str(attr.get("value")).lower() == "true" for attr in attrs)
+            if is_active:
+                active_devices[device_name] = device_data
+            else:
+                offline_sensors.append(device_name)
+        except Exception as e:
+            logger.warning(f"Could not fetch active status for {device_name}: {e}")
+            offline_sensors.append(device_name)
+
+    active_primary_devs = {k: v for k, v in primary_devs.items() if k in active_devices}
+    active_iaq_devices = {k: v for k, v in iaq_devices.items() if k in active_devices}
+    active_secondary_desk_devices = {k: v for k, v in desk_devices.items() if k in active_devices} if sensor_category != "desk" else {}
+
+    desk_zones_active = {}
+    if sensor_category == "desk":
+        for name, data in active_primary_devs.items():
+            z = desk_device_to_zone.get(name, "Unspecified")
+            desk_zones_active[z] = desk_zones_active.get(z, 0) + 1
+
+    # Format Active Sensor Context Block
+    total_relevant = len(devices_to_check)
+    active_count = len(active_devices)
+    active_sensors_lines = []
+    
+    if sensor_category == "desk":
+        active_sensors_lines.append(f"  Active_Sensors: {active_count}/{total_relevant} Online")
+        for z, count in desk_zones_active.items():
+            tot = desk_zones_total.get(z, count)
+            active_sensors_lines.append(f"    - {count}/{tot} {z}")
+            
+        # Add Supporting IAQ sensors to Active Sensors
+        for name, data in active_iaq_devices.items():
+            z = data.get("zone", "Unspecified") if isinstance(data, dict) else "Unspecified"
+            active_sensors_lines.append(f"    - {name} {z}")
+            
+        if offline_sensors:
+            active_sensors_lines.append("  Offline_Sensors:")
+            for off_s in offline_sensors:
+                if off_s in desk_device_to_zone:
+                    z = desk_device_to_zone[off_s]
+                    active_sensors_lines.append(f"    - {off_s} {z}")
+                elif off_s in iaq_devices:
+                    data = iaq_devices[off_s]
+                    z = data.get("zone", "Unspecified") if isinstance(data, dict) else "Unspecified"
+                    active_sensors_lines.append(f"    - {off_s} {z}")
+                else:
+                    active_sensors_lines.append(f"    - {off_s}")
     else:
-        support_sensors_str = f"{len(iaq_sensor_names)} ({', '.join(iaq_sensor_names)} Motion)" if iaq_devices else "None"
+        active_sensors_lines.append(f"  Active_Sensors: {active_count}/{total_relevant} Online")
+        for name, data in active_devices.items():
+            if isinstance(data, dict):
+                if "-PC" in name.upper() or "-WO" in name.upper():
+                    place = data.get("tag", "Unspecified")
+                else:
+                    place = data.get("zone", "Unspecified")
+            else:
+                place = "Unspecified"
+            active_sensors_lines.append(f"    - {name} {place}")
+
+        if offline_sensors:
+            active_sensors_lines.append(f"  Offline_Sensors: {', '.join(offline_sensors)}")
 
     # ==========================================
     # BRANCH A: REAL-TIME SNAPSHOT ("NOW")
@@ -191,36 +299,48 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
             f"  Room: {room}",
             "  Timeframe: Now (Snapshot)",
             f"  Primary_Sensor: {primary_type}",
-            f"  Supporting_Sensors: {support_sensors_str}",
-            "",
-            "Current_State:"
+            f"  Supporting_Sensors: {support_sensors_str}"
         ]
+        output.extend(active_sensors_lines)
+        output.extend(["", "Current_State:"])
         
         primary_val = 0
         has_data = False
+        group_counts = {z: 0 for z in desk_zones_active.keys()}
         
-        if pc_devices:
-            recent_series = fetch_and_resample(primary_devs, primary_keys, tb_client.get_24h, "10min", "pc", "24h")
+        if active_primary_devs and sensor_category == "pc":
+            recent_series, _ = fetch_and_resample(active_primary_devs, primary_keys, tb_client.get_24h, "10min", "pc", "24h")
             if not recent_series.empty:
                 has_data = True
                 primary_val = recent_series.iloc[-1]
         else:
-            for name, uid in primary_devs.items():
-                raw = tb_client.get_now(uid, primary_keys)
+            for name, data in active_primary_devs.items():
+                device_id = data.get("id") if isinstance(data, dict) else data
+                raw = tb_client.get_now(device_id, primary_keys)
                 key = primary_keys[0]
                 if key in raw and raw[key]:
                     has_data = True
                     val = float(raw[key][0]["value"])
                     if desk_devices:
-                        if val > 0: primary_val += 1
+                        if val > 0: 
+                            primary_val += 1
+                            z = desk_device_to_zone.get(name, "Unspecified")
+                            if z in group_counts:
+                                group_counts[z] += 1
                     elif sensor_category == "motion":
                         if val > 0: primary_val = 1
                     else:
                         primary_val += val
                 
         if has_data:
-            if desk_devices:
+            if sensor_category == "desk":
                 output.append(f"  Current_Occupancy: {int(primary_val)}/{total_primary_sensors} Desks Occupied")
+                group_strs = []
+                for z, c in group_counts.items():
+                    tot = desk_zones_total.get(z, 0)
+                    group_strs.append(f"{z}: {c}/{tot}")
+                if group_strs:
+                    output.append(f"  Group_Details: {', '.join(group_strs)}")
             elif sensor_category == "motion":
                 output.append(f"  Current_State: {'Active' if primary_val > 0 else 'Idle'}")
             else:
@@ -229,15 +349,30 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
             output.append("  Primary_Status: Offline / No Data")
 
         if sensor_category != "motion":
-            motion_active = False
-            for name, uid in iaq_devices.items():
-                raw = tb_client.get_now(uid, ["pir"])
-                if "pir" in raw and raw["pir"]:
-                    if float(raw["pir"][0]["value"]) > 0:
-                        motion_active = True
+            output.append("  Motion_Status:")
+            if not active_iaq_devices:
+                output.append("    No Active Motion Sensors")
+            else:
+                for name, data in active_iaq_devices.items():
+                    device_id = data.get("id") if isinstance(data, dict) else data
+                    raw = tb_client.get_now(device_id, ["pir"])
+                    if "pir" in raw and raw["pir"]:
+                        val = float(raw["pir"][0]["value"])
+                        state_str = "Active" if val > 0 else "Idle"
+                        output.append(f"    - {name}: {state_str}")
+                    else:
+                        output.append(f"    - {name}: Offline / No Data")
                         
-            motion_str = "Active (Validates occupancy)" if motion_active else "Idle"
-            output.append(f"  Motion_Status: {motion_str}")
+        if active_secondary_desk_devices:
+            output.append("  Secondary_Desk_Status:")
+            desk_occ = 0
+            for name, data in active_secondary_desk_devices.items():
+                device_id = data.get("id") if isinstance(data, dict) else data
+                raw = tb_client.get_now(device_id, ["occupancy"])
+                if "occupancy" in raw and raw["occupancy"]:
+                    if float(raw["occupancy"][0]["value"]) > 0:
+                        desk_occ += 1
+            output.append(f"    {desk_occ}/{len(active_secondary_desk_devices)} Desks Occupied")
         
         return "\n".join(output)
 
@@ -248,8 +383,8 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
     bin_size = config["bin_size"]
     fetch_method = getattr(tb_client, config["method"])
 
-    primary_series = fetch_and_resample(primary_devs, primary_keys, fetch_method, bin_size, sensor_type=sensor_category, timeframe=timeframe)
-    motion_series = fetch_and_resample(iaq_devices, ["pir"], fetch_method, bin_size, sensor_type="motion", timeframe=timeframe)
+    primary_series, primary_aligned_df = fetch_and_resample(active_primary_devs, primary_keys, fetch_method, bin_size, sensor_type=sensor_category, timeframe=timeframe)
+    motion_series, _ = fetch_and_resample(active_iaq_devices, ["pir"], fetch_method, bin_size, sensor_type="motion", timeframe=timeframe)
 
     if primary_series.empty:
         return f"Query_Context:\n  Room: {room}\nError: No historical data found for timeframe {timeframe}. Check if sensor is actively transmitting."
@@ -262,6 +397,23 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
 
     df.fillna(0, inplace=True)
 
+    # Extract grouped DataFrames for Desks
+    group_df = pd.DataFrame()
+    if sensor_category == "desk" and not primary_aligned_df.empty:
+        desk_group_series = {}
+        for z in desk_zones_active.keys():
+            z_cols = [f"{d}_{primary_keys[0]}" for d, dz in desk_device_to_zone.items() if dz == z and d in active_primary_devs]
+            valid_z_cols = [c for c in z_cols if c in primary_aligned_df.columns]
+            if valid_z_cols:
+                desk_group_series[z] = primary_aligned_df[valid_z_cols].sum(axis=1)
+            else:
+                desk_group_series[z] = pd.Series(0, index=primary_series.index)
+        group_df = pd.DataFrame(desk_group_series)
+        
+        # Align group_df index with the master df index
+        if not group_df.empty:
+            group_df = group_df.reindex(df.index).fillna(0)
+
     # ==========================================
     # BRANCH C: 30-DAY & 90-DAY STATISTICAL PROFILE
     # ==========================================
@@ -272,10 +424,10 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
             f"  Room: {room}",
             f"  Timeframe: {timeframe} (Long-Term Statistical Profile)",
             f"  Primary_Sensor: {primary_type}",
-            f"  Supporting_Sensors: {support_sensors_str}",
-            "",
-            "Schedule_Profiling_Matrix:"
+            f"  Supporting_Sensors: {support_sensors_str}"
         ]
+        output.extend(active_sensors_lines)
+        output.extend(["", "Schedule_Profiling_Matrix:"])
         
         is_weekday = df.index.dayofweek < 5
         is_weekend = df.index.dayofweek >= 5
@@ -311,9 +463,16 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
                 avg_peak = sum(daily_peaks.values()) / len(daily_peaks) if daily_peaks else 0
                 max_peak = max(daily_peaks.values()) if daily_peaks else 0
                 
-                if desk_devices:
+                if sensor_category == "desk":
                     stats = f"Avg Daily Peak: {avg_peak:.1f}/{total_primary_sensors} Desks | Max Peak: {max_peak:.0f}/{total_primary_sensors} Desks | Motion Active: {motion_pct:.0f}%"
                     lines.append(f"      Baseline: {stats}")
+                    
+                    if not group_df.empty:
+                        cell_group_df = group_df[mask]
+                        group_avgs = cell_group_df.mean()
+                        g_strs = [f"{z}: {avg:.1f}/{desk_zones_total[z]}" for z, avg in group_avgs.items() if pd.notna(avg)]
+                        if g_strs:
+                            lines.append(f"      Group_Averages: {', '.join(g_strs)}")
                     
                     for day, peak in daily_peaks.items():
                         day_motion = daily_motions.get(day, 0)
@@ -376,8 +535,13 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
         global_summary = f"Activity_Profile: Active {global_motion_pct:.0f}% of the time"
     else:
         global_motion_pct = (df['motion'] > 0).mean() * 100
-        if desk_devices:
+        if sensor_category == "desk":
             global_summary = f"Peak_Occupancy: {peak_occ:.0f}/{total_primary_sensors} Desks | Avg_Occupancy: {avg_occ:.1f}/{total_primary_sensors} Desks\n  Motion_Context: Active {global_motion_pct:.0f}% / Idle {100-global_motion_pct:.0f}%"
+            if not group_df.empty:
+                group_avgs = group_df.mean()
+                g_strs = [f"{z}: {avg:.1f}/{desk_zones_total[z]}" for z, avg in group_avgs.items() if pd.notna(avg)]
+                if g_strs:
+                    global_summary += f"\n  Group_Averages: {', '.join(g_strs)}"
         else:
             global_summary = f"Peak_Occupancy: {peak_occ:.0f} people | Avg_Occupancy: {avg_occ:.1f} people\n  Motion_Context: Active {global_motion_pct:.0f}% / Idle {100-global_motion_pct:.0f}%"
 
@@ -388,9 +552,9 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
         f"  Timeframe: {timeframe} ({bin_size} intervals)",
         f"  Primary_Sensor: {primary_type}",
         f"  Supporting_Sensors: {support_sensors_str}",
-        "",
-        "Statistical_Baseline (Present Contexts):"
     ]
+    output.extend(active_sensors_lines)
+    output.extend(["", "Statistical_Baseline (Present Contexts):"])
     
     def add_context_summary(name, mask):
         cell_df = df[mask]
@@ -406,8 +570,14 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
                 if pd.isna(p_occ): p_occ = 0
                 if pd.isna(a_occ): a_occ = 0
                 
-                if desk_devices:
+                if sensor_category == "desk":
                     output.append(f"    Baseline: Peak: {p_occ:.0f}/{total_primary_sensors} Desks | Avg: {a_occ:.1f}/{total_primary_sensors} Desks | Motion Active: {motion_pct:.0f}%")
+                    if not group_df.empty:
+                        cell_group_df = group_df[mask]
+                        group_avgs = cell_group_df.mean()
+                        g_strs = [f"{z}: {avg:.1f}/{desk_zones_total[z]}" for z, avg in group_avgs.items() if pd.notna(avg)]
+                        if g_strs:
+                            output.append(f"    Group_Averages: {', '.join(g_strs)}")
                 else:
                     output.append(f"    Baseline: Peak: {p_occ:.0f} people | Avg: {a_occ:.1f} people | Motion Active: {motion_pct:.0f}%")
 
@@ -434,6 +604,7 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
         stable_periods = []
         
         prev_state = None
+        prev_prim_state = None
         current_stable_start = None
         current_stable_state = None
         stable_bins = 0
@@ -448,16 +619,25 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
             if sensor_category == "motion":
                 state_str = "Active" if row['primary'] > 0 else "Idle"
                 combined_state = f"Status: {state_str}."
+                current_prim_state = state_str
             else:
                 motion_str = "Active" if row['motion'] > 0 else "Idle"
-                if desk_devices:
-                    prim_state = f"{int(row['primary'])}/{total_primary_sensors} Desks Occupied"
+                if sensor_category == "desk":
+                    group_parts = []
+                    if not group_df.empty and ts in group_df.index:
+                        for z in desk_zones_active.keys():
+                            val = group_df.loc[ts, z]
+                            tot = desk_zones_total.get(z, 0)
+                            group_parts.append(f"{z}: {int(val)}/{tot}")
+                    group_str = f" [{', '.join(group_parts)}]" if group_parts else ""
+                    current_prim_state = f"{int(row['primary'])}/{total_primary_sensors} Desks{group_str}"
                 else:
-                    prim_state = f"{int(row['primary'])} people"
-                combined_state = f"Status: {prim_state}. Motion: {motion_str}."
+                    current_prim_state = f"{int(row['primary'])} people"
+                combined_state = f"Status: {current_prim_state}. Motion: {motion_str}."
             
             if prev_state is None:
                 prev_state = combined_state
+                prev_prim_state = current_prim_state
                 current_stable_start = time_str
                 current_stable_state = combined_state
                 stable_bins = 0
@@ -467,8 +647,11 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
                 if sensor_category == "motion":
                     transitions.append(f"        activity: 'Transitioned to {state_str}'")
                 else:
-                    transitions.append(f"        activity: 'Transitioned to {prim_state}'")
-                    transitions.append(f"        motion_state: '{motion_str}'")
+                    if current_prim_state != prev_prim_state:
+                        transitions.append(f"        activity: 'Transitioned to {current_prim_state}'")
+                        transitions.append(f"        motion_state: '{motion_str}'")
+                    else:
+                        transitions.append(f"        motion_state: '{motion_str}'")
                 
                 if stable_bins > 1:
                     stable_periods.append(f"      - '{current_stable_start} to {time_str}' ({stable_bins} intervals): {current_stable_state}")
@@ -476,6 +659,7 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
                 current_stable_start = time_str
                 current_stable_state = combined_state
                 prev_state = combined_state
+                prev_prim_state = current_prim_state
                 stable_bins = 1
             else:
                 stable_bins += 1
@@ -501,24 +685,27 @@ if __name__ == "__main__":
     print("-" * 50)
     try:
         print("\n[Testing (now)]")
-        print(get_occupancy.invoke({"room": "2.1", "timeframe": "now"}))
-        print(get_occupancy.invoke({"room": "restaurant", "timeframe": "now"}))
         print(get_occupancy.invoke({"room": "1.2", "timeframe": "now"}))
-        print(get_occupancy.invoke({"room": "4.9", "timeframe": "now"}))
-        print("\n[Testing (2h, 24h, 7d)]")
-        print(get_occupancy.invoke({"room": "2.1", "timeframe": "2h"}))
-        print(get_occupancy.invoke({"room": "restaurant", "timeframe": "2h"}))
+        print("-" * 50)
+
+        print("\n[Testing (2h)]")
+        print(get_occupancy.invoke({"room": "1.2", "timeframe": "2h"}))
+        print("-" * 50)
+
+        print("\n[Testing (24h)]")
         print(get_occupancy.invoke({"room": "1.2", "timeframe": "24h"}))
-        print(get_occupancy.invoke({"room": "4.9", "timeframe": "7d"}))
+        print("-" * 50)
+
+        print("\n[Testing (7d)]")
+        print(get_occupancy.invoke({"room": "1.2", "timeframe": "7d"}))
+        print("-" * 50)
+
         print("\n[Testing (30d)]")
-        print(get_occupancy.invoke({"room": "2.1", "timeframe": "30d"}))
-        print(get_occupancy.invoke({"room": "restaurant", "timeframe": "30d"}))
         print(get_occupancy.invoke({"room": "1.2", "timeframe": "30d"}))
-        print(get_occupancy.invoke({"room": "4.9", "timeframe": "30d"}))
+        print("-" * 50)
+
         print("\n[Testing (90d)]")
-        print(get_occupancy.invoke({"room": "2.1", "timeframe": "90d"}))
-        print(get_occupancy.invoke({"room": "restaurant", "timeframe": "90d"}))
-        print(get_occupancy.invoke({"room": "1.2", "timeframe": "90d"}))
-        print(get_occupancy.invoke({"room": "4.9", "timeframe": "90d"}))
+        print(get_occupancy.invoke({"room": "entrance", "timeframe": "90d"}))
+        print("-" * 50)
     except Exception as e:
         print(f"\nError during execution: {e}")
