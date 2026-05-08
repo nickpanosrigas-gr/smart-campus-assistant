@@ -79,6 +79,26 @@ class DeviceRegistry:
             
         return matched_devices
 
+    # ==========================================
+    # NEW GLOBAL TYPE SEARCH METHOD
+    # ==========================================
+    def get_all_devices_by_type(self, sensor_type: str) -> Dict[str, dict]:
+        """
+        Sweeps all rooms in the campus to find devices of a specific type (e.g., 'WEATHER').
+        """
+        matched_devices = {}
+        target_marker = str(sensor_type).strip().upper()
+        
+        for room_devices in self._room_cache.values():
+            for device_name, device_data in room_devices.items():
+                if target_marker in device_name.upper():
+                    matched_devices[device_name] = device_data
+                    
+        if not matched_devices:
+            logger.warning(f"No {sensor_type} sensors found across the campus topology.")
+            
+        return matched_devices
+
     def get_all_devices_in_room(self, room: str) -> Dict[str, dict]:
         room_key = str(room).strip().lower()
         return self._room_cache.get(room_key, {})
@@ -161,44 +181,3 @@ class DeviceRegistry:
         return None
 
 registry = DeviceRegistry()
-
-# ==========================================
-# TEST EXECUTION BLOCK
-# ==========================================
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
-    
-    try:
-        registry = DeviceRegistry(topology_path="data/campus_topology.json")
-        
-        print("\n" + "="*40)
-        print("RUNNING DEVICE REGISTRY TESTS")
-        print("="*40)
-
-        print("\n[Testing Energy Mapper]")
-        
-        # Test Standard Room Mapping
-        test_room = "2.4"
-        print(f"  Target '{test_room}' -> {registry.get_energy_meters_for_target(test_room)}")
-        
-        # Test Ground Floor Mapping
-        test_room_2 = "restaurant"
-        print(f"  Target '{test_room_2}' -> {registry.get_energy_meters_for_target(test_room_2)}")
-
-        # Test Special Infrastructure Mapping
-        test_hvac = "hvac"
-        print(f"  Target '{test_hvac}' -> {registry.get_energy_meters_for_target(test_hvac)}")
-
-        # Test Infrastructure Mapping
-        test_room_3 = "infrastructure"
-        print(f"  Target '{test_room_3}' -> {registry.get_all_devices_in_room(test_room_3)}")
-        
-        print("\n[Testing Floor Lookup]")
-        print(f"  Room 'parkin.c' is on floor -> {registry.get_floor_for_room('parkin.c')}")
-        print(f"  Room 'restaurant' is on floor -> {registry.get_floor_for_room('restaurant')}")
-        print(f"  Room '4.9' is on floor -> {registry.get_floor_for_room('4.9')}")
-        
-        print("\nAll tests completed successfully.\n")
-
-    except FileNotFoundError:
-        print("\nERROR: Could not find 'data/campus_topology.json'.")

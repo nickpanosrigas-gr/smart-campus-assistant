@@ -8,27 +8,17 @@ import logging
 # Import project singletons
 from src.smart_campus_assistant.utils.device_registry import registry
 from src.smart_campus_assistant.clients.thingsboard_client import tb_client
+from src.smart_campus_assistant.clients.astral_client import astral_client
 
 logger = logging.getLogger(__name__)
 
 # ==========================================
-# DYNAMIC WEATHER STATION DISCOVERY
+# OUTDOOR WEATHER STATION DISCOVERY
 # ==========================================
-def find_weather_station() -> Optional[tuple[str, str, Dict]]:
-    """Sweeps the DeviceRegistry to find the Weather Station name, ID, and data."""
-    for room in registry.get_available_rooms():
-        devices = registry.get_all_devices_in_room(room)
-        for name, d_val in devices.items():
-            if "WEATHER" in name.upper():
-                if isinstance(d_val, dict):
-                    return name, d_val.get("id"), d_val
-                return name, d_val, {"id": d_val}
-    return None
-
-weather_info = find_weather_station()
-WEATHER_STATION_NAME = weather_info[0] if weather_info else None
-WEATHER_STATION_ID = weather_info[1] if weather_info else None
-WEATHER_STATION_DATA = weather_info[2] if weather_info else {}
+_weather_devices = registry.get_all_devices_by_type("WEATHERSTATION")
+WEATHER_STATION_NAME = next(iter(_weather_devices.keys())) if _weather_devices else None
+WEATHER_STATION_DATA = _weather_devices[WEATHER_STATION_NAME] if WEATHER_STATION_NAME else {}
+WEATHER_STATION_ID = WEATHER_STATION_DATA.get("id") if isinstance(WEATHER_STATION_DATA, dict) else WEATHER_STATION_DATA
 
 TIMEFRAME_CONFIG = {
     "now": {"method": "get_now", "bin_size": None, "prev_method": "get_now_prev_30d"},
@@ -240,8 +230,7 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
     active_sensors_lines = [f"  Active_Sensors: {active_count}/{total_relevant} Online"]
     
     if is_weather_active and WEATHER_STATION_NAME:
-        w_place = WEATHER_STATION_DATA.get("tag", "Unspecified")
-        active_sensors_lines.append(f"    - {WEATHER_STATION_NAME} (Weather): Tag: {w_place}")
+        active_sensors_lines.append(f"    - {WEATHER_STATION_NAME} (Outdoor Weather)")
         
     for name, data in active_iaq_devices.items():
         if isinstance(data, dict):
@@ -292,6 +281,8 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
         
         ctx_w_base = {k: weather_baseline.get(k, {}).get(current_ctx) for k in WEATHER_KEYS}
         ctx_i_base = {k: indoor_baseline.get(k, {}).get(current_ctx) for k in IAQ_KEYS}
+        
+        solar = astral_client.get_current_solar_context()
 
         output = [
             "Query_Context:",
@@ -301,7 +292,12 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
             f"  Active_Context: {current_ctx}"
         ]
         output.extend(active_sensors_lines)
+        
         output.extend([
+            "  Solar_Context (Heat Gain Potential):",
+            f"    - Daylight_Window: {solar['sunrise']} to {solar['sunset']}",
+            f"    - Current_Sun_Azimuth: {solar['horizontal']}",
+            f"    - Vertical_Angle: {solar['thermal_vertical']}",
             "",
             f"Statistical_Baseline ({current_ctx}):",
             f"  Weather: {format_baseline_str(ctx_w_base, ['air_temperature', 'relative_humidity', 'solar_radiation', 'precipitation', 'wind_speed'])}",
@@ -345,6 +341,10 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
         
     indoor_df = pd.concat(indoor_dfs).groupby(level=0).median()
     master_df = indoor_df.join(weather_df, how='outer') if not weather_df.empty else indoor_df
+    
+    days_map = {"2h": 1, "24h": 1, "7d": 7, "30d": 30, "90d": 90}
+    days_back = days_map.get(timeframe, 1)
+    solar_hist = astral_client.get_historical_solar_context(days_back)
 
     # ==========================================
     # BRANCH B: 30-DAY / 90-DAY STATISTICAL PROFILE
@@ -362,7 +362,14 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
             f"  Timeframe: {timeframe} (Long-Term Matrix Profile)"
         ]
         output.extend(active_sensors_lines)
-        output.extend(["", "Schedule_Profiling_Matrix:"])
+        
+        output.extend([
+            "  Solar_Context (Heat Gain Potential):",
+            f"    - Average_Daylight_Window: {solar_hist['avg_sunrise']} to {solar_hist['avg_sunset']}",
+            f"    - Daily_Sun_Trajectory: {solar_hist['trajectory']}",
+            "", 
+            "Schedule_Profiling_Matrix:"
+        ])
         
         def process_matrix_cell(name: str, mask: pd.Series):
             cell_df = master_df[mask]
@@ -504,6 +511,16 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
     # BRANCH C: TIMELINE ACTIVITY (2h, 24h, 7d)
     # ==========================================
     present_contexts = sorted(list(set(get_time_context(dt) for dt in master_df.index)))
+    
+    solar_context_lines = [
+        "  Solar_Context (Heat Gain Potential):",
+        f"    - Average_Daylight_Window: {solar_hist['avg_sunrise']} to {solar_hist['avg_sunset']}",
+        f"    - Daily_Sun_Trajectory: {solar_hist['trajectory']}"
+    ]
+    if timeframe == "2h":
+        el_label, el_desc = astral_client.get_average_thermal_elevation_info(2)
+        solar_context_lines.append(f"    - Vertical_Angle: {el_label} ({el_desc})")
+        
     output = [
         "Query_Context:",
         "  Domain: Climate & Weather (Indoor_IAQ)",
@@ -511,6 +528,7 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
         f"  Timeframe: {timeframe} ({bin_size} intervals)"
     ]
     output.extend(active_sensors_lines)
+    output.extend(solar_context_lines)
     output.extend(["", "Statistical_Baseline (Present Contexts):"])
     
     for ctx in present_contexts:
@@ -706,32 +724,26 @@ if __name__ == "__main__":
     try:
         print("\n[Testing Historical (now)]")
         print(get_temp_humidity.invoke({"room": "restaurant", "timeframe": "now"}))
-        
         print("\n" + "="*50)
         
         print("\n[Testing Historical (2h)]")
         print(get_temp_humidity.invoke({"room": "restaurant", "timeframe": "2h"}))
-        
         print("\n" + "="*50)
         
         print("\n[Testing Historical (24h)]")
         print(get_temp_humidity.invoke({"room": "restaurant", "timeframe": "24h"}))
-        
         print("\n" + "="*50)
         
         print("\n[Testing Historical (7d)]")
         print(get_temp_humidity.invoke({"room": "data_center", "timeframe": "7d"}))
-        
         print("\n" + "="*50)
         
         print("\n[Testing Historical (30d)]")
         print(get_temp_humidity.invoke({"room": "restaurant", "timeframe": "30d"}))
-
         print("\n" + "="*50)
         
         print("\n[Testing Historical (90d)]")
         print(get_temp_humidity.invoke({"room": "restaurant", "timeframe": "90d"}))
-        
         print("\n" + "-"*50)
         print("All Temp & Humidity tool tests completed successfully.")
         

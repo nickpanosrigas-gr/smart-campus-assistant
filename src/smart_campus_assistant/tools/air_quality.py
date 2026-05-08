@@ -11,6 +11,14 @@ from src.smart_campus_assistant.clients.thingsboard_client import tb_client
 
 logger = logging.getLogger(__name__)
 
+# ==========================================
+# OUTDOOR PM SENSOR DISCOVERY
+# ==========================================
+_pm_devices = registry.get_all_devices_by_type("PM")
+OUTDOOR_PM_NAME = next(iter(_pm_devices.keys())) if _pm_devices else None
+OUTDOOR_PM_DATA = _pm_devices[OUTDOOR_PM_NAME] if OUTDOOR_PM_NAME else {}
+OUTDOOR_PM_ID = OUTDOOR_PM_DATA.get("id") if isinstance(OUTDOOR_PM_DATA, dict) else OUTDOOR_PM_DATA
+
 TIMEFRAME_CONFIG = {
     "now": {"method": "get_now", "bin_size": None, "prev_method": "get_now_prev_30d_full"},
     "2h":  {"method": "get_2h", "bin_size": "10min", "prev_method": "get_2h_prev_30d_full"},
@@ -22,32 +30,28 @@ TIMEFRAME_CONFIG = {
 
 # Sensor Key Configurations
 IAQ_KEYS = ["co2", "pm2_5", "pm10", "tvoc"]
-
-# Baseline Deviations (Relative Deltas for Anomaly Detection)
-THRESHOLDS = {
-    "co2": 150.0,
-    "pm2_5": 5.0,
-    "pm10": 10.0,
-    "tvoc": 100.0
-}
+OUTDOOR_KEYS = ["pm1_0", "pm2_5", "pm10"]
 
 # Absolute Extreme Limits (Health Limits)
 ABSOLUTE_LIMITS = {
     "co2": 1000.0,
-    "pm2_5": 15.0,
+    "pm1_0": 10.0,
+    "pm2_5": 25.0,
     "pm10": 45.0,
     "tvoc": 500.0
 }
 
 UNITS = {
-    "co2": "ppm", 
+    "co2": "ppm",
+    "pm1_0": "µg/m³",
     "pm2_5": "µg/m³", 
     "pm10": "µg/m³", 
     "tvoc": "ppb"
 }
 
 DISPLAY_NAMES = {
-    "co2": "CO2", 
+    "co2": "CO2",
+    "pm1_0": "PM1_0",
     "pm2_5": "PM2_5", 
     "pm10": "PM10", 
     "tvoc": "TVOC"
@@ -79,16 +83,16 @@ def get_time_context(dt: pd.Timestamp) -> str:
     if is_weekend and is_work: return "weekend_work"
     return "weekend_nonwork"
 
-def clean_iaq_value(key: str, val: float) -> float:
+def clean_iaq_value(key: str, val: float, is_iaq: bool = True) -> float:
     """Sanitizes incoming telemetry to fix multiplier bugs and error codes."""
     if pd.isna(val): 
         return val
-    # Filter out sensor errors (e.g. 65535 or similar huge values)
     if key == "co2" and val >= 65000:
         return np.nan
-    # Correct PM multiplier bugs
-    if key in ["pm2_5", "pm10"]:
-        return val / 100.0
+    # ONLY apply the division hack to indoor IAQ sensors
+    if is_iaq and key in ["pm1_0", "pm2_5", "pm10"]:
+        if val > 500:
+            return val / 100.0
     return val
 
 def format_val(key: str, val: float, baseline: float = None) -> str:
@@ -117,31 +121,27 @@ def format_baseline_str(data: dict, keys: list) -> str:
             parts.append(format_val(k, data[k]))
     return " | ".join(parts) if parts else "No Baseline Data"
 
-def process_telemetry_to_df(raw_data: Dict, keys: List[str], bin_size: str = None) -> pd.DataFrame:
+def process_telemetry_to_df(raw_data: Dict, keys: List[str], bin_size: str = None, is_iaq: bool = True) -> pd.DataFrame:
     dfs = []
     for key in keys:
         if key in raw_data and raw_data[key]:
             data_list = raw_data[key]
             
-            # Failsafe: If TB returns a single dict instead of a list, wrap it
             if isinstance(data_list, dict):
                 data_list = [data_list]
                 
-            # Safely extract ONLY ts and value to prevent Pandas array-length crashes
             records = []
             if isinstance(data_list, list):
                 for item in data_list:
                     if isinstance(item, dict) and 'ts' in item and 'value' in item:
                         records.append({'ts': item['ts'], 'value': item['value']})
             
-            if not records:
-                continue
+            if not records: continue
                 
             df = pd.DataFrame(records)
             df['value'] = pd.to_numeric(df['value'], errors='coerce')
             
-            # Sanitize Data
-            df['value'] = df['value'].apply(lambda x: clean_iaq_value(key, x))
+            df['value'] = df['value'].apply(lambda x: clean_iaq_value(key, x, is_iaq))
             df.dropna(subset=['value'], inplace=True)
             
             if df.empty: continue
@@ -158,23 +158,19 @@ def process_telemetry_to_df(raw_data: Dict, keys: List[str], bin_size: str = Non
         combined = combined.resample(bin_size).median()
     return combined
 
-def extract_current_values(raw_data: Dict, keys: List[str]) -> Dict[str, float]:
+def extract_current_values(raw_data: Dict, keys: List[str], is_iaq: bool = True) -> Dict[str, float]:
     result = {}
     for k in keys:
         if k in raw_data and raw_data[k]:
             try:
                 val = float(raw_data[k][0]["value"])
-                val = clean_iaq_value(k, val)
+                val = clean_iaq_value(k, val, is_iaq)
                 result[k] = val if not pd.isna(val) else None
             except (ValueError, KeyError, IndexError):
                 result[k] = None
     return result
 
 def parse_full_nested_baselines(raw_bases: List[Dict], keys: List[str]) -> Dict[str, Dict[str, float]]:
-    """
-    Parses pre-aggregated full baseline data (lists of values categorized by time-context) 
-    and applies data sanitization before averaging.
-    """
     contexts = ['weekday_work', 'weekday_nonwork', 'weekend_work', 'weekend_nonwork']
     result = {k: {c: [] for c in contexts} for k in keys}
     
@@ -184,8 +180,7 @@ def parse_full_nested_baselines(raw_bases: List[Dict], keys: List[str]) -> Dict[
                 for c in contexts:
                     if c in base[k]:
                         data = base[k][c]
-                        if not isinstance(data, list):
-                            data = [data]  # Fallback if a single value is returned
+                        if not isinstance(data, list): data = [data]
                             
                         for item in data:
                             val = None
@@ -197,7 +192,7 @@ def parse_full_nested_baselines(raw_bases: List[Dict], keys: List[str]) -> Dict[
                             if val is not None:
                                 try:
                                     v = float(val)
-                                    v = clean_iaq_value(k, v)
+                                    v = clean_iaq_value(k, v, is_iaq=True) # Baselines are always IAQ
                                     if not pd.isna(v):
                                         result[k][c].append(v)
                                 except (ValueError, TypeError):
@@ -223,16 +218,20 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
     if not iaq_devices:
         return f"Query_Context:\n  Room: {room}\nError: No IAQ sensors found in this room."
 
+    sensor_info_lines = [f"  Sensors_Configured: {len(iaq_devices)}"]
+    for name, data in iaq_devices.items():
+        zone = data.get("zone", "Unspecified") if isinstance(data, dict) else "Unspecified"
+        sensor_info_lines.append(f"    - {name}: Zone: {zone}")
+
     config = TIMEFRAME_CONFIG[timeframe]
     bin_size = config["bin_size"]
     
-    # 1. Fetch Baselines dynamically from the previous 30 days full telemetry
     indoor_baseline = {k: {} for k in IAQ_KEYS}
-    
     if timeframe not in ["30d", "90d"]:
         prev_method = getattr(tb_client, config["prev_method"])
         raw_bases = []
-        for d_id in iaq_devices.values():
+        for d_data in iaq_devices.values():
+            d_id = d_data.get("id") if isinstance(d_data, dict) else d_data
             try:
                 raw_bases.append(prev_method(d_id, IAQ_KEYS))
             except Exception:
@@ -242,6 +241,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
     health_limits_str = (
         "Health_Limits (Absolute):\n"
         f"  CO2: {int(ABSOLUTE_LIMITS['co2'])}ppm | "
+        f"PM1_0: {int(ABSOLUTE_LIMITS['pm1_0'])}µg/m³ | "
         f"PM2_5: {int(ABSOLUTE_LIMITS['pm2_5'])}µg/m³ | "
         f"PM10: {int(ABSOLUTE_LIMITS['pm10'])}µg/m³ | "
         f"TVOC: {int(ABSOLUTE_LIMITS['tvoc'])}ppb"
@@ -255,26 +255,44 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
         current_ctx = get_time_context(now_ts)
         ctx_i_base = {k: indoor_baseline.get(k, {}).get(current_ctx) for k in IAQ_KEYS}
 
+        outdoor_curr = {}
+        if OUTDOOR_PM_ID:
+            try:
+                outdoor_curr = extract_current_values(tb_client.get_now(OUTDOOR_PM_ID, OUTDOOR_KEYS), OUTDOOR_KEYS, is_iaq=False)
+            except Exception:
+                pass
+                
+        outdoor_pm_str = format_baseline_str(outdoor_curr, OUTDOOR_KEYS) if outdoor_curr else "Offline / No Data"
+
         output = [
             "Query_Context:",
             "  Domain: Health & Safety (Indoor_IAQ)",
             f"  Room: {room}",
             "  Timeframe: Now (Snapshot)",
             f"  Active_Context: {current_ctx}",
+        ]
+        output.extend(sensor_info_lines)
+        output.extend([
             "",
             health_limits_str,
+            "",
+            "Outdoor_PM_Context (Now):",
+            f"  {outdoor_pm_str}",
             "",
             f"Statistical_Baseline ({current_ctx}):",
             f"  Indoor_Normals: {format_baseline_str(ctx_i_base, IAQ_KEYS)}",
             "",
             "Current_State_With_Diffs (vs Baseline & Limits):",
             "  Indoor_Current (Room Sensors):"
-        ]
+        ])
         
-        for name, d_id in iaq_devices.items():
-            i_curr = extract_current_values(tb_client.get_now(d_id, IAQ_KEYS), IAQ_KEYS)
+        for name, data in iaq_devices.items():
+            d_id = data.get("id") if isinstance(data, dict) else data
+            zone = data.get("zone", "Unspecified") if isinstance(data, dict) else "Unspecified"
+            
+            i_curr = extract_current_values(tb_client.get_now(d_id, IAQ_KEYS), IAQ_KEYS, is_iaq=True)
             i_parts = [format_val(k, i_curr.get(k), ctx_i_base.get(k)) for k in IAQ_KEYS if i_curr.get(k) is not None]
-            output.append(f"    - {name}: {' | '.join(i_parts) if i_parts else 'Offline / No Data'}")
+            output.append(f"    - {name} (Zone: {zone}): {' | '.join(i_parts) if i_parts else 'Offline / No Data'}")
             
         return "\n".join(output)
 
@@ -282,15 +300,36 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
     # HISTORICAL DATA FETCHING
     # ==========================================
     fetch_method = getattr(tb_client, config["method"])
+    
+    outdoor_df = pd.DataFrame()
+    if OUTDOOR_PM_ID:
+        try:
+            outdoor_df = process_telemetry_to_df(fetch_method(OUTDOOR_PM_ID, OUTDOOR_KEYS), OUTDOOR_KEYS, bin_size, is_iaq=False)
+            # Rename columns immediately so they do not collide with indoor sensors
+            if not outdoor_df.empty:
+                outdoor_df = outdoor_df.rename(columns={k: f"outdoor_{k}" for k in OUTDOOR_KEYS})
+        except Exception as e:
+            logger.warning(f"Failed to fetch historical outdoor PM data: {e}")
+            
     indoor_dfs = []
-    for d_id in iaq_devices.values():
-        df = process_telemetry_to_df(fetch_method(d_id, IAQ_KEYS), IAQ_KEYS, bin_size)
+    for d_data in iaq_devices.values():
+        d_id = d_data.get("id") if isinstance(d_data, dict) else d_data
+        df = process_telemetry_to_df(fetch_method(d_id, IAQ_KEYS), IAQ_KEYS, bin_size, is_iaq=True)
         if not df.empty: indoor_dfs.append(df)
         
     if not indoor_dfs:
         return f"Query_Context:\n  Room: {room}\nError: No historical IAQ data found for timeframe {timeframe}."
         
-    master_df = pd.concat(indoor_dfs).groupby(level=0).median()
+    indoor_df = pd.concat(indoor_dfs).groupby(level=0).median()
+    master_df = indoor_df.join(outdoor_df, how='outer') if not outdoor_df.empty else indoor_df
+    
+    overall_outdoor_mean = {}
+    if not outdoor_df.empty:
+        for k in OUTDOOR_KEYS:
+            if f"outdoor_{k}" in outdoor_df.columns:
+                overall_outdoor_mean[k] = outdoor_df[f"outdoor_{k}"].mean()
+
+    outdoor_pm_str = format_baseline_str(overall_outdoor_mean, OUTDOOR_KEYS) if overall_outdoor_mean else "Offline / No Data"
 
     # ==========================================
     # BRANCH B: 30-DAY / 90-DAY STATISTICAL PROFILE
@@ -306,11 +345,17 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
             "  Domain: Health & Safety (Indoor_IAQ)",
             f"  Room: {room}",
             f"  Timeframe: {timeframe} (Long-Term Matrix Profile)",
+        ]
+        output.extend(sensor_info_lines)
+        output.extend([
             "",
             health_limits_str,
             "",
+            "Outdoor_PM_Context (Timeframe Average):",
+            f"  {outdoor_pm_str}",
+            "",
             "Schedule_Profiling_Matrix:"
-        ]
+        ])
         
         def process_matrix_cell(name: str, mask: pd.Series):
             cell_df = master_df[mask]
@@ -327,22 +372,27 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
             for day, day_data in daily_groups:
                 if day_data.empty: continue
                 day_mean = day_data.mean()
-                spikes = []
+                i_spikes = []
+                o_spikes = []
                 
                 for k in IAQ_KEYS:
                     val = day_mean.get(k)
                     base = cell_base_i.get(k)
-                    is_spike = False
-                    if pd.notna(val):
-                        if base is not None and abs(val - base) >= THRESHOLDS.get(k, 999): is_spike = True
-                        if val > ABSOLUTE_LIMITS.get(k, 99999): is_spike = True
+                    if pd.notna(val) and val > ABSOLUTE_LIMITS.get(k, 99999):
+                        i_spikes.append(format_val(k, val, base))
                         
-                        if is_spike: 
-                            spikes.append(format_val(k, val, base))
+                for k in OUTDOOR_KEYS:
+                    # Map back to the renamed outdoor key
+                    val = day_mean.get(f"outdoor_{k}")
+                    if pd.notna(val) and val > ABSOLUTE_LIMITS.get(k, 99999):
+                        o_spikes.append(format_val(k, val, None))
                             
-                if spikes:
+                if i_spikes or o_spikes:
                     day_str = day.strftime('%Y-%m-%d (%A)')
-                    outliers.append(f"      - '{day_str}': Room_Spikes: {' | '.join(spikes)}")
+                    parts = []
+                    if i_spikes: parts.append(f"Room: {' | '.join(i_spikes)}")
+                    if o_spikes: parts.append(f"Outdoor: {' | '.join(o_spikes)}")
+                    outliers.append(f"      - '{day_str}': Spikes: {' | '.join(parts)}")
             
             if outliers:
                 lines.append("    Outliers (Priority):")
@@ -368,11 +418,17 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
         "  Domain: Health & Safety (Indoor_IAQ)",
         f"  Room: {room}",
         f"  Timeframe: {timeframe} ({bin_size} intervals)",
+    ]
+    output.extend(sensor_info_lines)
+    output.extend([
         "",
         health_limits_str,
         "",
+        "Outdoor_PM_Context (Timeframe Average):",
+        f"  {outdoor_pm_str}",
+        "",
         "Statistical_Baseline (Present Contexts):"
-    ]
+    ])
     
     for ctx in present_contexts:
         ctx_i_base = {k: indoor_baseline.get(k, {}).get(ctx) for k in IAQ_KEYS}
@@ -395,11 +451,11 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
         if period_i_deltas[k]:
             avg_delta = np.mean(period_i_deltas[k])
             avg_val = np.mean(period_i_vals[k])
-            if abs(avg_delta) >= THRESHOLDS.get(k, 0):
-                p_i_shifts.append(f"{DISPLAY_NAMES.get(k, k)} Avg_Shift {avg_val:.1f}{UNITS.get(k, '')} ({avg_delta:+.1f}{UNITS.get(k, '')})")
+            if avg_val > ABSOLUTE_LIMITS.get(k, 99999):
+                p_i_shifts.append(f"{DISPLAY_NAMES.get(k, k)} Avg_Shift {avg_val:.1f}{UNITS.get(k, '')} ({avg_delta:+.1f}{UNITS.get(k, '')}) [LIMIT_EXCEEDED]")
 
     output.append(f"Period_Deviations (Last {timeframe} True Contextual Shift):")
-    output.append(f"  Indoor_Shifts: {' | '.join(p_i_shifts) if p_i_shifts else 'None (Consistent with baselines)'}")
+    output.append(f"  Indoor_Shifts: {' | '.join(p_i_shifts) if p_i_shifts else 'None (Consistent with baselines / Limits not passed)'}")
     output.append("")
     output.append("Timeline_Activity:")
 
@@ -418,29 +474,34 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
             ctx = get_time_context(exact_time)
             time_str = exact_time.strftime('%H:%M')
             bucket_end = (exact_time + pd.to_timedelta(bin_size)).strftime('%H:%M')
+            if bucket_end == "00:00": bucket_end = "24:00"
             
-            spikes = []
+            i_spikes = []
+            o_spikes = []
             
             for k in IAQ_KEYS:
                 val = row.get(k)
                 base = indoor_baseline.get(k, {}).get(ctx)
-                is_spike = False
-                
-                if pd.notna(val):
-                    if base is not None and abs(val - base) >= THRESHOLDS.get(k, 999): is_spike = True
-                    if val > ABSOLUTE_LIMITS.get(k, 99999): is_spike = True
+                if pd.notna(val) and val > ABSOLUTE_LIMITS.get(k, 99999):
+                    i_spikes.append(format_val(k, val, base))
                     
-                    if is_spike: 
-                        spikes.append(format_val(k, val, base))
+            for k in OUTDOOR_KEYS:
+                # Map back to the renamed outdoor key
+                val = row.get(f"outdoor_{k}")
+                if pd.notna(val) and val > ABSOLUTE_LIMITS.get(k, 99999):
+                    o_spikes.append(format_val(k, val, None))
 
-            if spikes:
+            if i_spikes or o_spikes:
                 if stable_intervals > 0:
-                    stable_periods.append(f"      - '{stable_start} to {time_str}' ({stable_intervals} intervals): State matched Baseline.")
+                    stable_periods.append(f"      - '{stable_start} to {time_str}' ({stable_intervals} intervals): State below Health_Limits.")
                     stable_intervals = 0
                     stable_start = None
                 
                 anomalies.append(f"      - bucket: '{time_str} to {bucket_end}' (Context: {ctx})")
-                anomalies.append(f"        Room_Spikes: {' | '.join(spikes)}")
+                parts = []
+                if i_spikes: parts.append(f"Room: {' | '.join(i_spikes)}")
+                if o_spikes: parts.append(f"Outdoor: {' | '.join(o_spikes)}")
+                anomalies.append(f"        Spikes: {' | '.join(parts)}")
             else:
                 if stable_start is None: stable_start = time_str
                 stable_intervals += 1
@@ -448,7 +509,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
         if stable_intervals > 0:
             end_of_day = (day_start + pd.Timedelta(days=1)).strftime('%H:%M')
             if end_of_day == "00:00": end_of_day = "24:00"
-            stable_periods.append(f"      - '{stable_start} to {end_of_day}' ({stable_intervals} intervals): State matched Baseline.")
+            stable_periods.append(f"      - '{stable_start} to {end_of_day}' ({stable_intervals} intervals): State below Health_Limits.")
 
         output.append(f"  '{day_key}':")
         if anomalies:
@@ -473,17 +534,26 @@ if __name__ == "__main__":
     try:
         print("\n[Testing Historical (now)]")
         print(get_air_quality.invoke({"room": "restaurant", "timeframe": "now"}))
+        print("\n" + "="*50)
         
+        print("\n[Testing Historical (2h)]")
+        print(get_air_quality.invoke({"room": "restaurant", "timeframe": "2h"}))
         print("\n" + "="*50)
         
         print("\n[Testing Historical (24h)]")
         print(get_air_quality.invoke({"room": "restaurant", "timeframe": "24h"}))
+        print("\n" + "="*50)
         
+        print("\n[Testing Historical (7d)]")
+        print(get_air_quality.invoke({"room": "restaurant", "timeframe": "7d"}))
         print("\n" + "="*50)
         
         print("\n[Testing Historical (30d)]")
         print(get_air_quality.invoke({"room": "restaurant", "timeframe": "30d"}))
-
+        print("\n" + "="*50)
+        
+        print("\n[Testing Historical (90d)]")
+        print(get_air_quality.invoke({"room": "restaurant", "timeframe": "90d"}))
         print("\n" + "-"*50)
         print("All Air Quality tool tests completed successfully.")
         
