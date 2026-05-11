@@ -93,19 +93,19 @@ class KnowledgeQueryInput(BaseModel):
         ..., 
         description="The semantic search query. E.g., 'What are the office hours?' or 'Where is the server room?'"
     )
-    room_id: Optional[List[RoomEnum]] = Field(
+    room_id: Optional[List[RoomEnum]] = Field(  # type: ignore
         None, 
         description="STRICT filter by exact room IDs. Choose from the available options if mentioned."
     )
-    floor: Optional[List[FloorEnum]] = Field(
+    floor: Optional[List[FloorEnum]] = Field(   # type: ignore
         None, 
         description="STRICT filter by floor level. Choose from the available options."
     )
-    doc_type: Optional[DocTypeEnum] = Field(
+    doc_type: Optional[DocTypeEnum] = Field(    # type: ignore
         None, 
         description="STRICT filter by document type. Choose from the available options."
     )
-    person: Optional[PersonEnum] = Field(
+    person: Optional[PersonEnum] = Field(   # type: ignore
         None,
         description="STRICT filter by a specific person's name. Choose from the available options."
     )
@@ -116,10 +116,10 @@ class KnowledgeQueryInput(BaseModel):
 @tool("search_knowledge_base", args_schema=KnowledgeQueryInput)
 def search_knowledge_base(
     query: str, 
-    room_id: Optional[List[RoomEnum]] = None, 
-    floor: Optional[List[FloorEnum]] = None, 
-    doc_type: Optional[DocTypeEnum] = None, 
-    person: Optional[PersonEnum] = None
+    room_id: Optional[List[RoomEnum]] = None,   # type: ignore
+    floor: Optional[List[FloorEnum]] = None,    # type: ignore
+    doc_type: Optional[DocTypeEnum] = None,     # type: ignore
+    person: Optional[PersonEnum] = None         # type: ignore
 ) -> str:
     """
     Queries the Smart Campus Vector Database. 
