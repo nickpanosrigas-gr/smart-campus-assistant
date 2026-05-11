@@ -20,6 +20,7 @@ dependencies = [
     "langfuse<3.0.0",
     "astral>=3.2",
     "pytz>=2026.2",
+    "python-frontmatter>=1.1.0",
 ]
 
 [build-system]

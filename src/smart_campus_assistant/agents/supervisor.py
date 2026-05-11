@@ -11,6 +11,7 @@ from src.smart_campus_assistant.config.settings import settings
 from src.smart_campus_assistant.agents.telemetry import run_telemetry_agent
 from src.smart_campus_assistant.agents.scheduler import run_scheduler_agent
 from src.smart_campus_assistant.agents.facilities import run_facilities_agent
+from src.smart_campus_assistant.tools.knowledge import search_knowledge_base
 
 logger = logging.getLogger(__name__)
 
@@ -62,28 +63,19 @@ def ask_rule_agent(query: str) -> str:
     logger.info(f"[Rule Node]: Drafting Rule Chain for: '{query}'")
     return "MOCK_DATA: Successfully drafted rule."
 
-@tool
-def query_knowledge_base(query: str) -> str:
-    """
-    Call this tool to search the Vector Database for manuals, topologies, or SOPs.
-    CRITICAL: Your 'query' MUST be a concise list of search keywords, not a conversational sentence.
-    - BAD Query: 'How do I reset the main router in the data center?'
-    - GOOD Query: 'Data center main router hard reset procedure SOP.'
-    """
-    logger.info(f"[Knowledge Base]: Searching Vector DB for: '{query}'")
-    return "MOCK_DATA: Found manual."
-
 
 # ==========================================
 # 2. CONFIGURE THE SUPERVISOR
 # ==========================================
 
+# I've updated the prompt to instruct the LLM on how to use the metadata filters!
 supervisor_prompt = """You are the Supreme Supervisor Agent for a Smart Campus.
 Your job is to route the user's request to the correct sub-agent, evaluate the raw data they return, and synthesize a clear, helpful final answer.
 
 CRITICAL INSTRUCTIONS:
 1. TRANSLATION RULE: Never pass the user's raw conversational question to a sub-agent. You must translate their intent into a highly specific, declarative data-fetching command.
 2. PARAMETER EXTRACTION: You must extract concrete parameters from the user's request (e.g., specific room names, times, days, names) and embed them explicitly in the 'query' you send to the sub-agent. 
+   - If using the Knowledge Base, explicitly pass the metadata filters (room_id, floor, doc_type, person) to narrow down the search.
 3. MULTI-ROUTING: If the user asks for multiple distinct things, you MUST trigger multiple sub-agent tools simultaneously.
 4. REFLECTION & RETRY (CRITICAL): When a sub-agent returns data, evaluate if it actually answers the user's question. 
    - If the data is missing, incomplete, or returns an error (e.g., "Room not found"), DO NOT give up. 
@@ -93,7 +85,7 @@ CRITICAL INSTRUCTIONS:
 6. FINAL FALLBACK: Only if you have retried multiple times and still cannot find the data, apologize to the user and explain exactly what you tried to look up and why it failed."""
 
 # ==========================================
-# 2. CONFIGURE THE SUPERVISOR
+# 3. INITIALIZE OLLAMA AND BIND TOOLS
 # ==========================================
 
 # Initialize Ollama
@@ -106,8 +98,14 @@ llm = ChatOllama(
     disable_thinking=True
 )
 
-# Bind the sub-agents to the LLM
-sub_systems = [ask_telemetry_agent, ask_scheduler_agent, ask_facilities_agent, ask_rule_agent, query_knowledge_base]
+# Bind the sub-agents AND the real search_knowledge_base tool to the LLM
+sub_systems = [
+    ask_telemetry_agent, 
+    ask_scheduler_agent, 
+    ask_facilities_agent, 
+    ask_rule_agent, 
+    search_knowledge_base
+]
 supervisor_llm = llm.bind_tools(sub_systems)
 
 def run_supervisor(user_query: str, config: dict = None) -> str:
@@ -146,7 +144,7 @@ def run_supervisor(user_query: str, config: dict = None) -> str:
             
     logger.info("Reading raw data and synthesizing final answer...")
     
-    # 2. Pass the config parameter into the final LLM call as well
+    # Pass the config parameter into the final LLM call as well
     final_ai_msg = supervisor_llm.invoke(messages, config=config)
     
     return final_ai_msg.content
@@ -158,13 +156,12 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s -  %(levelname)s - %(message)s')
     logger.info("Testing Supervisor Agent (Ollama)...")
     
-    # Test query
-    user_query = "what is the highest number of people in the restaurant this year"
+    # Test query using the new Knowledge capabilities
+    user_query = "Where is Dr. Angeliki Presvelou's office and what sensors are in it?"
     logger.info(f"User Query: {user_query}")
     
     # Run the Supervisor
     final_output = run_supervisor(user_query)
     
     logger.info("FINAL SUPERVISOR RESPONSE:")
-    # We leave one print here just to display the final output cleanly in the terminal during testing
     print(final_output)
