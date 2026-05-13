@@ -3,7 +3,7 @@ from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from src.smart_campus_assistant.config.settings import settings
-from src.smart_campus_assistant.tools.knowledge import search_knowledge_base
+from src.smart_campus_assistant.tools.topology import search_topology # Updated import
 
 logger = logging.getLogger(__name__)
 
@@ -16,28 +16,28 @@ llm = ChatOllama(
     disable_thinking=True
 )
 
-tools = [search_knowledge_base]
+tools = [search_topology]
 llm_with_tools = llm.bind_tools(tools)
 
-system_prompt = """You are the Knowledge Routing Node for a Smart Campus. 
-Your ONLY job is to analyze the command from the Supervisor and trigger the search_knowledge_base tool.
+system_prompt = """You are the Topology Routing Node for a Smart Campus. 
+Your ONLY job is to analyze the command from the Supervisor and trigger the search_topology tool to find building layouts, room details, and faculty locations.
 
 CRITICAL INSTRUCTIONS:
 1. Do not attempt to answer the user yourself; just call the tool. Your raw tool output will be sent back to the Supervisor.
 2. Extract any specific floors, rooms, document types, or people from the query and apply them as STRICT filters.
 3. If the Supervisor is looking for a broad layout (e.g., 'all rooms on the third floor'), set limit to 'big'."""
 
-def run_knowledge_agent(query: str) -> str:
+def run_topology_agent(query: str) -> str:
     messages = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=query) 
     ]
     
-    logger.info("Invoking LLM for knowledge base routing...")
+    logger.info("Invoking LLM for topology routing...")
     ai_msg = llm_with_tools.invoke(messages, config={"callbacks": []})
     
     if not ai_msg.tool_calls:
-        logger.warning("LLM did not trigger the knowledge tool.")
+        logger.warning("LLM did not trigger the topology tool.")
         return f"Error: The LLM did not trigger any tools. Response: {ai_msg.content}"
     
     results = []
@@ -48,7 +48,7 @@ def run_knowledge_agent(query: str) -> str:
         logger.info(f"Triggering {tool_name} with args: {tool_args}")
         
         try:
-            raw_output = search_knowledge_base.invoke(tool_args)
+            raw_output = search_topology.invoke(tool_args)
             results.append(str(raw_output))
         except Exception as e:
             logger.error(f"Error executing {tool_name}: {e}")

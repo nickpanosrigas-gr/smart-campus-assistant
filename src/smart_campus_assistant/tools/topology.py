@@ -60,10 +60,10 @@ PersonEnum = Enum("PersonEnum", {sanitize_key("PERSON", p): p for p in LIVE_PEOP
 # ==========================================
 # 3. DEFINE THE PYDANTIC SCHEMA
 # ==========================================
-class KnowledgeQueryInput(BaseModel):
-    query: str = Field(
-        ..., 
-        description="The semantic search query. E.g., 'What are the office hours?' or 'Where is the server room?'"
+class TopologyQueryInput(BaseModel):
+    query: Optional[str] = Field(
+        default="", 
+        description="The semantic search query. E.g., 'What are the office hours?' Leave empty if only using filters."
     )
     room_id: Optional[List[RoomEnum]] = Field(  # type: ignore
         None, 
@@ -83,14 +83,14 @@ class KnowledgeQueryInput(BaseModel):
     )
     limit: Literal["normal", "big"] = Field(
         default="normal",
-        description="Size of the result set. 'normal' returns 5 full documents (best for reading specific details). 'big' returns 10 truncated documents (best for mapping out room layouts or topology)."
+        description="Size of the result set. 'normal' returns 5 full documents. 'big' returns 10 full documents (best for mapping out broad room layouts or topology)."
     )
 
 # ==========================================
 # 4. DEFINE THE TOOL
 # ==========================================
-@tool("search_knowledge_base", args_schema=KnowledgeQueryInput)
-def search_knowledge_base(
+@tool("search_topology", args_schema=TopologyQueryInput)
+def search_topology(
     query: str, 
     room_id: Optional[List[RoomEnum]] = None,   # type: ignore
     floor: Optional[List[FloorEnum]] = None,    # type: ignore
@@ -100,7 +100,7 @@ def search_knowledge_base(
 ) -> str:
     """
     Queries the Smart Campus Vector Database. 
-    Provides information on building topology, room layouts, faculty offices, schedules, and sensor manuals.
+    Provides information on building topology, room layouts, faculty offices, and schedules.
     """
     
     filters = {}
@@ -140,10 +140,6 @@ def search_knowledge_base(
         
         content = meta.get("page_content", meta.get("text", "No text content available."))
         
-        # AUTO-TRUNCATION LOGIC: Protects the context window under the hood
-        if limit == "big" and len(content) > 150:
-            content = content[:150] + " ... [CONTENT TRUNCATED IN 'BIG' MODE. TO READ FULL TEXT, QUERY AGAIN WITH LIMIT='normal']"
-            
         output.append(f"Content:\n{content}\n")
         output.append("-" * 40 + "\n")
         

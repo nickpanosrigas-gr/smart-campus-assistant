@@ -11,7 +11,7 @@ from src.smart_campus_assistant.config.settings import settings
 from src.smart_campus_assistant.agents.telemetry import run_telemetry_agent
 from src.smart_campus_assistant.agents.scheduler import run_scheduler_agent
 from src.smart_campus_assistant.agents.facilities import run_facilities_agent
-from src.smart_campus_assistant.agents.knowledge import run_knowledge_agent
+from src.smart_campus_assistant.agents.topology import run_topology_agent
 
 logger = logging.getLogger(__name__)
 
@@ -55,13 +55,13 @@ def ask_facilities_agent(query: str) -> str:
     return run_facilities_agent(query)
 
 @tool
-def ask_knowledge_agent(query: str) -> str:
+def ask_topology_agent(query: str) -> str:
     """
-    Call this agent to search the Vector Database for building layouts, room topologies, faculty offices, and hardware manuals.
+    Call this agent to search the Campus Directory for building layouts, room topologies, and faculty offices.
     CRITICAL: Your 'query' MUST explicitly state what you are looking for (e.g., 'Find all rooms on the third floor' or 'What are Dr. Smith's office hours?').
     """
-    logger.info(f"[Knowledge Node]: Hitting Qdrant for query: '{query}'")
-    return run_knowledge_agent(query)
+    logger.info(f"[Topology Node]: Hitting Qdrant for query: '{query}'")
+    return run_topology_agent(query)
 
 @tool
 def ask_rule_agent(query: str) -> str:
@@ -83,8 +83,8 @@ supervisor_prompt = """You are the Supreme Supervisor Agent for a Smart Campus.
 Your job is to route the user's request to the correct sub-agent, evaluate the raw data they return, and synthesize a clear, helpful final answer.
 
 CRITICAL INSTRUCTIONS:
-1. ORDER OF OPERATIONS: If the user asks for data about a broad area (e.g., "second floor") and you do not know the exact room IDs, you MUST use the knowledge tool FIRST to understand the building layout. ONLY AFTER you know the exact room IDs should you call the Telemetry or Facilities agents.
-2. EXPLICIT INTENT ONLY (CRITICAL): DO NOT fetch telemetry (occupancy, temperature, etc.) unless the user EXPLICITLY asks for current conditions, data, or metrics. If they just ask "what rooms are on the 5th floor", ONLY use the knowledge base and STOP.
+1. ORDER OF OPERATIONS: If the user asks for data about a broad area (e.g., "second floor") and you do not know the exact room IDs, you MUST use the topology tool FIRST to understand the building layout. ONLY AFTER you know the exact room IDs should you call the Telemetry or Facilities agents.
+2. EXPLICIT INTENT ONLY (CRITICAL): DO NOT fetch telemetry (occupancy, temperature, etc.) unless the user EXPLICITLY asks for current conditions, data, or metrics. If they just ask "what rooms are on the 5th floor", ONLY use the topology agent and STOP.
 3. ACCEPT MISSING SENSORS (CRITICAL): If a telemetry or facilities tool returns "Error: No sensors found" or "No data", DO NOT RETRY. Accept that the room has no sensors for that metric and simply inform the user.
 4. STRICT TOOL SEPARATION: 
    - TELEMETRY is for environmental data (temperatures, windows, doors, occupancy, air quality, lights).
@@ -111,7 +111,7 @@ sub_systems = [
     ask_telemetry_agent, 
     ask_scheduler_agent, 
     ask_facilities_agent, 
-    ask_rule_agent, 
+    ask_topology_agent, 
     ask_rule_agent
 ]
 supervisor_llm = llm.bind_tools(sub_systems)
