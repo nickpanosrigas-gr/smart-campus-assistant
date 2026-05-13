@@ -11,7 +11,7 @@ from src.smart_campus_assistant.config.settings import settings
 from src.smart_campus_assistant.agents.telemetry import run_telemetry_agent
 from src.smart_campus_assistant.agents.scheduler import run_scheduler_agent
 from src.smart_campus_assistant.agents.facilities import run_facilities_agent
-from src.smart_campus_assistant.tools.knowledge import search_knowledge_base
+from src.smart_campus_assistant.agents.knowledge import run_knowledge_agent
 
 logger = logging.getLogger(__name__)
 
@@ -22,10 +22,11 @@ logger = logging.getLogger(__name__)
 @tool
 def ask_telemetry_agent(query: str) -> str:
     """
-    Call this agent to fetch raw sensor data, historical metrics, or current states (occupancy, lights, temp, humidity, air quality).
-    CRITICAL: Your 'query' MUST explicitly state the target ROOM NAME and the TIMEFRAME.
-    - BAD Query: 'How is the air quality?'
-    - GOOD Query: 'Fetch air quality for the restaurant for timeframe: now.'
+    Call this agent to fetch raw sensor data, historical metrics, or current states (occupancy, lights, temp, humidity, air quality, doors, windows).
+    CRITICAL: Use this for ALL environmental and physical state queries.
+    Your 'query' MUST explicitly state the target ROOM NAME and the TIMEFRAME.
+    - BAD Query: 'Are the windows open?'
+    - GOOD Query: 'Fetch window status and temperature for room 2.1 for timeframe: now.'
     """
     logger.info(f"[Telemetry Node]: Hitting API for query: '{query}'")
     return run_telemetry_agent(query)
@@ -33,10 +34,10 @@ def ask_telemetry_agent(query: str) -> str:
 @tool
 def ask_scheduler_agent(query: str) -> str:
     """
-    Call this agent to fetch academic schedules, class times, and university programs.
-    CRITICAL: Your 'query' MUST explicitly state the TARGET (exact room, exact teacher, exact course, or semester) and the TIMEFRAME (now, today, week, Monday, etc.).
+    Call this agent to fetch academic schedules, class times, university programs, and holidays (useful for cross-referencing occupancy).
+    CRITICAL: Your 'query' MUST explicitly state the TARGET (exact room, teacher, course) and the TIMEFRAME (now, today, week, etc.).
     - BAD Query: 'Where is the CS class?'
-    - GOOD Query: 'Find the room and time for course: Introduction to Computer Science for timeframe: week.'
+    - GOOD Query: 'Find the room and time for course: Intro to CS for timeframe: week.'
     """
     logger.info(f"[Scheduler Node]: Hitting Registry for query: '{query}'")
     return run_scheduler_agent(query)
@@ -44,13 +45,23 @@ def ask_scheduler_agent(query: str) -> str:
 @tool
 def ask_facilities_agent(query: str) -> str:
     """
-    Call this agent for energy infrastructure (power outages, kWh consumption, live kW load) AND hardware diagnostics (offline sensors, battery levels, network health).
-    CRITICAL: Your 'query' MUST explicitly state the TARGET (e.g., HVAC, 3rd_floor, kitchen sensors) and the TIMEFRAME (now, 7d, etc.).
-    - BAD Query: 'Is the AC broken?'
-    - GOOD Query: 'Check live energy status and run diagnostics on the HVAC for timeframe: now.'
+    Call this agent for energy infrastructure (kWh consumption, live kW load) AND hardware diagnostics (offline sensors, battery levels, network health).
+    CRITICAL: DO NOT use this for environmental metrics (temperatures, windows, occupancy). Use this ONLY to check if physical sensors are broken or for power loads.
+    Your 'query' MUST explicitly state the TARGET and the TIMEFRAME.
+    - BAD Query: 'Are the windows open in the kitchen?'
+    - GOOD Query: 'Check live energy status and run hardware diagnostics on the kitchen sensors for timeframe: now.'
     """
     logger.info(f"[Facilities Node]: Running infrastructure check for: '{query}'")
     return run_facilities_agent(query)
+
+@tool
+def ask_knowledge_agent(query: str) -> str:
+    """
+    Call this agent to search the Vector Database for building layouts, room topologies, faculty offices, and hardware manuals.
+    CRITICAL: Your 'query' MUST explicitly state what you are looking for (e.g., 'Find all rooms on the third floor' or 'What are Dr. Smith's office hours?').
+    """
+    logger.info(f"[Knowledge Node]: Hitting Qdrant for query: '{query}'")
+    return run_knowledge_agent(query)
 
 @tool
 def ask_rule_agent(query: str) -> str:
@@ -68,21 +79,19 @@ def ask_rule_agent(query: str) -> str:
 # 2. CONFIGURE THE SUPERVISOR
 # ==========================================
 
-# I've updated the prompt to instruct the LLM on how to use the metadata filters!
 supervisor_prompt = """You are the Supreme Supervisor Agent for a Smart Campus.
 Your job is to route the user's request to the correct sub-agent, evaluate the raw data they return, and synthesize a clear, helpful final answer.
 
 CRITICAL INSTRUCTIONS:
-1. TRANSLATION RULE: Never pass the user's raw conversational question to a sub-agent. You must translate their intent into a highly specific, declarative data-fetching command.
-2. PARAMETER EXTRACTION: You must extract concrete parameters from the user's request (e.g., specific room names, times, days, names) and embed them explicitly in the 'query' you send to the sub-agent. 
-   - If using the Knowledge Base, explicitly pass the metadata filters (room_id, floor, doc_type, person) to narrow down the search.
-3. MULTI-ROUTING: If the user asks for multiple distinct things, you MUST trigger multiple sub-agent tools simultaneously.
-4. REFLECTION & RETRY (CRITICAL): When a sub-agent returns data, evaluate if it actually answers the user's question. 
-   - If the data is missing, incomplete, or returns an error (e.g., "Room not found"), DO NOT give up. 
-   - You MUST generate a NEW tool call with different, adjusted parameters (e.g., try a different timeframe, check a different room, or use a broader search term). 
-   - Keep retrying until you have the correct data or have exhausted logical alternatives.
-5. SYNTHESIS: Once you have successfully gathered all necessary data, synthesize it into a clean, conversational response. Do not expose raw YAML/JSON formatting to the user.
-6. FINAL FALLBACK: Only if you have retried multiple times and still cannot find the data, apologize to the user and explain exactly what you tried to look up and why it failed."""
+1. ORDER OF OPERATIONS: If the user asks for data about a broad area (e.g., "second floor") and you do not know the exact room IDs, you MUST use the knowledge tool FIRST to understand the building layout. ONLY AFTER you know the exact room IDs should you call the Telemetry or Facilities agents.
+2. EXPLICIT INTENT ONLY (CRITICAL): DO NOT fetch telemetry (occupancy, temperature, etc.) unless the user EXPLICITLY asks for current conditions, data, or metrics. If they just ask "what rooms are on the 5th floor", ONLY use the knowledge base and STOP.
+3. ACCEPT MISSING SENSORS (CRITICAL): If a telemetry or facilities tool returns "Error: No sensors found" or "No data", DO NOT RETRY. Accept that the room has no sensors for that metric and simply inform the user.
+4. STRICT TOOL SEPARATION: 
+   - TELEMETRY is for environmental data (temperatures, windows, doors, occupancy, air quality, lights).
+   - FACILITIES is ONLY for hardware health, offline sensors, and energy power loads. Do NOT use Facilities for temperatures or windows.
+5. PARAMETER EXTRACTION: You must extract concrete parameters from the user's request (specific room names, times, days) and embed them explicitly in the 'query' you send to the sub-agent.
+6. REFLECTION & RETRY: If a tool call fails because you formatted the parameters incorrectly, generate a NEW tool call with adjusted parameters. However, see Rule 3: DO NOT retry if the error simply states there are no sensors.
+7. SYNTHESIS: Once you have successfully gathered all necessary data, synthesize it into a clean, conversational response. Do not expose raw YAML/JSON formatting to the user."""
 
 # ==========================================
 # 3. INITIALIZE OLLAMA AND BIND TOOLS
@@ -98,13 +107,12 @@ llm = ChatOllama(
     disable_thinking=True
 )
 
-# Bind the sub-agents AND the real search_knowledge_base tool to the LLM
 sub_systems = [
     ask_telemetry_agent, 
     ask_scheduler_agent, 
     ask_facilities_agent, 
     ask_rule_agent, 
-    search_knowledge_base
+    ask_rule_agent
 ]
 supervisor_llm = llm.bind_tools(sub_systems)
 

@@ -8,6 +8,7 @@ from src.smart_campus_assistant.tools.lights import get_ambient_lights
 from src.smart_campus_assistant.tools.occupancy import get_occupancy
 from src.smart_campus_assistant.tools.temp_humidity import get_temp_humidity
 from src.smart_campus_assistant.tools.air_quality import get_air_quality
+from src.smart_campus_assistant.tools.door_window import get_door_window_status
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,7 @@ llm = ChatOllama(
 )
 
 # 2. Bind the tools strictly to the LLM
-tools = [get_ambient_lights, get_occupancy, get_temp_humidity, get_air_quality]
+tools = [get_ambient_lights, get_occupancy, get_temp_humidity, get_air_quality, get_door_window_status]
 llm_with_tools = llm.bind_tools(tools)
 
 # 3. System Prompt (Focused strictly on routing, not conversing)
