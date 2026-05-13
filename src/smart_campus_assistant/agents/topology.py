@@ -3,7 +3,7 @@ from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage, HumanMessage
 
 from src.smart_campus_assistant.config.settings import settings
-from src.smart_campus_assistant.tools.topology import search_topology # Updated import
+from src.smart_campus_assistant.tools.topology import search_topology
 
 logger = logging.getLogger(__name__)
 
