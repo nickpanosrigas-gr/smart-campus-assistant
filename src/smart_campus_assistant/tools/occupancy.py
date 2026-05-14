@@ -711,6 +711,7 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> str:
                 motion_active = row['primary'] > 0
                 state_str = "Active" if motion_active else "Idle"
                 combined_state = state_str
+                current_prim_state = state_str
             else:
                 p_val = row['primary']
                 motion_active = row['motion'] > 0
