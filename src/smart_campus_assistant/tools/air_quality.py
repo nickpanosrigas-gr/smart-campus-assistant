@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 import logging
 
 # Import project singletons
+from src.smart_campus_assistant.config.settings import settings
 from src.smart_campus_assistant.utils.device_registry import registry
 from src.smart_campus_assistant.clients.thingsboard_client import tb_client
 
@@ -110,7 +111,7 @@ def format_val(key: str, val: float, baseline: float = None) -> str:
     if baseline is not None and not pd.isna(baseline):
         diff = val - baseline
         diff_str = f"{diff:+.1f}" if diff % 1 else f"{int(diff):+}"
-        return f"{name} {val_str}{unit} ({diff_str}{unit}){limit_tag}"
+        return f"{name}: {val_str}{unit} ({diff_str}{unit}){limit_tag}"
         
     return f"{name}: {val_str}{unit}{limit_tag}"
 
@@ -139,14 +140,15 @@ def process_telemetry_to_df(raw_data: Dict, keys: List[str], bin_size: str = Non
             if not records: continue
                 
             df = pd.DataFrame(records)
+            
             df['value'] = pd.to_numeric(df['value'], errors='coerce')
             
             df['value'] = df['value'].apply(lambda x: clean_iaq_value(key, x, is_iaq))
             df.dropna(subset=['value'], inplace=True)
-            
+
             if df.empty: continue
-            
-            df['datetime'] = pd.to_datetime(df['ts'], unit='ms')
+
+            df['datetime'] = pd.to_datetime(df['ts'], unit='ms', utc=True).dt.tz_convert(settings.TIMEZONE)
             df.set_index('datetime', inplace=True)
             df.rename(columns={'value': key}, inplace=True)
             df.drop(columns=['ts'], inplace=True)
@@ -155,7 +157,8 @@ def process_telemetry_to_df(raw_data: Dict, keys: List[str], bin_size: str = Non
     if not dfs: return pd.DataFrame()
     combined = pd.concat(dfs, axis=1, sort=True)
     if bin_size:
-        combined = combined.resample(bin_size).median()
+        # Added numeric_only=True to prevent future Pandas warnings
+        combined = combined.resample(bin_size).median(numeric_only=True)
     return combined
 
 def extract_current_values(raw_data: Dict, keys: List[str], is_iaq: bool = True) -> Dict[str, float]:
@@ -221,7 +224,8 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
     sensor_info_lines = [f"  Sensors_Configured: {len(iaq_devices)}"]
     for name, data in iaq_devices.items():
         zone = data.get("zone", "Unspecified") if isinstance(data, dict) else "Unspecified"
-        sensor_info_lines.append(f"    - {name}: Zone: {zone}")
+        tag = data.get("tag", "Unspecified") if isinstance(data, dict) else "Unspecified"
+        sensor_info_lines.append(f"    - {name} (IAQ): Zone: {zone}, Tag: {tag}")
 
     config = TIMEFRAME_CONFIG[timeframe]
     bin_size = config["bin_size"]
@@ -269,6 +273,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
             "  Domain: Health & Safety (Indoor_IAQ)",
             f"  Room: {room}",
             "  Timeframe: Now (Snapshot)",
+            f"  Current_Time: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}",
             f"  Active_Context: {current_ctx}",
         ]
         output.extend(sensor_info_lines)
@@ -345,6 +350,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
             "  Domain: Health & Safety (Indoor_IAQ)",
             f"  Room: {room}",
             f"  Timeframe: {timeframe} (Long-Term Matrix Profile)",
+            f"  Current_Time: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}",
         ]
         output.extend(sensor_info_lines)
         output.extend([
@@ -359,13 +365,13 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
         
         def process_matrix_cell(name: str, mask: pd.Series):
             cell_df = master_df[mask]
-            if cell_df.empty: return [f"  {name}:", "    No data."]
+            if cell_df.empty: return [f"    {name}:", "      Baseline: No data.", "      Outliers: None detected."]
             
             cell_base_i = cell_df[IAQ_KEYS].mean().to_dict() if not cell_df[IAQ_KEYS].empty else {}
             
-            lines = [f"  {name}:"]
-            lines.append("    Statistical_Baseline (Background):")
-            lines.append(f"      Indoor_Normals: {format_baseline_str(cell_base_i, IAQ_KEYS)}")
+            lines = [f"    {name}:"]
+            # Standardized Baseline Key
+            lines.append(f"      Baseline: {format_baseline_str(cell_base_i, IAQ_KEYS)}")
             
             outliers = []
             daily_groups = cell_df.groupby(pd.Grouper(freq='D'))
@@ -392,20 +398,25 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
                     parts = []
                     if i_spikes: parts.append(f"Room: {' | '.join(i_spikes)}")
                     if o_spikes: parts.append(f"Outdoor: {' | '.join(o_spikes)}")
-                    outliers.append(f"      - '{day_str}': Spikes: {' | '.join(parts)}")
+                    # Indented for Nested Matrix
+                    outliers.append(f"        - '{day_str}': Spikes: {' | '.join(parts)}")
             
+            # Standardized Outliers Key
             if outliers:
-                lines.append("    Outliers (Priority):")
+                lines.append("      Outliers:")
                 lines.extend(outliers)
             else:
-                lines.append("    Outliers (Priority): None")
+                lines.append("      Outliers: None detected.")
                 
             return lines
 
-        output.extend(process_matrix_cell("Weekdays (Mon-Fri) Working_Hours (08:00-22:00)", is_weekday & is_working))
-        output.extend(process_matrix_cell("Weekdays (Mon-Fri) Non-Working_Hours (22:00-08:00)", is_weekday & is_non_working))
-        output.extend(process_matrix_cell("Weekends (Sat-Sun) Working_Hours (08:00-22:00)", is_weekend & is_working))
-        output.extend(process_matrix_cell("Weekends (Sat-Sun) Non-Working_Hours (22:00-08:00)", is_weekend & is_non_working))
+        # Applied Nested YAML Layout Structure
+        output.append("  Weekdays (Mon-Fri):")
+        output.extend(process_matrix_cell("Working_Hours (08:00-22:00)", is_weekday & is_working))
+        output.extend(process_matrix_cell("Non-Working_Hours (22:00-08:00)", is_weekday & is_non_working))
+        output.append("  Weekends (Sat-Sun):")
+        output.extend(process_matrix_cell("Working_Hours (08:00-22:00)", is_weekend & is_working))
+        output.extend(process_matrix_cell("Non-Working_Hours (22:00-08:00)", is_weekend & is_non_working))
         
         return "\n".join(output)
 
@@ -418,6 +429,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
         "  Domain: Health & Safety (Indoor_IAQ)",
         f"  Room: {room}",
         f"  Timeframe: {timeframe} ({bin_size} intervals)",
+        f"  Current_Time: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}",
     ]
     output.extend(sensor_info_lines)
     output.extend([
@@ -452,9 +464,9 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
             avg_delta = np.mean(period_i_deltas[k])
             avg_val = np.mean(period_i_vals[k])
             if avg_val > ABSOLUTE_LIMITS.get(k, 99999):
-                p_i_shifts.append(f"{DISPLAY_NAMES.get(k, k)} Avg_Shift {avg_val:.1f}{UNITS.get(k, '')} ({avg_delta:+.1f}{UNITS.get(k, '')}) [LIMIT_EXCEEDED]")
+                p_i_shifts.append(f"{DISPLAY_NAMES.get(k, k)}: {avg_val:.1f}{UNITS.get(k, '')} ({avg_delta:+.1f}{UNITS.get(k, '')}) [LIMIT_EXCEEDED]")
 
-    output.append(f"Period_Deviations (Last {timeframe} True Contextual Shift):")
+    output.append(f"Period_Deviations (Last {timeframe}):")
     output.append(f"  Indoor_Shifts: {' | '.join(p_i_shifts) if p_i_shifts else 'None (Consistent with baselines / Limits not passed)'}")
     output.append("")
     output.append("Timeline_Activity:")
@@ -468,6 +480,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
         anomalies = []
         stable_intervals = 0
         stable_start = None
+        stable_end = None
         stable_periods = []
         
         for exact_time, row in day_df.iterrows():
@@ -496,20 +509,21 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
                     stable_periods.append(f"      - '{stable_start} to {time_str}' ({stable_intervals} intervals): State below Health_Limits.")
                     stable_intervals = 0
                     stable_start = None
+                    stable_end = None
                 
-                anomalies.append(f"      - bucket: '{time_str} to {bucket_end}' (Context: {ctx})")
+                anomalies.append(f"      - bucket: '{time_str} - {bucket_end}' (Context: {ctx})")
                 parts = []
-                if i_spikes: parts.append(f"Room: {' | '.join(i_spikes)}")
+                if i_spikes: parts.append(f"Indoor: {' | '.join(i_spikes)}")
                 if o_spikes: parts.append(f"Outdoor: {' | '.join(o_spikes)}")
                 anomalies.append(f"        Spikes: {' | '.join(parts)}")
             else:
                 if stable_start is None: stable_start = time_str
+                stable_end = bucket_end
                 stable_intervals += 1
                 
         if stable_intervals > 0:
-            end_of_day = (day_start + pd.Timedelta(days=1)).strftime('%H:%M')
-            if end_of_day == "00:00": end_of_day = "24:00"
-            stable_periods.append(f"      - '{stable_start} to {end_of_day}' ({stable_intervals} intervals): State below Health_Limits.")
+            if stable_end == "00:00": stable_end = "24:00"
+            stable_periods.append(f"      - '{stable_start} to {stable_end}' ({stable_intervals} intervals): State below Health_Limits.")
 
         output.append(f"  '{day_key}':")
         if anomalies:
@@ -532,30 +546,9 @@ if __name__ == "__main__":
     print("-" * 50)
     
     try:
-        print("\n[Testing Historical (now)]")
-        print(get_air_quality.invoke({"room": "restaurant", "timeframe": "now"}))
+        print("\n[Testing]")
+        print(get_air_quality.invoke({"room": "4.9", "timeframe": "30d"}))
         print("\n" + "="*50)
-        
-        print("\n[Testing Historical (2h)]")
-        print(get_air_quality.invoke({"room": "restaurant", "timeframe": "2h"}))
-        print("\n" + "="*50)
-        
-        print("\n[Testing Historical (24h)]")
-        print(get_air_quality.invoke({"room": "restaurant", "timeframe": "24h"}))
-        print("\n" + "="*50)
-        
-        print("\n[Testing Historical (7d)]")
-        print(get_air_quality.invoke({"room": "restaurant", "timeframe": "7d"}))
-        print("\n" + "="*50)
-        
-        print("\n[Testing Historical (30d)]")
-        print(get_air_quality.invoke({"room": "restaurant", "timeframe": "30d"}))
-        print("\n" + "="*50)
-        
-        print("\n[Testing Historical (90d)]")
-        print(get_air_quality.invoke({"room": "restaurant", "timeframe": "90d"}))
-        print("\n" + "-"*50)
-        print("All Air Quality tool tests completed successfully.")
         
     except Exception as e:
         logger.error(f"\nError during execution: {e}", exc_info=True)

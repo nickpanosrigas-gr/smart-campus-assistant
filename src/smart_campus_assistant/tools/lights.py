@@ -39,11 +39,19 @@ WEATHER_STATION_ID = find_weather_station_id()
 
 # Config mapping for API calls and pandas resampling
 TIMEFRAME_CONFIG = {
-    "2h":  {"method": "get_2h", "bin_size": "10min"},
-    "24h": {"method": "get_24h", "bin_size": "2h"}, 
-    "7d":  {"method": "get_7d", "bin_size": "2h"},    
-    "30d": {"method": "get_30d", "bin_size": "2h"},
-    "90d": {"method": "get_90d", "bin_size": "2h"}    
+    "now": {"method": "get_now", "bin_size": None, "prev_method": "get_now_prev_30d_full"},
+    "2h":  {"method": "get_2h", "bin_size": "10min", "prev_method": "get_2h_prev_30d_full"},
+    "24h": {"method": "get_24h", "bin_size": "2h", "prev_method": "get_24h_prev_30d_full"}, 
+    "7d":  {"method": "get_7d", "bin_size": "2h", "prev_method": "get_7d_prev_30d_full"},    
+    "30d": {"method": "get_30d", "bin_size": "2h", "prev_method": None},
+    "90d": {"method": "get_90d", "bin_size": "2h", "prev_method": None}    
+}
+
+CONTEXT_NAMES = {
+    "weekday_work": "Weekdays (Mon-Fri) Working_Hours (08:00-22:00)",
+    "weekday_nonwork": "Weekdays (Mon-Fri) Non-Working_Hours (22:00-08:00)",
+    "weekend_work": "Weekends (Sat-Sun) Working_Hours (08:00-22:00)",
+    "weekend_nonwork": "Weekends (Sat-Sun) Non-Working_Hours (22:00-08:00)"
 }
 
 # Semantic mapping for 0-5 scale
@@ -62,6 +70,15 @@ def get_semantic_label(val: float) -> str:
         return "Unknown"
     clamped_val = int(max(0, min(5, round(val))))
     return LIGHT_LABELS.get(clamped_val, f"Level {clamped_val}")
+
+def get_time_context(dt: pd.Timestamp) -> str:
+    """Classifies a timestamp into the 4-cell schedule matrix."""
+    is_weekend = dt.dayofweek >= 5
+    is_work = 8 <= dt.hour < 22
+    if not is_weekend and is_work: return "weekday_work"
+    if not is_weekend and not is_work: return "weekday_nonwork"
+    if is_weekend and is_work: return "weekend_work"
+    return "weekend_nonwork"
 
 def format_distribution(series: pd.Series) -> str:
     """Helper to format a pandas series of raw ticks into a clean percentage string."""
@@ -176,15 +193,76 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
     for device_name, device_data in active_iaq_devices.items():
         z = device_data.get("zone", "Unspecified")
         t = device_data.get("tag", "Unspecified")
-        active_sensors_lines.append(f"    - {device_name}: Place: {z}, Room: {t}")
+        active_sensors_lines.append(f"    - {device_name} (IAQ): Zone: {z}, Tag: {t}")
         
     if offline_sensors:
         active_sensors_lines.append(f"  Offline_Sensors: {', '.join(offline_sensors)}")
 
     # ==========================================
+    # HISTORICAL BASELINE FETCHING
+    # ==========================================
+    baselines = {c: {'lights': "No data", 'solar': "N/A"} for c in ['weekday_work', 'weekday_nonwork', 'weekend_work', 'weekend_nonwork']}
+    if timeframe not in ["30d", "90d"]:
+        prev_method_name = TIMEFRAME_CONFIG[timeframe]["prev_method"]
+        if prev_method_name and hasattr(tb_client, prev_method_name):
+            fetch_prev = getattr(tb_client, prev_method_name)
+            raw_bases = []
+            for d_name, d_data in active_iaq_devices.items():
+                try:
+                    raw_bases.append(fetch_prev(d_data.get("id"), ["light_level"]))
+                except Exception:
+                    raw_bases.append({})
+            
+            contexts = ['weekday_work', 'weekday_nonwork', 'weekend_work', 'weekend_nonwork']
+            collected = {c: [] for c in contexts}
+            
+            for base in raw_bases:
+                if "light_level" in base and isinstance(base["light_level"], dict):
+                    for c in contexts:
+                        if c in base["light_level"]:
+                            data = base["light_level"][c]
+                            if not isinstance(data, list): data = [data]
+                            for item in data:
+                                val = item.get('value') if isinstance(item, dict) else item
+                                if val is not None:
+                                    try:
+                                        collected[c].append(float(val))
+                                    except ValueError:
+                                        pass
+            
+            solar_collected = {c: [] for c in contexts}
+            if WEATHER_STATION_ID:
+                try:
+                    w_base = fetch_prev(WEATHER_STATION_ID, ["solar_radiation"])
+                    if "solar_radiation" in w_base and isinstance(w_base["solar_radiation"], dict):
+                        for c in contexts:
+                            if c in w_base["solar_radiation"]:
+                                data = w_base["solar_radiation"][c]
+                                if not isinstance(data, list): data = [data]
+                                for item in data:
+                                    val = item.get('value') if isinstance(item, dict) else item
+                                    if val is not None:
+                                        try:
+                                            solar_collected[c].append(float(val))
+                                        except ValueError:
+                                            pass
+                except Exception:
+                    pass
+
+            for c in contexts:
+                baselines[c]['lights'] = format_distribution(pd.Series(collected[c]))
+                if solar_collected[c]:
+                    avg_sol = sum(solar_collected[c]) / len(solar_collected[c])
+                    baselines[c]['solar'] = f"{avg_sol:.1f} W/m²"
+
+    now_ts = pd.Timestamp.now(tz=settings.TIMEZONE)
+
+    # ==========================================
     # BRANCH A: REAL-TIME SNAPSHOT ("NOW")
     # ==========================================
     if timeframe == "now":
+        current_ctx = get_time_context(now_ts)
+        
         solar = astral_client.get_current_solar_context()
         solar_rad = "N/A"
         
@@ -197,24 +275,34 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
             "Query_Context:",
             "  Domain: Ambient Light Intensity (0-5 Scale)",
             f"  Room: {room}",
-            "  Timeframe: Now (Snapshot)"
+            "  Timeframe: Now (Snapshot)",
+            f"  Current_Time: {now_ts.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"  Active_Context: {current_ctx}"
         ]
         output.extend(active_sensors_lines)
-        output.extend([
+        
+        solar_context_block = [
             "  Solar_Context:",
             f"    - Average_Daylight_Window: {solar['sunrise']} to {solar['sunset']}",
             f"    - Current_Sun_Azimuth: Sun is currently facing {solar['horizontal'].split()[-1]}",
-            f"    - Vertical_Angle: {solar['vertical']}",
+            f"    - Vertical_Angle: {solar['vertical']}"
+        ]
+        if solar_rad != "N/A":
+            solar_context_block.append(f"    - Solar_Radiation: {solar_rad}")
+            
+        output.extend(solar_context_block)
+        output.extend([
+            "",
+            f"Statistical_Baseline ({current_ctx}):",
+            f"  Baseline: {baselines[current_ctx]['lights']}",
+            f"  Average_Solar_Radiation: {baselines[current_ctx]['solar']}",
             "",
             "Current_State:"
         ])
-        if solar_rad != "N/A":
-            output.append(f"  Solar_Radiation: {solar_rad}")
         
         # Only process active devices
         for device_name, device_data in active_iaq_devices.items():
             device_id = device_data.get("id")
-            
             raw_data = tb_client.get_now(device_id, ["light_level"])
             if "light_level" in raw_data and raw_data["light_level"]:
                 val = float(raw_data["light_level"][0]["value"])
@@ -245,20 +333,6 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
                 solar_rad_series = w_df['value']
         except Exception as e:
             logger.warning(f"Failed to fetch historical solar radiation: {e}")
-
-    def get_contextual_solar(is_wkday_req: bool, is_work_req: bool) -> str:
-        """Calculates mean solar radiation specifically matching the schedule matrix."""
-        if solar_rad_series.empty: return "N/A"
-        idx = solar_rad_series.index
-        is_wk = idx.dayofweek < 5
-        is_work = (idx.hour >= 8) & (idx.hour < 22)
-        
-        mask = pd.Series(True, index=idx)
-        mask = mask & is_wk if is_wkday_req else mask & ~is_wk
-        mask = mask & is_work if is_work_req else mask & ~is_work
-        
-        val = solar_rad_series[mask].mean()
-        return f"{val:.1f} W/m²" if pd.notna(val) else "N/A"
 
     # 2. Fetch Historical Room Data
     all_dataframes = []
@@ -311,6 +385,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
             "  Domain: Ambient Light Intensity (0-5 Scale)",
             f"  Room: {room}",
             f"  Timeframe: {timeframe} (Long-Term Statistical Profile)",
+            f"  Current_Time: {pd.Timestamp.now(tz=settings.TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')}"
         ]
         output.extend(active_sensors_lines)
         output.extend([
@@ -383,11 +458,6 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
     # ==========================================
     # BRANCH D: 2h, 24h, 7d (PER-DAY TIMELINE LOGIC)
     # ==========================================
-    is_weekday = raw_series.index.dayofweek < 5
-    is_weekend = raw_series.index.dayofweek >= 5
-    is_working_hours = (raw_series.index.hour >= 8) & (raw_series.index.hour < 22)
-    is_non_working = (raw_series.index.hour < 8) | (raw_series.index.hour >= 22)
-
     solar_context_lines = [
         "  Solar_Context:",
         f"    - Average_Daylight_Window: {solar_hist['avg_sunrise']} to {solar_hist['avg_sunset']}",
@@ -402,6 +472,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
         "  Domain: Ambient Light Intensity (0-5 Scale)",
         f"  Room: {room}",
         f"  Timeframe: {timeframe} ({bin_size} intervals)",
+        f"  Current_Time: {pd.Timestamp.now(tz=settings.TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')}"
     ]
     output.extend(active_sensors_lines)
     output.extend(solar_context_lines)
@@ -410,19 +481,15 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
         "Statistical_Baseline (Present Contexts):"
     ])
     
-    def add_context_summary(name, mask, is_wkday_req, is_work_req):
-        cell_series = raw_series[mask]
-        if not cell_series.empty:
-            ctx_solar_str = get_contextual_solar(is_wkday_req, is_work_req)
-            output.append(f"  {name}:")
-            output.append(f"    Baseline: {format_distribution(cell_series)}")
-            output.append(f"    Average_Solar_Radiation: {ctx_solar_str}")
+    present_contexts = sorted(list(set(get_time_context(dt) for dt in raw_series.index)))
+    if not present_contexts:
+        present_contexts = [get_time_context(now_ts)]
+        
+    for ctx in present_contexts:
+        output.append(f"  {CONTEXT_NAMES.get(ctx, ctx)}:")
+        output.append(f"    Baseline: {baselines[ctx]['lights']}")
+        output.append(f"    Average_Solar_Radiation: {baselines[ctx]['solar']}")
 
-    add_context_summary("Weekdays (Mon-Fri) Working_Hours (08:00-22:00)", is_weekday & is_working_hours, True, True)
-    add_context_summary("Weekdays (Mon-Fri) Non-Working_Hours (22:00-08:00)", is_weekday & is_non_working, True, False)
-    add_context_summary("Weekends (Sat-Sun) Working_Hours (08:00-22:00)", is_weekend & is_working_hours, False, True)
-    add_context_summary("Weekends (Sat-Sun) Non-Working_Hours (22:00-08:00)", is_weekend & is_non_working, False, False)
-    
     output.append("")
     output.append("Timeline_Activity:")
 
@@ -551,17 +618,9 @@ if __name__ == "__main__":
     print("Testing Lights Tool...")
     print("-" * 50)
     try:
-        print("\n[Testing Historical (now)]")
-        print(get_ambient_lights.invoke({"room": "restaurant", "timeframe": "now"}))
-        print("\n[Testing Historical (2h)]")
-        print(get_ambient_lights.invoke({"room": "restaurant", "timeframe": "2h"}))
-        print("\n[Testing Historical (24h)]")
-        print(get_ambient_lights.invoke({"room": "restaurant", "timeframe": "24h"}))
-        print("\n[Testing Historical (7d)]")
-        print(get_ambient_lights.invoke({"room": "restaurant", "timeframe": "7d"}))
-        print("\n[Testing Historical (30d)]")
-        print(get_ambient_lights.invoke({"room": "restaurant", "timeframe": "30d"}))
-        print("\n[Testing Historical (90d)]")
-        print(get_ambient_lights.invoke({"room": "restaurant", "timeframe": "90d"}))
+        print("\n[Testing]")
+        print(get_ambient_lights.invoke({"room": "4.9", "timeframe": "30d"}))
+        print("-" * 50)
+
     except Exception as e:
         print(f"\nError during execution: {e}")

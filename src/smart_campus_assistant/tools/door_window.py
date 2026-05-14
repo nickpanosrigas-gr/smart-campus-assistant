@@ -23,11 +23,19 @@ logger = logging.getLogger(__name__)
 
 # Config mapping for API calls and pandas grouping
 TIMEFRAME_CONFIG = {
-    "2h":  {"method": "get_2h", "bin_size": "10min"},
-    "24h": {"method": "get_24h", "bin_size": "2h"}, 
-    "7d":  {"method": "get_7d", "bin_size": "2h"},    
-    "30d": {"method": "get_30d", "bin_size": "2h"},
-    "90d": {"method": "get_90d", "bin_size": "2h"}    
+    "now": {"method": "get_now", "bin_size": None, "prev_method": "get_now_prev_30d_full"},
+    "2h":  {"method": "get_2h", "bin_size": "10min", "prev_method": "get_2h_prev_30d_full"},
+    "24h": {"method": "get_24h", "bin_size": "2h", "prev_method": "get_24h_prev_30d_full"}, 
+    "7d":  {"method": "get_7d", "bin_size": "2h", "prev_method": "get_7d_prev_30d_full"},    
+    "30d": {"method": "get_30d", "bin_size": "2h", "prev_method": None},
+    "90d": {"method": "get_90d", "bin_size": "2h", "prev_method": None}    
+}
+
+CONTEXT_NAMES = {
+    "weekday_work": "Weekdays (Mon-Fri) Working_Hours (08:00-22:00)",
+    "weekday_nonwork": "Weekdays (Mon-Fri) Non-Working_Hours (22:00-08:00)",
+    "weekend_work": "Weekends (Sat-Sun) Working_Hours (08:00-22:00)",
+    "weekend_nonwork": "Weekends (Sat-Sun) Non-Working_Hours (22:00-08:00)"
 }
 
 def parse_magnet_status(val: Any) -> bool:
@@ -37,6 +45,14 @@ def parse_magnet_status(val: Any) -> bool:
     if str(val).lower() in ["true", "1", "open"]:
         return True
     return False
+
+def get_time_context(dt: pd.Timestamp) -> str:
+    is_weekend = dt.dayofweek >= 5
+    is_work = 8 <= dt.hour < 22
+    if not is_weekend and is_work: return "weekday_work"
+    if not is_weekend and not is_work: return "weekday_nonwork"
+    if is_weekend and is_work: return "weekend_work"
+    return "weekend_nonwork"
 
 def get_state_label(is_open: bool) -> str:
     return "Open" if is_open else "Closed"
@@ -112,6 +128,9 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
     elif timeframe in ["30d", "90d"]: header_lines.append(f"  Timeframe: {timeframe} (Long-Term Statistical Profile)")
     else: header_lines.append(f"  Timeframe: {timeframe} ({TIMEFRAME_CONFIG[timeframe]['bin_size']} intervals)")
 
+    now_ts_for_ctx = pd.Timestamp.now(tz=settings.TIMEZONE)
+    header_lines.append(f"  Current_Time: {now_ts_for_ctx.strftime('%Y-%m-%d %H:%M:%S')}")
+    header_lines.append(f"  Active_Context: {get_time_context(now_ts_for_ctx)}")
     header_lines.append(f"  Active_Sensors: {active_count}/{total_count} Online")
     
     doors = []
@@ -119,7 +138,7 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
     for d_name, d_data in active_mc_devices.items():
         grp = d_data.get("group", "Unknown")
         tag = d_data.get("tag", "Unspecified")
-        header_lines.append(f"    - {d_name}: Type: {grp}, Place: {tag}")
+        header_lines.append(f"    - {d_name} ({grp}): Zone: Unspecified, Tag: {tag}")
         if "door" in grp.lower(): doors.append(d_name)
         if "window" in grp.lower(): windows.append(d_name)
         
@@ -127,11 +146,59 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
         header_lines.append(f"  Offline_Sensors: {', '.join(offline_sensors)}")
 
     # ==========================================
+    # HISTORICAL BASELINE FETCHING
+    # ==========================================
+    baselines = {c: {'doors': "No data", 'windows': "No data"} for c in ['weekday_work', 'weekday_nonwork', 'weekend_work', 'weekend_nonwork']}
+    if timeframe not in ["30d", "90d"]:
+        prev_method_name = TIMEFRAME_CONFIG[timeframe]["prev_method"]
+        if prev_method_name and hasattr(tb_client, prev_method_name):
+            fetch_prev = getattr(tb_client, prev_method_name)
+            raw_bases = []
+            for d_name, d_data in active_mc_devices.items():
+                try:
+                    raw_bases.append(fetch_prev(d_data.get("id"), ["magnet_status"]))
+                except Exception:
+                    raw_bases.append({})
+            
+            contexts = ['weekday_work', 'weekday_nonwork', 'weekend_work', 'weekend_nonwork']
+            collected = {c: {'doors': [], 'windows': []} for c in contexts}
+            
+            for base_idx, d_name in enumerate(active_mc_devices.keys()):
+                if base_idx >= len(raw_bases) or not raw_bases[base_idx]: continue
+                base = raw_bases[base_idx]
+                
+                grp = active_mc_devices[d_name].get("group", "Unknown").lower()
+                cat = "doors" if "door" in grp else "windows" if "window" in grp else None
+                if not cat: continue
+                
+                if "magnet_status" in base and isinstance(base["magnet_status"], dict):
+                    for c in contexts:
+                        if c in base["magnet_status"]:
+                            data = base["magnet_status"][c]
+                            if not isinstance(data, list): data = [data]
+                            for item in data:
+                                val = item.get('value') if isinstance(item, dict) else item
+                                if val is not None:
+                                    collected[c][cat].append(parse_magnet_status(val))
+            
+            for c in contexts:
+                baselines[c]['doors'] = format_binary_distribution(pd.Series(collected[c]['doors']))
+                baselines[c]['windows'] = format_binary_distribution(pd.Series(collected[c]['windows']))
+
+    # ==========================================
     # BRANCH A: REAL-TIME SNAPSHOT ("NOW")
     # ==========================================
     if timeframe == "now":
+        current_ctx = get_time_context(now_ts_for_ctx)
         output = list(header_lines)
-        output.extend(["", "Current_State:"])
+        output.extend([
+            "",
+            f"Statistical_Baseline ({current_ctx}):",
+            f"  Doors Baseline: {baselines[current_ctx]['doors']}",
+            f"  Windows Baseline: {baselines[current_ctx]['windows']}",
+            "",
+            "Current_State:"
+        ])
         
         for device_name, device_data in active_mc_devices.items():
             device_id = device_data.get("id")
@@ -175,7 +242,7 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
             if "magnet_status" in raw_data and raw_data["magnet_status"]:
                 df = pd.DataFrame(raw_data["magnet_status"])
                 df['value'] = df['value'].apply(parse_magnet_status)
-                df['datetime'] = pd.to_datetime(df['ts'], unit='ms').dt.tz_localize('UTC').dt.tz_convert(settings.TIMEZONE)
+                df['datetime'] = pd.to_datetime(df['ts'], unit='ms', utc=True).dt.tz_convert(settings.TIMEZONE)
                 df.set_index('datetime', inplace=True)
                 df.rename(columns={'value': device_name}, inplace=True)
                 df.drop(columns=['ts'], inplace=True)
@@ -200,22 +267,16 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
 
     # Merge all sensors
     combined_df = pd.concat(all_dfs, axis=1, sort=True)
-    
-    # Forward-fill gaps across sensors, backward-fill the very start if needed
     combined_df = combined_df.ffill().bfill()
-    
-    # Upsample to 1-minute dense series to allow for EXACT timestamp recording 
-    # instead of flattening data into 2h blocks.
     combined_df = combined_df.resample('1min').ffill()
 
-    # Create Logical Groups (True if ANY door/window in the group is open)
+    # Create Logical Groups
     if doors: combined_df['Group_Doors'] = combined_df[doors].any(axis=1)
     else: combined_df['Group_Doors'] = pd.Series(False, index=combined_df.index)
         
     if windows: combined_df['Group_Windows'] = combined_df[windows].any(axis=1)
     else: combined_df['Group_Windows'] = pd.Series(False, index=combined_df.index)
 
-    # Time Masking
     idx = combined_df.index
     is_wk = idx.dayofweek < 5
     is_work = (idx.hour >= 8) & (idx.hour < 22)
@@ -240,19 +301,19 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
             
             lines = [f"    {name}:"]
             if cell_doors.empty and cell_windows.empty:
-                lines.append("      Doors Baseline: No Data")
-                lines.append("      Windows Baseline: No Data")
+                lines.append("      Baseline: No data")
                 lines.append("      Outliers: None detected.")
                 return lines
                 
-            lines.append(f"      Doors Baseline: {format_binary_distribution(cell_doors)}")
-            lines.append(f"      Windows Baseline: {format_binary_distribution(cell_windows)}")
+            lines.append("      Baseline:")
+            lines.append(f"        Doors: {format_binary_distribution(cell_doors)}")
+            lines.append(f"        Windows: {format_binary_distribution(cell_windows)}")
             
             outliers = []
             if is_non_working and not combined_df[mask].empty:
                 daily = combined_df[mask].groupby(pd.Grouper(freq='D'))
                 for day, day_data in daily:
-                    if len(day_data) < 120: continue # Minimum 2 hours to judge
+                    if len(day_data) < 120: continue
                     day_str = day.strftime('%Y-%m-%d (%A)')
                     
                     for dev_name in active_mc_devices.keys():
@@ -265,15 +326,12 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
                         toggles = (day_data[dev_name] != day_data[dev_name].shift()).sum()
                         
                         if is_door and toggles > 0:
-                            # Flag off-hours door access in the long-term matrix
                             outliers.append(f"        - '{day_str}': Security_Flag: [{tag}] accessed ({toggles} times).")
                         elif not is_door and open_pct > 0.5:
-                            # Flag windows left open all night
                             outliers.append(f"        - '{day_str}': Energy_Flag: [{tag}] left Open deeply into the night.")
 
             if outliers:
                 lines.append("      Outliers:")
-                # Limit to latest 10 to avoid overwhelming the LLM context if a door is broken for a month
                 lines.extend(outliers[-10:]) 
                 if len(outliers) > 10:
                     lines.append(f"        ... and {len(outliers) - 10} older events hidden.")
@@ -297,18 +355,14 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
     output = list(header_lines)
     output.extend(["", "Statistical_Baseline (Present Contexts):"])
 
-    def add_baseline(name, mask):
-        if not combined_df[mask].empty:
-            output.append(f"  {name}:")
-            d_dist = format_binary_distribution(combined_df.loc[mask, 'Group_Doors'].dropna())
-            w_dist = format_binary_distribution(combined_df.loc[mask, 'Group_Windows'].dropna())
-            output.append(f"    Doors Baseline: {d_dist}")
-            output.append(f"    Windows Baseline: {w_dist}")
-
-    add_baseline("Weekdays (Mon-Fri) Working_Hours (08:00-22:00)", is_wk & is_work)
-    add_baseline("Weekdays (Mon-Fri) Non-Working_Hours (22:00-08:00)", is_wk & ~is_work)
-    add_baseline("Weekends (Sat-Sun) Working_Hours (08:00-22:00)", ~is_wk & is_work)
-    add_baseline("Weekends (Sat-Sun) Non-Working_Hours (22:00-08:00)", ~is_wk & ~is_work)
+    present_contexts = sorted(list(set(get_time_context(dt) for dt in combined_df.index)))
+    if not present_contexts:
+        present_contexts = [get_time_context(pd.Timestamp.now(tz=settings.TIMEZONE))]
+        
+    for ctx in present_contexts:
+        output.append(f"  {CONTEXT_NAMES.get(ctx, ctx)}:")
+        output.append(f"    Doors Baseline: {baselines[ctx]['doors']}")
+        output.append(f"    Windows Baseline: {baselines[ctx]['windows']}")
 
     output.extend(["", "Timeline_Activity:"])
 
@@ -324,11 +378,10 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
         day_stable = []
         day_outliers = []
         
-        # Check Non-Working Hour Anomalies for the Daily Timeline
         nw_mask = (day_series.index.hour < 8) | (day_series.index.hour >= 22)
         nw_data = day_series[nw_mask]
         
-        if not nw_data.empty and len(nw_data) >= 120: # Require at least 2 hours of data to judge
+        if not nw_data.empty and len(nw_data) >= 120:
             for dev in active_mc_devices.keys():
                 if dev not in nw_data: continue
                 
@@ -338,18 +391,15 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
                 
                 if open_pct > 0:
                     toggles = (nw_data[dev] != nw_data[dev].shift()).sum()
-                    
-                    # Rule 1: Any door access during off-hours is flagged
                     if is_door and toggles > 0:
                         day_outliers.append(f"Security_Flag: [{tag}] accessed during non-working hours ({toggles} transitions).")
-                    
-                    # Rule 2: Windows left open for more than 50% of the night
                     elif not is_door and open_pct > 0.5:
                         day_outliers.append(f"Energy_Flag: [{tag}] left Open for >50% of Non-Working Hours.")
                         
         stable_count = 0
         current_stable_start = None
         current_stable_state = None
+        b_end = None
         
         bucket_groups = day_series.groupby(pd.Grouper(freq=bin_size))
         
@@ -368,7 +418,6 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
                 dev_transitions = []
                 toggle_count = 0
                 
-                # We iterate over the 1-minute dense data to get exact transition times
                 for exact_time, is_open in group[dev_name].items():
                     if pd.isna(is_open): continue
                     current_s = "Open" if is_open else "Closed"
@@ -411,9 +460,12 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
                 current_stable_start = None
 
         if stable_count > 0:
+            end_time_str = b_end.strftime('%H:%M') if b_end is not None else "24:00"
+            if end_time_str == "00:00": end_time_str = "24:00"
+            
             day_stable.append({
                 "start": current_stable_start,
-                "end": "24:00" if day_stable else b_end.strftime('%H:%M'),
+                "end": end_time_str,
                 "intervals": stable_count,
                 "state": current_stable_state
             })
@@ -443,17 +495,9 @@ if __name__ == "__main__":
     print("Testing Door & Window Tool...")
     print("-" * 50)
     try:
-        print("\n[Testing Historical (now)]")
-        print(get_door_window_status.invoke({"room": "2.4", "timeframe": "now"}))
-        print("\n[Testing Historical (2h)]")
-        print(get_door_window_status.invoke({"room": "2.4", "timeframe": "2h"}))
-        print("\n[Testing Historical (24h)]")
-        print(get_door_window_status.invoke({"room": "2.4", "timeframe": "24h"}))
-        print("\n[Testing Historical (7d)]")
-        print(get_door_window_status.invoke({"room": "2.4", "timeframe": "7d"}))
-        print("\n[Testing Historical (30d)]")
+        print("\n[Testing]")
         print(get_door_window_status.invoke({"room": "2.4", "timeframe": "30d"}))
-        print("\n[Testing Historical (90d)]")
-        print(get_door_window_status.invoke({"room": "2.4", "timeframe": "90d"}))
+        print("-" * 50)
+        
     except Exception as e:
         print(f"\nError during execution: {e}")

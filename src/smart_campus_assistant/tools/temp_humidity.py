@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 import logging
 
 # Import project singletons
+from src.smart_campus_assistant.config.settings import settings
 from src.smart_campus_assistant.utils.device_registry import registry
 from src.smart_campus_assistant.clients.thingsboard_client import tb_client
 from src.smart_campus_assistant.clients.astral_client import astral_client
@@ -111,13 +112,13 @@ def format_val(key: str, val: float, baseline: float = None, room: str = "") -> 
     limit_tag = ""
     limit = get_limit(key, room)
     if limit:
-        if val > limit["max"]: limit_tag = "[MAX!]"
-        elif val < limit["min"]: limit_tag = "[MIN!]"
+        if val > limit["max"]: limit_tag = " [MAX!]"
+        elif val < limit["min"]: limit_tag = " [MIN!]"
             
     if baseline is not None and not pd.isna(baseline):
         diff = val - baseline
         diff_str = f"{diff:+.1f}" if diff % 1 else f"{int(diff):+}"
-        return f"{name} {val_str}{unit}({diff_str}){limit_tag}"
+        return f"{name}: {val_str}{unit} ({diff_str}{unit}){limit_tag}"
         
     return f"{name}: {val_str}{unit}{limit_tag}"
 
@@ -134,7 +135,7 @@ def process_telemetry_to_df(raw_data: Dict, keys: List[str], bin_size: str = Non
         if key in raw_data and raw_data[key]:
             df = pd.DataFrame(raw_data[key])
             df['value'] = pd.to_numeric(df['value'], errors='coerce')
-            df['datetime'] = pd.to_datetime(df['ts'], unit='ms')
+            df['datetime'] = pd.to_datetime(df['ts'], unit='ms', utc=True).dt.tz_convert(settings.TIMEZONE)
             df.set_index('datetime', inplace=True)
             df.rename(columns={'value': key}, inplace=True)
             df.drop(columns=['ts'], inplace=True)
@@ -289,6 +290,7 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
             "  Domain: Climate & Weather (Indoor_IAQ)",
             f"  Room: {room}",
             "  Timeframe: Now (Snapshot)",
+            f"  Current_Time: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}",
             f"  Active_Context: {current_ctx}"
         ]
         output.extend(active_sensors_lines)
@@ -359,7 +361,8 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
             "Query_Context:",
             "  Domain: Climate & Weather (Indoor_IAQ)",
             f"  Room: {room}",
-            f"  Timeframe: {timeframe} (Long-Term Matrix Profile)"
+            f"  Timeframe: {timeframe} (Long-Term Matrix Profile)",
+            f"  Current_Time: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}"
         ]
         output.extend(active_sensors_lines)
         
@@ -373,16 +376,17 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
         
         def process_matrix_cell(name: str, mask: pd.Series):
             cell_df = master_df[mask]
-            if cell_df.empty: return [f"  {name}:", "    No data."]
+            if cell_df.empty: return [f"    {name}:", "      Baseline: No data.", "      Outliers: None detected."]
             
             cell_base_i = cell_df[IAQ_KEYS].mean().to_dict() if not cell_df[IAQ_KEYS].empty else {}
             w_cols = [k for k in WEATHER_KEYS if k in cell_df.columns]
             cell_base_w = cell_df[w_cols].mean().to_dict() if w_cols and not cell_df[w_cols].empty else {}
             
-            lines = [f"  {name}:"]
-            lines.append("    Baseline (Background):")
-            lines.append(f"      Weather: {format_baseline_str(cell_base_w, ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed'])}")
-            lines.append(f"      Indoor: {format_baseline_str(cell_base_i, IAQ_KEYS)}")
+            lines = [f"    {name}:"]
+            # Standardized Baseline Key
+            lines.append("      Baseline:")
+            lines.append(f"        Weather: {format_baseline_str(cell_base_w, ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed'])}")
+            lines.append(f"        Indoor: {format_baseline_str(cell_base_i, IAQ_KEYS)}")
             
             outliers = []
             daily_groups = cell_df.groupby(pd.Grouper(freq='D'))
@@ -403,9 +407,10 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
                 spikes = [format_val(k, streak_mean.get(k), cell_base_i.get(k), room) for k in s_keys]
                 drivers = [format_val(k, streak_mean.get(k), cell_base_w.get(k), room) for k in d_keys]
                 
-                date_str = streak_start.strftime('%m-%d')
+                # Added Day of Week to Date Formatting
+                date_str = streak_start.strftime('%Y-%m-%d (%A)')
                 if streak_start != streak_end:
-                    date_str += f" to {streak_end.strftime('%m-%d')}"
+                    date_str += f" to {streak_end.strftime('%Y-%m-%d (%A)')}"
                     
                 day_word = "day" if len(streak_days) == 1 else "days"
                 
@@ -413,7 +418,8 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
                 if spikes: parts.append(f"Indoor: {' | '.join(spikes)}")
                 if drivers: parts.append(f"Weather: {' | '.join(drivers)}")
                 
-                outliers.append(f"      - '{date_str}' ({len(streak_days)} {day_word}): {' | '.join(parts)}")
+                # Indented for Nested Matrix
+                outliers.append(f"        - '{date_str}' ({len(streak_days)} {day_word}): {' | '.join(parts)}")
 
             for day, day_data in daily_groups:
                 if day_data.empty: continue
@@ -492,18 +498,22 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
             if prev_sig is not None:
                 flush_streak()
             
+            # Standardized Outliers Key
             if outliers:
-                lines.append("    Outliers (Priority):")
+                lines.append("      Outliers:")
                 lines.extend(outliers)
             else:
-                lines.append("    Outliers (Priority): None")
+                lines.append("      Outliers: None detected.")
                 
             return lines
 
-        output.extend(process_matrix_cell("Weekdays (Mon-Fri) Working_Hours (08:00-22:00)", is_weekday & is_working))
-        output.extend(process_matrix_cell("Weekdays (Mon-Fri) Non-Working_Hours (22:00-08:00)", is_weekday & is_non_working))
-        output.extend(process_matrix_cell("Weekends (Sat-Sun) Working_Hours (08:00-22:00)", is_weekend & is_working))
-        output.extend(process_matrix_cell("Weekends (Sat-Sun) Non-Working_Hours (22:00-08:00)", is_weekend & is_non_working))
+        # Applied Nested YAML Layout Structure
+        output.append("  Weekdays (Mon-Fri):")
+        output.extend(process_matrix_cell("Working_Hours (08:00-22:00)", is_weekday & is_working))
+        output.extend(process_matrix_cell("Non-Working_Hours (22:00-08:00)", is_weekday & is_non_working))
+        output.append("  Weekends (Sat-Sun):")
+        output.extend(process_matrix_cell("Working_Hours (08:00-22:00)", is_weekend & is_working))
+        output.extend(process_matrix_cell("Non-Working_Hours (22:00-08:00)", is_weekend & is_non_working))
         
         return "\n".join(output)
 
@@ -525,7 +535,8 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
         "Query_Context:",
         "  Domain: Climate & Weather (Indoor_IAQ)",
         f"  Room: {room}",
-        f"  Timeframe: {timeframe} ({bin_size} intervals)"
+        f"  Timeframe: {timeframe} ({bin_size} intervals)",
+        f"  Current_Time: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}"
     ]
     output.extend(active_sensors_lines)
     output.extend(solar_context_lines)
@@ -564,7 +575,7 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
             avg_delta = np.mean(period_i_deltas[k])
             avg_val = np.mean(period_i_vals[k])
             if abs(avg_delta) >= THRESHOLDS.get(k, 0):
-                p_i_shifts.append(f"{DISPLAY_NAMES.get(k, k)} {avg_val:.1f}{UNITS.get(k, '')}({avg_delta:+.1f})")
+                p_i_shifts.append(f"{DISPLAY_NAMES.get(k, k)}: {avg_val:.1f}{UNITS.get(k, '')} ({avg_delta:+.1f}{UNITS.get(k, '')})")
                 
     p_w_shifts = []
     for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed']:
@@ -577,7 +588,7 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
             elif abs(avg_delta) >= THRESHOLDS.get(k, 0): is_shift = True
                 
             if is_shift:
-                p_w_shifts.append(f"{DISPLAY_NAMES.get(k, k)} {avg_val:.1f}{UNITS.get(k, '')}({avg_delta:+.1f})")
+                p_w_shifts.append(f"{DISPLAY_NAMES.get(k, k)}: {avg_val:.1f}{UNITS.get(k, '')} ({avg_delta:+.1f}{UNITS.get(k, '')})")
 
     output.append(f"Period_Deviations (Last {timeframe}):")
     output.append(f"  Weather_Shifts: {' | '.join(p_w_shifts) if p_w_shifts else 'None'}")
@@ -618,9 +629,9 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
             
             parts = []
             if spikes: parts.append(f"Indoor: {' | '.join(spikes)}")
-            if drivers: parts.append(f"Weather: {' | '.join(drivers)}")
+            if drivers: parts.append(f"Outdoor: {' | '.join(drivers)}")
             
-            anomalies.append(f"      - '{current_start} to {current_end}' ({current_intervals} int, {ctx_val}): {' | '.join(parts)}")
+            anomalies.append(f"      - bucket: '{current_start} - {current_end}' (Context: {ctx_val})\n        Spikes: {' | '.join(parts)}")
         
         for exact_time, row in day_df.iterrows():
             ctx = get_time_context(exact_time)
@@ -722,30 +733,9 @@ if __name__ == "__main__":
     print("-" * 50)
     
     try:
-        print("\n[Testing Historical (now)]")
-        print(get_temp_humidity.invoke({"room": "restaurant", "timeframe": "now"}))
-        print("\n" + "="*50)
-        
-        print("\n[Testing Historical (2h)]")
-        print(get_temp_humidity.invoke({"room": "restaurant", "timeframe": "2h"}))
-        print("\n" + "="*50)
-        
-        print("\n[Testing Historical (24h)]")
-        print(get_temp_humidity.invoke({"room": "restaurant", "timeframe": "24h"}))
-        print("\n" + "="*50)
-        
-        print("\n[Testing Historical (7d)]")
-        print(get_temp_humidity.invoke({"room": "data_center", "timeframe": "7d"}))
-        print("\n" + "="*50)
-        
-        print("\n[Testing Historical (30d)]")
+        print("\n[Testing]")
         print(get_temp_humidity.invoke({"room": "restaurant", "timeframe": "30d"}))
         print("\n" + "="*50)
-        
-        print("\n[Testing Historical (90d)]")
-        print(get_temp_humidity.invoke({"room": "restaurant", "timeframe": "90d"}))
-        print("\n" + "-"*50)
-        print("All Temp & Humidity tool tests completed successfully.")
         
     except Exception as e:
         logger.error(f"\nError during execution: {e}", exc_info=True)

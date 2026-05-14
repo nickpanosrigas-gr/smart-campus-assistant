@@ -8,7 +8,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 # Import the existing LLM setup, tools, and prompt from your supervisor
-from src.smart_campus_assistant.agents.supervisor import supervisor_llm, sub_systems, supervisor_prompt
+from src.smart_campus_assistant.agents.supervisor import supervisor_llm, all_campus_tools, supervisor_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ def call_supervisor(state: GraphState, config: RunnableConfig):
 
 # LangGraph's native ToolNode automatically handles executing your @tool functions
 # and formatting their outputs as ToolMessages.
-tool_node = ToolNode(sub_systems)
+tool_node = ToolNode(all_campus_tools)
 
 # ==========================================
 # 3. DEFINE THE ROUTING LOGIC
