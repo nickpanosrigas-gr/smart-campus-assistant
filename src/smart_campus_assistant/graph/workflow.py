@@ -48,7 +48,14 @@ def should_continue(state: GraphState):
     last_message = state["messages"][-1]
     
     if last_message.tool_calls:
-        logger.info(f"Routing to tools: {[t['name'] for t in last_message.tool_calls]}")
+        # Create a descriptive log for each tool call
+        logger.info(f"Routing to {len(last_message.tool_calls)} tool(s)...")
+        
+        for tool in last_message.tool_calls:
+            tool_name = tool["name"]
+            tool_args = tool.get("args", {})
+            logger.info(f"Executing: {tool_name} | Args: {tool_args}")
+            
         return "tools"
     
     logger.info("No tools requested. Routing to END.")
