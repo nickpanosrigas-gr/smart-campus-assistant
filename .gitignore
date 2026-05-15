@@ -1,14 +1,32 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+# =========================
+# ROOT
+# =========================
+.DS_Store
+.vscode/
 
-# Virtual environments
-.venv
+# =========================
+# BACKEND (Python)
+# =========================
+backend/__pycache__/
+backend/*.py[oc]
+backend/build/
+backend/dist/
+backend/wheels/
+backend/*.egg-info
 
-# Data
-data/
-.env
+# Backend Virtual environments
+backend/.venv/
+
+# Backend Secrets & Local Data
+backend/data/
+backend/.env
+
+# =========================
+# FRONTEND (Next.js)
+# =========================
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.env*.local
+frontend/.env
