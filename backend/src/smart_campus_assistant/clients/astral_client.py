@@ -87,12 +87,19 @@ class AstralClient:
         th_label, th_desc = self.get_thermal_elevation_info(dt)
         az_label = self.get_azimuth_info(dt)
         
+        # Calculate raw numerical values for frontend map UI
+        raw_az = azimuth(self.location.observer, dt)
+        raw_el = elevation(self.location.observer, dt)
+        
         return {
             "vertical": f"{el_label} ({el_desc})",                 # For lights.py
             "thermal_vertical": f"{th_label} ({th_desc})",         # For temp_humidity.py
             "horizontal": f"Sun is facing {az_label}",
             "sunrise": s_info["sunrise"].strftime('%H:%M'),
-            "sunset": s_info["sunset"].strftime('%H:%M')
+            "sunset": s_info["sunset"].strftime('%H:%M'),
+            "raw_azimuth": raw_az,
+            "raw_elevation": raw_el,
+            "is_day": raw_el > 0
         }
         
     def get_historical_solar_context(self, days_back: int) -> dict:

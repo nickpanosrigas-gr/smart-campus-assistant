@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from typing import Literal, Dict, Any, List, Optional
+from typing import Literal, Dict, Any, List, Optional, Tuple
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 import logging
@@ -176,8 +176,8 @@ def average_nested_baselines(raw_bases: List[Dict], keys: List[str]) -> Dict[str
             final_result[k][c] = np.mean(vals) if vals else None
     return final_result
 
-@tool("get_temp_humidity", args_schema=TempHumidityInput)
-def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
+@tool("get_temp_humidity", args_schema=TempHumidityInput, response_format="content_and_artifact")
+def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     """
     Tracks indoor Temperature, Humidity, and Pressure, correlated with Outdoor Weather.
     Splits baselines via a schedule matrix and strictly enforces absolute safety limits.
@@ -185,7 +185,8 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
     """
     all_iaq_devices = registry.get_devices_by_room_and_type(room, "IAQ")
     if not all_iaq_devices:
-        return f"Query_Context:\n  Room: {room}\nError: No IAQ sensors found in this room."
+        error_msg = f"Query_Context:\n  Room: {room}\nError: No IAQ sensors found in this room."
+        return error_msg, {"view_type": "error", "message": "No IAQ sensors found"}
 
     # ==========================================
     # SERVER ATTRIBUTE ACTIVE/OFFLINE CHECK
@@ -222,7 +223,8 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
         offline_sensors.append(WEATHER_STATION_NAME)
 
     if not active_iaq_devices:
-        return f"Query_Context:\n  Room: {room}\nError: Found {len(all_iaq_devices)} IAQ sensors, but all are currently offline."
+        error_msg = f"Query_Context:\n  Room: {room}\nError: Found {len(all_iaq_devices)} IAQ sensors, but all are currently offline."
+        return error_msg, {"view_type": "error", "message": "All sensors offline"}
 
     # Build Active Sensors Block
     total_relevant = len(all_iaq_devices) + (1 if WEATHER_STATION_ID else 0)
@@ -308,21 +310,95 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
             "Current_State_With_Diffs (vs Baseline & Limits):"
         ])
         
+        ui_current_values = {}
+        
+        # 1. Inject Online/Offline Status Colors
+        if WEATHER_STATION_NAME:
+            if is_weather_active:
+                ui_current_values[f"{WEATHER_STATION_NAME}_status_color"] = "green"
+            else:
+                ui_current_values[f"{WEATHER_STATION_NAME}_status_color"] = "red"
+                
+        for device_name in active_iaq_devices.keys():
+            ui_current_values[f"{device_name}_status_color"] = "green"
+        for device_name in offline_sensors:
+            if device_name != WEATHER_STATION_NAME:
+                ui_current_values[f"{device_name}_status_color"] = "red"
+        
+        # 2. Fetch Actual Values
         if is_weather_active and WEATHER_STATION_ID:
             w_curr = extract_current_values(tb_client.get_now(WEATHER_STATION_ID, WEATHER_KEYS), WEATHER_KEYS)
             w_parts = [format_val(k, w_curr.get(k), ctx_w_base.get(k), room) for k in ['air_temperature', 'relative_humidity', 'solar_radiation', 'precipitation', 'wind_speed'] if w_curr.get(k) is not None]
             output.append(f"  Weather: {' | '.join(w_parts) if w_parts else 'Offline / No Data'}")
+            for k, v in w_curr.items():
+                if v is not None:
+                    ui_current_values[k] = v
         else:
             output.append("  Weather: Offline / Not Configured")
         
         output.append("  Indoor (Room Sensors):")
+        i_curr_list = []
         for name, data in active_iaq_devices.items():
             d_id = data.get("id") if isinstance(data, dict) else data
             i_curr = extract_current_values(tb_client.get_now(d_id, IAQ_KEYS), IAQ_KEYS)
+            i_curr_list.append(i_curr)
+            
+            # Inject explicit individual sensor readings (e.g. F2_2.4-IAQ-1_temperature = 22.4)
+            for k, v in i_curr.items():
+                if v is not None:
+                    ui_current_values[f"{name}_{k}"] = v
+            
             i_parts = [format_val(k, i_curr.get(k), ctx_i_base.get(k), room) for k in IAQ_KEYS if i_curr.get(k) is not None]
             output.append(f"    - {name}: {' | '.join(i_parts) if i_parts else 'Offline / No Data'}")
             
-        return "\n".join(output)
+        # Aggregate IAQ for UI Snapshot (Average across room sensors)
+        for k in IAQ_KEYS:
+            vals = [i_curr.get(k) for i_curr in i_curr_list if i_curr.get(k) is not None]
+            if vals:
+                ui_current_values[k] = sum(vals) / len(vals)
+                
+        # 3. Determine Overall Status Color (Threshold / Absolute Limits Logic)
+        has_orange = False
+        has_red = False
+        
+        for k in IAQ_KEYS + WEATHER_KEYS:
+            if k in ui_current_values:
+                v = ui_current_values[k]
+                
+                # Check Absolute Limits (Red Flag - Highest Priority)
+                lim = get_limit(k, room)
+                if lim and (v < lim["min"] or v > lim["max"]):
+                    has_red = True
+                    break # Stop checking if we already hit maximum severity
+                    
+                # Check Thresholds relative to Baseline (Orange Flag)
+                base = ctx_i_base.get(k) if k in IAQ_KEYS else ctx_w_base.get(k)
+                if base is not None:
+                    diff = abs(v - base)
+                    if diff >= THRESHOLDS.get(k, 9999):
+                        has_orange = True
+                        
+        if has_red:
+            status_color = "red"
+        elif has_orange:
+            status_color = "orange"
+        else:
+            status_color = "green"
+            
+        artifact = {
+            "view_type": "snapshot",
+            "current_values": ui_current_values,
+            "status_color": status_color
+        }
+
+        # 4. Inject Celestial Positioning for Frontend Map Sun tracking
+        artifact["celestial"] = {
+            "sun_azimuth": solar.get("raw_azimuth"),
+            "sun_elevation": solar.get("raw_elevation"),
+            "is_day": solar.get("is_day")
+        }
+            
+        return "\n".join(output), artifact
 
     # ==========================================
     # HISTORICAL DATA FETCHING
@@ -339,10 +415,28 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
         if not df.empty: indoor_dfs.append(df)
         
     if not indoor_dfs:
-        return f"Query_Context:\n  Room: {room}\nError: No historical IAQ data found for timeframe {timeframe}."
+        error_msg = f"Query_Context:\n  Room: {room}\nError: No historical IAQ data found for timeframe {timeframe}."
+        return error_msg, {"view_type": "graph", "series": [], "metadata": {}}
         
     indoor_df = pd.concat(indoor_dfs).groupby(level=0).median()
     master_df = indoor_df.join(weather_df, how='outer') if not weather_df.empty else indoor_df
+    
+    # --- BUILD THE GRAPH ARTIFACT ---
+    series_data = []
+    for dt, row in master_df.iterrows():
+        point = {"timestamp": dt.isoformat()}
+        for col in master_df.columns:
+            val = row[col]
+            if pd.notna(val):
+                point[col] = float(val)
+        if len(point) > 1: # Only append if it has values other than timestamp
+            series_data.append(point)
+            
+    graph_artifact = {
+        "view_type": "graph",
+        "series": series_data,
+        "metadata": {col: UNITS.get(col, "") for col in master_df.columns}
+    }
     
     days_map = {"2h": 1, "24h": 1, "7d": 7, "30d": 30, "90d": 90}
     days_back = days_map.get(timeframe, 1)
@@ -416,7 +510,7 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
                 
                 parts = []
                 if spikes: parts.append(f"Indoor: {' | '.join(spikes)}")
-                if drivers: parts.append(f"Weather: {' | '.join(drivers)}")
+                if drivers: parts.append(f"Outdoor: {' | '.join(drivers)}")
                 
                 # Indented for Nested Matrix
                 outliers.append(f"        - '{date_str}' ({len(streak_days)} {day_word}): {' | '.join(parts)}")
@@ -515,7 +609,7 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
         output.extend(process_matrix_cell("Working_Hours (08:00-22:00)", is_weekend & is_working))
         output.extend(process_matrix_cell("Non-Working_Hours (22:00-08:00)", is_weekend & is_non_working))
         
-        return "\n".join(output)
+        return "\n".join(output), graph_artifact
 
     # ==========================================
     # BRANCH C: TIMELINE ACTIVITY (2h, 24h, 7d)
@@ -725,7 +819,7 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> str:
         else:
             output.append("    Stable_Periods (Background): None")
 
-    return "\n".join(output)
+    return "\n".join(output), graph_artifact
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -734,7 +828,10 @@ if __name__ == "__main__":
     
     try:
         print("\n[Testing]")
-        print(get_temp_humidity.invoke({"room": "restaurant", "timeframe": "30d"}))
+        summary, raw_data = get_temp_humidity.func(room="3.7", timeframe="now")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
         print("\n" + "="*50)
         
     except Exception as e:

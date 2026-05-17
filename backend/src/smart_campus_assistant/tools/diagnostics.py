@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import concurrent.futures
 from datetime import datetime
-from typing import Literal, Dict, Any, List, Optional
+from typing import Literal, Dict, Any, List, Optional, Tuple
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 import logging
@@ -250,8 +250,8 @@ class DeviceAuditInput(BaseModel):
     target: CampusRooms = Field(..., description="The specific room to run diagnostics on.")
     sensor_type: Optional[str] = Field(None, description="Optional. Filter by sensor type (e.g., 'IAQ', 'PC', 'DESK').")
 
-@tool("get_diagnostics", args_schema=DeviceAuditInput)
-def get_diagnostics(target: CampusRooms, sensor_type: Optional[str] = None) -> str:
+@tool("get_diagnostics", args_schema=DeviceAuditInput, response_format="content_and_artifact")
+def get_diagnostics(target: CampusRooms, sensor_type: Optional[str] = None) -> Tuple[str, dict]:
     """
     Deep-dive diagnostic audit for a specific room. 
     Checks Connectivity (Offline/RSSI), Power (Battery Drain), and Hardware Health (Flatlines/Tampers).
@@ -264,7 +264,8 @@ def get_diagnostics(target: CampusRooms, sensor_type: Optional[str] = None) -> s
         filter_str = "  Sensor_Filter: None"
         
     if not devices:
-        return f"Error: No devices found in room '{target}'."
+        error_msg = f"Error: No devices found in room '{target}'."
+        return error_msg, {"view_type": "error", "message": error_msg}
 
     current_time_str = datetime.now().strftime("%A, %b %d, %Y at %I:%M:%S %p EEST")
     total_scanned = len(devices)
@@ -279,6 +280,11 @@ def get_diagnostics(target: CampusRooms, sensor_type: Optional[str] = None) -> s
     operational_count = 0
     anomaly_lines = []
     tamper_lines = []
+    
+    # State tracking for UI Artifact
+    ui_current_values = {}
+    room_has_red = False
+    room_has_orange = False
 
     for name, meta in devices.items():
         # Safely extract ID from the new dict structure
@@ -289,6 +295,45 @@ def get_diagnostics(target: CampusRooms, sensor_type: Optional[str] = None) -> s
         name_disp = f"{name}{meta_str}"
         
         data = _audit_device(name, uid)
+        
+        # --- UI Artifact Data Injection ---
+        if data["is_plugged_in"]:
+            ui_current_values[f"{name}_battery"] = "Plugged In"
+        elif data["battery"] is not None:
+            ui_current_values[f"{name}_battery"] = data["battery"]
+        else:
+            ui_current_values[f"{name}_battery"] = "No Battery"
+            
+        sensor_color = "green"
+        if not data["is_online"] or data["tamper"]:
+            sensor_color = "red"
+        else:
+            has_major_fault = any("HARDWARE_FAULT" in a or "FLATLINE" in a for a in data["anomalies"])
+            has_signal_issue = any("WEAK_SIGNAL" in a or "POOR_SNR" in a for a in data["anomalies"])
+            
+            if has_major_fault:
+                sensor_color = "red"
+            elif has_signal_issue:
+                sensor_color = "orange"
+                
+            # Battery check overrides to red/orange if critical
+            if not data["is_plugged_in"] and data["battery"] is not None:
+                if data["is_weather"]:
+                    if data["battery"] < 2.4:
+                        sensor_color = "red"
+                else:
+                    if data["battery"] < 15.0:
+                        sensor_color = "red"
+                    elif data["battery"] < 50.0 and sensor_color == "green":
+                        sensor_color = "orange"
+                        
+        ui_current_values[f"{name}_status_color"] = sensor_color
+        
+        if sensor_color == "red":
+            room_has_red = True
+        elif sensor_color == "orange":
+            room_has_orange = True
+        # ----------------------------------
         
         # 1. Connectivity
         if data["is_online"]:
@@ -327,7 +372,7 @@ def get_diagnostics(target: CampusRooms, sensor_type: Optional[str] = None) -> s
     avg_bat = int(np.mean(battery_vals)) if battery_vals else 0
     plugged_str = f" | {plugged_in_count} Plugged In" if plugged_in_count > 0 else ""
 
-    # Format Output
+    # Format Text Output
     output = [
         "Query_Context:",
         "  Domain: Diagnostics (Targeted Audit)",
@@ -376,7 +421,21 @@ def get_diagnostics(target: CampusRooms, sensor_type: Optional[str] = None) -> s
     else:
         output.append("  Tamper_Alarms: None")
 
-    return "\n".join(output)
+    # Format Artifact Payload
+    if room_has_red:
+        overall_status_color = "red"
+    elif room_has_orange:
+        overall_status_color = "orange"
+    else:
+        overall_status_color = "green"
+        
+    artifact = {
+        "view_type": "diagnostics",
+        "current_values": ui_current_values,
+        "status_color": overall_status_color
+    }
+
+    return "\n".join(output), artifact
 
 # ==========================================
 # TOOL 2: CAMPUS-WIDE SUMMARY
@@ -385,8 +444,8 @@ def get_diagnostics(target: CampusRooms, sensor_type: Optional[str] = None) -> s
 class EmptyInput(BaseModel):
     pass
 
-@tool("get_campus_diagnostics", args_schema=EmptyInput)
-def get_campus_diagnostics() -> str:
+@tool("get_campus_diagnostics", args_schema=EmptyInput, response_format="content_and_artifact")
+def get_campus_diagnostics() -> Tuple[str, dict]:
     """
     Triage report for the entire campus. Aggregates all healthy data into single lines 
     and explicitly lists ONLY the devices that require human intervention.
@@ -412,6 +471,10 @@ def get_campus_diagnostics() -> str:
     power_list = []
     anomaly_list = []
     tamper_list = []
+    
+    ui_current_values = {}
+    campus_has_red = False
+    campus_has_orange = False
 
     # Execute all device checks simultaneously using ThreadPoolExecutor
     with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
@@ -424,6 +487,44 @@ def get_campus_diagnostics() -> str:
             
             try:
                 data = future.result()
+                
+                # --- UI Artifact Data Injection ---
+                if data["is_plugged_in"]:
+                    ui_current_values[f"{name}_battery"] = "Plugged In"
+                elif data["battery"] is not None:
+                    ui_current_values[f"{name}_battery"] = data["battery"]
+                else:
+                    ui_current_values[f"{name}_battery"] = "No Battery"
+                    
+                sensor_color = "green"
+                if not data["is_online"] or data["tamper"]:
+                    sensor_color = "red"
+                else:
+                    has_major_fault = any("HARDWARE_FAULT" in a or "FLATLINE" in a for a in data["anomalies"])
+                    has_signal_issue = any("WEAK_SIGNAL" in a or "POOR_SNR" in a for a in data["anomalies"])
+                    
+                    if has_major_fault:
+                        sensor_color = "red"
+                    elif has_signal_issue:
+                        sensor_color = "orange"
+                        
+                    if not data["is_plugged_in"] and data["battery"] is not None:
+                        if data["is_weather"]:
+                            if data["battery"] < 2.4:
+                                sensor_color = "red"
+                        else:
+                            if data["battery"] < 15.0:
+                                sensor_color = "red"
+                            elif data["battery"] < 50.0 and sensor_color == "green":
+                                sensor_color = "orange"
+                                
+                ui_current_values[f"{name}_status_color"] = sensor_color
+                
+                if sensor_color == "red":
+                    campus_has_red = True
+                elif sensor_color == "orange":
+                    campus_has_orange = True
+                # ----------------------------------
                 
                 # Connectivity
                 if data["is_online"]:
@@ -459,7 +560,7 @@ def get_campus_diagnostics() -> str:
     avg_bat = int(np.mean(battery_vals)) if battery_vals else 0
     overall_status = "ATTENTION_REQUIRED" if (offline_list or power_list or anomaly_list or tamper_list) else "HEALTHY"
 
-    # Format Output
+    # Format Text Output
     output = [
         "Query_Context:",
         "  Domain: Diagnostics (Campus-Wide Summary)",
@@ -499,7 +600,21 @@ def get_campus_diagnostics() -> str:
     else:
         output.append("  Tamper_Alarms: None")
 
-    return "\n".join(output)
+    # Format Artifact Payload
+    if campus_has_red:
+        overall_status_color = "red"
+    elif campus_has_orange:
+        overall_status_color = "orange"
+    else:
+        overall_status_color = "green"
+        
+    artifact = {
+        "view_type": "diagnostics",
+        "current_values": ui_current_values,
+        "status_color": overall_status_color
+    }
+
+    return "\n".join(output), artifact
 
 # ==========================================
 # TEST EXECUTION BLOCK
@@ -510,14 +625,17 @@ if __name__ == "__main__":
     print("-" * 50)
     
     try:
-        print("\n[Testing Targeted Audit (Room 1.2)]")
-        print(get_diagnostics.invoke({"target": "1.2"}))
+        print("\n[Testing Targeted Audit (Room 2.4)]")
+        summary, raw_data = get_diagnostics.func(target="2.4", sensor_type=None)
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
 
         print("\n[Testing Targeted Audit (Room entrance, PC sensors)]")
-        print(get_diagnostics.invoke({"target": "entrance", "sensor_type": "PC"}))
-
-        print("\n[Testing Campus-Wide Summary]")
-        print(get_campus_diagnostics.invoke({}))
+        summary2, raw_data2 = get_diagnostics.func(target="entrance", sensor_type="PC")
+        print(summary2)
+        print("\n[Artifact Payload]")
+        print(raw_data2)
         
         print("\n" + "-"*50)
         print("All Diagnostics tool tests completed successfully.")

@@ -4,65 +4,42 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.runnables import RunnableConfig
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
-# Import the existing LLM setup, tools, and prompt from your supervisor
+# Import the existing LLM setup and tools from your supervisor
 from src.smart_campus_assistant.agents.supervisor import supervisor_llm, all_campus_tools, supervisor_prompt
+from src.smart_campus_assistant.agents.visual import get_ui_intent
 
 logger = logging.getLogger(__name__)
 
 # ==========================================
 # 1. DEFINE THE GRAPH STATE
 # ==========================================
-# The `add_messages` reducer ensures new messages are appended to the history, not overwritten.
 class GraphState(TypedDict):
     messages: Annotated[list, add_messages]
 
 # ==========================================
 # 2. DEFINE THE NODES
 # ==========================================
-def call_supervisor(state: GraphState, config: RunnableConfig):
-    """The brain of the graph. Evaluates the conversation history and makes decisions."""
+async def call_supervisor(state: GraphState, config: dict):
     messages = state["messages"]
-    
-    # Prepend the system prompt dynamically so the LLM always has its instructions, 
-    # but we don't bloat the saved state with duplicate SystemMessages.
     full_context = [SystemMessage(content=supervisor_prompt)] + messages
-    
     logger.info("Supervisor LLM is evaluating the state...")
-    response = supervisor_llm.invoke(full_context, config=config)
     
-    # Return the new AI message to be appended to the state
+    # Use ainvoke for asynchronous execution
+    response = await supervisor_llm.ainvoke(full_context, config=config)
     return {"messages": [response]}
 
-# LangGraph's native ToolNode automatically handles executing your @tool functions
-# and formatting their outputs as ToolMessages.
 tool_node = ToolNode(all_campus_tools)
 
-# ==========================================
-# 3. DEFINE THE ROUTING LOGIC
-# ==========================================
 def should_continue(state: GraphState):
-    """Checks if the LLM decided to use a tool or if it is done answering."""
     last_message = state["messages"][-1]
-    
     if last_message.tool_calls:
-        # Create a descriptive log for each tool call
-        logger.info(f"Routing to {len(last_message.tool_calls)} tool(s)...")
-        
-        for tool in last_message.tool_calls:
-            tool_name = tool["name"]
-            tool_args = tool.get("args", {})
-            logger.info(f"Executing: {tool_name} | Args: {tool_args}")
-            
         return "tools"
-    
-    logger.info("No tools requested. Routing to END.")
     return END
 
 # ==========================================
-# 4. BUILD AND COMPILE THE GRAPH
+# 3. BUILD AND COMPILE THE GRAPH
 # ==========================================
 workflow = StateGraph(GraphState)
 
@@ -73,32 +50,137 @@ workflow.add_edge(START, "supervisor")
 workflow.add_conditional_edges("supervisor", should_continue, ["tools", END])
 workflow.add_edge("tools", "supervisor")
 
-# Add the Memory Checkpointer! This is what gives the agent a memory.
 memory = MemorySaver()
 app = workflow.compile(checkpointer=memory)
 
 # ==========================================
-# 5. ENTRY POINT FOR TELEGRAM
+# 4. FASTAPI WEBSOCKET HANDLERS
 # ==========================================
-def run_graph_supervisor(user_query: str, thread_id: str, run_config: dict = None) -> str:
-    """
-    Executes the stateful graph. 
-    The thread_id is used by MemorySaver to isolate different Telegram reply chains.
-    """
-    # 1. Prepare the standard LangGraph config with our thread ID
+
+async def process_chat_message(user_query: str, thread_id: str, websocket):
+    """Handles the sequential UI routing and then streams the LangGraph execution."""
+    
+    # --- 1. SEQUENTIAL UI ROUTING (FAST PATH) ---
+    try:
+        ui_intent = await get_ui_intent(user_query)
+        await websocket.send_json({
+            "type": "ui_layout",
+            "data": ui_intent.dict()
+        })
+    except Exception as e:
+        logger.error(f"UI Routing failed: {e}")
+    
+    # --- 2. MAIN LANGGRAPH EXECUTION (STREAMING) ---
     config = {"configurable": {"thread_id": thread_id}}
     
-    # 2. Merge in external configs (like your Langfuse callbacks) if they exist
-    if run_config and "callbacks" in run_config:
-        config["callbacks"] = run_config["callbacks"]
+    try:
+        async for event in app.astream_events(
+            {"messages": [HumanMessage(content=user_query)]}, 
+            config=config, 
+            version="v2"
+        ):
+            kind = event["event"]
+            
+            # A. Catch Tool Starts (Status Updates & UI Correction)
+            if kind == "on_tool_start":
+                tool_name = event["name"]
+                if tool_name == "verify_ui_state":
+                    # The Supervisor is locking in the final UI view
+                    args = event["data"].get("input", {})
+                    await websocket.send_json({
+                        "type": "ui_correction",
+                        "rooms": args.get("rooms", []),
+                        "domains": args.get("domains", [])
+                    })
+                else:
+                    await websocket.send_json({
+                        "type": "status",
+                        "message": f"Calling {tool_name}..."
+                    })
+            
+            # B. Catch Tool Ends (Extracting Raw Artifacts for Frontend)
+            elif kind == "on_tool_end":
+                tool_name = event["name"]
+                if tool_name != "verify_ui_state":
+                    output = event["data"].get("output")
+                    
+                    # Safely extract artifact depending on LangChain tool setup
+                    raw_data = None
+                    if isinstance(output, ToolMessage) and output.artifact:
+                        raw_data = output.artifact
+                    elif isinstance(output, tuple) and len(output) > 1:
+                        raw_data = output[1]
+                        
+                    if raw_data:
+                        await websocket.send_json({
+                            "type": "tool_data",
+                            "tool": tool_name,
+                            "raw_data": raw_data
+                        })
+            
+            # C. Catch Chat Stream (Typewriter text effect)
+            elif kind == "on_chat_model_stream":
+                chunk = event["data"]["chunk"].content
+                if chunk:
+                    await websocket.send_json({
+                        "type": "text_stream",
+                        "chunk": chunk
+                    })
+                    
+    except Exception as e:
+        logger.error(f"Graph execution error: {e}")
+        await websocket.send_json({
+            "type": "text_stream",
+            "chunk": "\n[System Error: Unable to process request.]"
+        })
         
-    logger.info(f"Invoking Graph for Thread ID: {thread_id}")
+    # --- 3. END STREAM SIGNAL ---
+    await websocket.send_json({"type": "stream_end"})
+
+
+async def handle_map_interaction(room: str, domain: str, thread_id: str, websocket):
+    """Bypasses LLM, runs tool directly for zero-latency UI updates, and silently updates graph memory."""
     
-    # 3. Invoke the graph with the new user message
-    final_state = app.invoke(
-        {"messages": [HumanMessage(content=user_query)]},
-        config=config
-    )
+    # Map domain strings to your actual tool function names
+    tool_mapping = {
+        "Occupancy": "get_occupancy",
+        "Air Quality": "get_air_quality",
+        "Climate": "get_temp_humidity",
+        "Lights": "get_lights",
+        "Doors/Windows": "get_door_window",
+    }
     
-    # 4. Extract and return the final text response from the last message in the state
-    return final_state["messages"][-1].content
+    tool_name = tool_mapping.get(domain)
+    if not tool_name:
+        return
+        
+    # Locate the tool from your compiled list
+    target_tool = next((t for t in all_campus_tools if t.name == tool_name), None)
+    
+    if target_tool:
+        try:
+            # 1. Direct Execution
+            result = await target_tool.ainvoke({"room_id": room, "timeframe": "now"})
+            
+            # Unpack the YAML summary and raw artifact
+            yaml_summary = result[0] if isinstance(result, tuple) else str(result)
+            raw_data = result[1] if isinstance(result, tuple) else result 
+
+            # 2. Instant UI Update
+            await websocket.send_json({
+                "type": "map_data_update",
+                "room": room,
+                "domain": domain,
+                "data": raw_data
+            })
+            
+            # 3. Silent Context Injection
+            config = {"configurable": {"thread_id": thread_id}}
+            context_msg = SystemMessage(
+                content=f"[SYSTEM LOG]: The user just clicked on the map to view the {domain} for {room}. The current data is:\n{yaml_summary}"
+            )
+            # Update the Thread memory without generating an LLM response
+            app.update_state(config, {"messages": [context_msg]})
+            
+        except Exception as e:
+            logger.error(f"Direct tool execution failed for {domain} in {room}: {e}")

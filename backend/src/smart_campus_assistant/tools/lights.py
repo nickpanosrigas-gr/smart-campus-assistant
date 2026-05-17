@@ -1,5 +1,5 @@
 import pandas as pd
-from typing import Literal, Dict, Any, List, Optional
+from typing import Literal, Dict, Any, List, Optional, Tuple
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 import logging
@@ -23,19 +23,12 @@ Timeframes = Literal[
 logger = logging.getLogger(__name__)
 
 # ==========================================
-# DYNAMIC WEATHER STATION DISCOVERY
+# OUTDOOR WEATHER STATION DISCOVERY
 # ==========================================
-def find_weather_station_id() -> Optional[str]:
-    """Sweeps the DeviceRegistry to find the ThingsBoard UUID for the Weather Station."""
-    for room in registry.get_available_rooms():
-        devices = registry.get_all_devices_in_room(room)
-        for name, d_val in devices.items():
-            if "WEATHER" in name.upper():
-                return d_val.get("id") if isinstance(d_val, dict) else d_val
-    logger.error("Could not find a Weather Station in the campus_topology.json!")
-    return None
-
-WEATHER_STATION_ID = find_weather_station_id()
+_weather_devices = registry.get_all_devices_by_type("WEATHERSTATION")
+WEATHER_STATION_NAME = next(iter(_weather_devices.keys())) if _weather_devices else None
+WEATHER_STATION_DATA = _weather_devices[WEATHER_STATION_NAME] if WEATHER_STATION_NAME else {}
+WEATHER_STATION_ID = WEATHER_STATION_DATA.get("id") if isinstance(WEATHER_STATION_DATA, dict) else WEATHER_STATION_DATA
 
 # Config mapping for API calls and pandas resampling
 TIMEFRAME_CONFIG = {
@@ -119,7 +112,6 @@ def get_group_outliers(series: pd.Series, baseline_counts: pd.Series, solar_seri
             if not day_solar.empty:
                 day_solar_mean = day_solar.mean()
                 diff = day_solar_mean - solar_baseline
-                # Changed to absolute check to catch highly cloudy/stormy days (negative diff) as well
                 if abs(diff) >= 200.0:
                     is_solar_outlier = True
                     sign = "+" if diff > 0 else ""
@@ -142,8 +134,8 @@ class LightsInput(BaseModel):
         description="The time window for the data request. 'now' provides a real-time snapshot. '2h', '24h', '7d' provides data for that timeframe in smaller buckets. '30d' and '90d' provide long-term statistics."
     )
 
-@tool("get_ambient_lights", args_schema=LightsInput)
-def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
+@tool("get_ambient_lights", args_schema=LightsInput, response_format="content_and_artifact")
+def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     """
     Tracks indoor illumination using a discrete 0-5 scale.
     Uses state-transition logic to prevent mathematical hallucinations and maps integers to semantic labels.
@@ -152,7 +144,8 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
     all_iaq_devices = registry.get_devices_by_room_and_type(room, "IAQ")
     
     if not all_iaq_devices:
-        return f"Query_Context:\n  Room: {room}\nError: No IAQ (Light) sensors found in this room."
+        error_msg = f"Query_Context:\n  Room: {room}\nError: No IAQ (Light) sensors found in this room."
+        return error_msg, {"view_type": "error", "message": "No IAQ sensors found"}
 
     # 2. Check Active Status via Server Attributes
     active_iaq_devices = {}
@@ -181,9 +174,24 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
         except Exception as e:
             logger.warning(f"Could not fetch active status for {device_name}: {e}")
             offline_sensors.append(device_name)
+            
+    # Check Weather Station active status
+    is_weather_active = False
+    if WEATHER_STATION_ID:
+        try:
+            w_attrs = tb_client.get_server_attributes(WEATHER_STATION_ID, ["active"])
+            is_weather_active = any(attr.get("key") == "active" and str(attr.get("value")).lower() == "true" for attr in w_attrs)
+        except Exception:
+            pass
+
+    if not is_weather_active and WEATHER_STATION_NAME:
+        # If it's offline, track it so we can paint it red in the UI
+        if WEATHER_STATION_NAME not in offline_sensors:
+            offline_sensors.append(WEATHER_STATION_NAME)
 
     if not active_iaq_devices:
-        return f"Query_Context:\n  Room: {room}\nError: Found {len(all_iaq_devices)} IAQ sensors, but all are currently offline."
+        error_msg = f"Query_Context:\n  Room: {room}\nError: Found {len(all_iaq_devices)} IAQ sensors, but all are currently offline."
+        return error_msg, {"view_type": "error", "message": "All sensors offline"}
 
     # 3. Build the Active_Sensors reporting lines
     total_count = len(all_iaq_devices)
@@ -231,7 +239,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
                                         pass
             
             solar_collected = {c: [] for c in contexts}
-            if WEATHER_STATION_ID:
+            if is_weather_active and WEATHER_STATION_ID:
                 try:
                     w_base = fetch_prev(WEATHER_STATION_ID, ["solar_radiation"])
                     if "solar_radiation" in w_base and isinstance(w_base["solar_radiation"], dict):
@@ -266,10 +274,11 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
         solar = astral_client.get_current_solar_context()
         solar_rad = "N/A"
         
-        if WEATHER_STATION_ID:
+        if is_weather_active and WEATHER_STATION_ID:
             raw_w = tb_client.get_now(WEATHER_STATION_ID, ["solar_radiation"])
             if "solar_radiation" in raw_w and raw_w["solar_radiation"]:
-                solar_rad = f"{float(raw_w['solar_radiation'][0]['value']):.1f} W/m²"
+                val = float(raw_w['solar_radiation'][0]['value'])
+                solar_rad = f"{val:.1f} W/m²"
 
         output = [
             "Query_Context:",
@@ -284,7 +293,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
         solar_context_block = [
             "  Solar_Context:",
             f"    - Average_Daylight_Window: {solar['sunrise']} to {solar['sunset']}",
-            f"    - Current_Sun_Azimuth: Sun is currently facing {solar['horizontal'].split()[-1]}",
+            f"    - Current_Sun_Azimuth: {solar['horizontal']}",
             f"    - Vertical_Angle: {solar['vertical']}"
         ]
         if solar_rad != "N/A":
@@ -300,17 +309,65 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
             "Current_State:"
         ])
         
-        # Only process active devices
+        # Build snapshot artifact
+        current_values = {}
+        
+        # 1. Inject Online/Offline Status Colors
+        if WEATHER_STATION_NAME:
+            if is_weather_active:
+                current_values[f"{WEATHER_STATION_NAME}_status_color"] = "green"
+            else:
+                current_values[f"{WEATHER_STATION_NAME}_status_color"] = "red"
+
+        for device_name in active_iaq_devices.keys():
+            current_values[f"{device_name}_status_color"] = "green"
+        for device_name in offline_sensors:
+            if device_name != WEATHER_STATION_NAME:
+                current_values[f"{device_name}_status_color"] = "red"
+            
+        # 2. Fetch Actual Values
+        if is_weather_active and WEATHER_STATION_ID:
+            raw_w = tb_client.get_now(WEATHER_STATION_ID, ["solar_radiation"])
+            if "solar_radiation" in raw_w and raw_w["solar_radiation"]:
+                val = float(raw_w['solar_radiation'][0]['value'])
+                current_values["solar_radiation"] = val
+
         for device_name, device_data in active_iaq_devices.items():
             device_id = device_data.get("id")
             raw_data = tb_client.get_now(device_id, ["light_level"])
             if "light_level" in raw_data and raw_data["light_level"]:
                 val = float(raw_data["light_level"][0]["value"])
                 output.append(f"  {device_name}: {get_semantic_label(val)}")
+                current_values[device_name] = val
             else:
                 output.append(f"  {device_name}: No Data (Despite being marked Online)")
+
+        # 3. Room Status Color Logic (0-2: green, 3-4: orange, 5: red)
+        status_color = "gray"
+        # Ensure we don't accidentally calculate the status color using solar radiation data!
+        light_vals = [v for k, v in current_values.items() if not k.endswith("_status_color") and k != "solar_radiation"]
+        if light_vals:
+            avg_val = sum(light_vals) / len(light_vals)
+            rounded_val = round(avg_val)
+            if rounded_val <= 2:
+                status_color = "green"
+            elif rounded_val <= 4:
+                status_color = "orange"
+            else:
+                status_color = "red"
+
+        artifact = {
+            "view_type": "snapshot",
+            "current_values": current_values,
+            "status_color": status_color,
+            "celestial": {
+                "sun_azimuth": solar.get("raw_azimuth"),
+                "sun_elevation": solar.get("raw_elevation"),
+                "is_day": solar.get("is_day")
+            }
+        }
                 
-        return "\n".join(output)
+        return "\n".join(output), artifact
 
     # ==========================================
     # BRANCH B: HISTORICAL DATA FETCH
@@ -320,9 +377,8 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
     fetch_method_name = config["method"]
     fetch_method = getattr(tb_client, fetch_method_name)
 
-    # 1. Fetch Historical Weather (Solar Radiation Series)
     solar_rad_series = pd.Series(dtype=float)
-    if WEATHER_STATION_ID:
+    if is_weather_active and WEATHER_STATION_ID:
         try:
             w_raw = fetch_method(WEATHER_STATION_ID, ["solar_radiation"])
             if "solar_radiation" in w_raw and w_raw["solar_radiation"]:
@@ -334,7 +390,6 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
         except Exception as e:
             logger.warning(f"Failed to fetch historical solar radiation: {e}")
 
-    # 2. Fetch Historical Room Data
     all_dataframes = []
     for device_name, device_data in active_iaq_devices.items():
         device_id = device_data.get("id")
@@ -344,7 +399,6 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
             if "light_level" in raw_data and raw_data["light_level"]:
                 df = pd.DataFrame(raw_data["light_level"])
                 df['value'] = pd.to_numeric(df['value'])
-                # Localize exactly to the specified timezone
                 df['datetime'] = pd.to_datetime(df['ts'], unit='ms').dt.tz_localize('UTC').dt.tz_convert(settings.TIMEZONE)
                 df.set_index('datetime', inplace=True)
                 df.rename(columns={'value': device_name}, inplace=True)
@@ -354,7 +408,8 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
             logger.warning(f"Failed to fetch historical light data for {device_name}: {e}")
 
     if not all_dataframes:
-        return f"Query_Context:\n  Room: {room}\nError: No historical light data found for timeframe {timeframe}."
+        error_msg = f"Query_Context:\n  Room: {room}\nError: No historical light data found for timeframe {timeframe}."
+        return error_msg, {"view_type": "graph", "series": [], "metadata": {}}
 
     combined_df = pd.concat(all_dataframes, axis=1, sort=True)
     
@@ -364,9 +419,26 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
     raw_series = aligned_df['Room_Aggregate'].dropna()
 
     if raw_series.empty:
-        return f"Query_Context:\n  Room: {room}\nError: Historical data was fetched but contained only invalid values."
+        error_msg = f"Query_Context:\n  Room: {room}\nError: Historical data was fetched but contained only invalid values."
+        return error_msg, {"view_type": "graph", "series": [], "metadata": {}}
 
-    # Map timeframe strings to integers for astral calculation
+    # Pre-calculate the UI JSON graph data by stripping NaNs to prevent serialization errors
+    ui_df = aligned_df.drop(columns=['Room_Aggregate'], errors='ignore').copy()
+    series_data = []
+    for dt, row in ui_df.iterrows():
+        point = {"timestamp": dt.isoformat()}
+        for col in ui_df.columns:
+            val = row[col]
+            if pd.notna(val):
+                point[col] = float(val)
+        series_data.append(point)
+        
+    graph_artifact = {
+        "view_type": "graph",
+        "series": series_data,
+        "metadata": {col: "Level (0-5)" for col in ui_df.columns}
+    }
+
     days_map = {"2h": 1, "24h": 1, "7d": 7, "30d": 30, "90d": 90}
     days_back = days_map.get(timeframe, 1)
     solar_hist = astral_client.get_historical_solar_context(days_back)
@@ -453,7 +525,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
         output.extend(process_matrix_cell("Working_Hours (08:00-22:00)", is_weekend & is_working_hours, False, True))
         output.extend(process_matrix_cell("Non-Working_Hours (22:00-08:00)", is_weekend & is_non_working, False, False))
 
-        return "\n".join(output)
+        return "\n".join(output), graph_artifact
 
     # ==========================================
     # BRANCH D: 2h, 24h, 7d (PER-DAY TIMELINE LOGIC)
@@ -503,7 +575,6 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
         day_stable_periods = []
         day_outliers = []
         
-        # Check for solar spike/drop outlier for this day
         if not solar_rad_series.empty:
             day_solar = solar_rad_series[solar_rad_series.index.normalize() == day_start.normalize()]
             if not day_solar.empty:
@@ -548,7 +619,6 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
                     bucket_transitions.append(f"Transition: [{previous_global_state} -> {current_state} at {time_str}].")
                     previous_global_state = current_state
             
-            # Classify bucket
             if len(bucket_transitions) == 0:
                 if current_stable_start is None:
                     current_stable_start = bucket_start.strftime('%H:%M')
@@ -579,7 +649,6 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
                 current_stable_state = previous_global_state
                 stable_bin_count = 0
 
-        # Close out any open stable periods using the actual last processed time
         if stable_bin_count > 0:
             end_str = last_bucket_end or "24:00"
             if end_str == "00:00": end_str = "24:00"
@@ -590,7 +659,6 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
                 "state": current_stable_state
             })
 
-        # Append this day's activity to the global output
         output.append(f"  '{day_key}':")
         
         if day_outliers:
@@ -611,7 +679,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> str:
             for period in day_stable_periods:
                 output.append(f"      - '{period['start']} to {period['end']}' ({period['intervals']} intervals): State: {period['state']}")
 
-    return "\n".join(output)
+    return "\n".join(output), graph_artifact
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
@@ -619,7 +687,10 @@ if __name__ == "__main__":
     print("-" * 50)
     try:
         print("\n[Testing]")
-        print(get_ambient_lights.invoke({"room": "4.9", "timeframe": "30d"}))
+        summary, raw_data = get_ambient_lights.func(room="4.9", timeframe="now")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
         print("-" * 50)
 
     except Exception as e:

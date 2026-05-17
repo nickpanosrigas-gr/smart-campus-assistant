@@ -9,12 +9,10 @@ from src.smart_campus_assistant.config.settings import settings
 # ==========================================
 # 1. IMPORT ALL RAW TOOLS DIRECTLY
 # ==========================================
-# (Make sure these function names match the @tool functions in your files)
 from src.smart_campus_assistant.tools.topology import search_topology
 from src.smart_campus_assistant.tools.schedule import (
     get_room_schedule, get_course_schedule, get_instructor_schedule, get_semester_schedule
 )
-# Assuming these are the names of your telemetry/facilities tools:
 from src.smart_campus_assistant.tools.temp_humidity import get_temp_humidity
 from src.smart_campus_assistant.tools.air_quality import get_air_quality
 from src.smart_campus_assistant.tools.occupancy import get_occupancy
@@ -22,6 +20,7 @@ from src.smart_campus_assistant.tools.door_window import get_door_window_status
 from src.smart_campus_assistant.tools.lights import get_ambient_lights
 from src.smart_campus_assistant.tools.energy import get_energy_infrastructure
 from src.smart_campus_assistant.tools.diagnostics import get_campus_diagnostics
+from src.smart_campus_assistant.tools.visual_sync import verify_ui_state
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +67,7 @@ all_campus_tools = [
     search_topology,
     get_room_schedule, get_course_schedule, get_instructor_schedule, get_semester_schedule,
     get_temp_humidity, get_air_quality, get_occupancy, get_door_window_status, get_ambient_lights,
-    get_energy_infrastructure, get_campus_diagnostics
+    get_energy_infrastructure, get_campus_diagnostics, verify_ui_state
 ]
 
 supervisor_llm = llm.bind_tools(all_campus_tools)

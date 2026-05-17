@@ -1,5 +1,5 @@
 import pandas as pd
-from typing import Literal, Dict, Any, List, Optional
+from typing import Literal, Dict, Any, List, Optional, Tuple
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 import logging
@@ -80,8 +80,8 @@ class DoorWindowInput(BaseModel):
         description="The time window for the data request. 'now' provides a real-time snapshot. '2h', '24h', '7d' provide timelines. '30d', '90d' provide long-term profiling."
     )
 
-@tool("get_door_window_status", args_schema=DoorWindowInput)
-def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
+@tool("get_door_window_status", args_schema=DoorWindowInput, response_format="content_and_artifact")
+def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     """
     Tracks physical access points (Doors/Windows) using Magnetic Contact (MC) sensors.
     Reports Open/Closed states, timelines of physical entry, and long-term anomalies.
@@ -89,7 +89,8 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
     all_mc_devices = registry.get_devices_by_room_and_type(room, "MC")
     
     if not all_mc_devices:
-        return f"Query_Context:\n  Room: {room}\nError: No MC (Door/Window) sensors found in this room."
+        error_msg = f"Query_Context:\n  Room: {room}\nError: No MC (Door/Window) sensors found in this room."
+        return error_msg, {"view_type": "error", "message": "No MC sensors found"}
 
     active_mc_devices = {}
     offline_sensors = []
@@ -113,7 +114,8 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
             offline_sensors.append(device_name)
 
     if not active_mc_devices:
-        return f"Query_Context:\n  Room: {room}\nError: Found {len(all_mc_devices)} MC sensors, but all are offline."
+        error_msg = f"Query_Context:\n  Room: {room}\nError: Found {len(all_mc_devices)} MC sensors, but all are offline."
+        return error_msg, {"view_type": "error", "message": "All sensors offline"}
 
     total_count = len(all_mc_devices)
     active_count = len(active_mc_devices)
@@ -200,6 +202,16 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
             "Current_State:"
         ])
         
+        ui_current_values = {}
+        
+        # 1. Offline Sensors (Red)
+        for device_name in offline_sensors:
+            ui_current_values[f"{device_name}_status_color"] = "red"
+            ui_current_values[device_name] = None
+        
+        open_count = 0
+        
+        # 2. Active Sensors
         for device_name, device_data in active_mc_devices.items():
             device_id = device_data.get("id")
             tag = device_data.get("tag", "Unspecified")
@@ -208,10 +220,37 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
             if "magnet_status" in raw_data and raw_data["magnet_status"]:
                 is_open = parse_magnet_status(raw_data["magnet_status"][0]["value"])
                 output.append(f"  {device_name} ({tag}): {get_state_label(is_open)}")
+                
+                ui_current_values[device_name] = "Open" if is_open else "Closed"
+                
+                if is_open:
+                    ui_current_values[f"{device_name}_status_color"] = "orange"
+                    open_count += 1
+                else:
+                    ui_current_values[f"{device_name}_status_color"] = "green"
             else:
                 output.append(f"  {device_name} ({tag}): No Data")
+                ui_current_values[f"{device_name}_status_color"] = "red" # Treat missing data as offline error
+                ui_current_values[device_name] = None
                 
-        return "\n".join(output)
+        # 3. Overall Room Status Logic
+        if total_count > 0:
+            if open_count == total_count:
+                status_color = "red"
+            elif open_count > (total_count / 2):
+                status_color = "orange"
+            else:
+                status_color = "green"
+        else:
+            status_color = "gray"
+
+        artifact = {
+            "view_type": "snapshot",
+            "current_values": ui_current_values,
+            "status_color": status_color
+        }
+                
+        return "\n".join(output), artifact
 
     # ==========================================
     # BRANCH B: HISTORICAL DATA FETCH & ALIGNMENT
@@ -263,12 +302,35 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
             logger.warning(f"Failed to fetch historical MC data for {device_name}: {e}")
 
     if not all_dfs:
-        return "\n".join(header_lines) + f"\n\nError: No historical data found for {timeframe}."
+        error_msg = "\n".join(header_lines) + f"\n\nError: No historical data found for {timeframe}."
+        return error_msg, {"view_type": "graph", "series": [], "metadata": {}}
 
     # Merge all sensors
     combined_df = pd.concat(all_dfs, axis=1, sort=True)
     combined_df = combined_df.ffill().bfill()
     combined_df = combined_df.resample('1min').ffill()
+    
+    # Create the timeline Graph Artifact
+    series_data = []
+    # Drop calculated groups for the pure visual payload, only keep sensor columns
+    ui_df = combined_df[[col for col in combined_df.columns if col in active_mc_devices.keys()]].copy()
+    
+    for dt, row in ui_df.iterrows():
+        point = {"timestamp": dt.isoformat()}
+        has_val = False
+        for col in ui_df.columns:
+            val = row[col]
+            if pd.notna(val):
+                point[col] = 1 if val else 0  # Map boolean to 1 (Open) or 0 (Closed) for graph
+                has_val = True
+        if has_val:
+            series_data.append(point)
+            
+    graph_artifact = {
+        "view_type": "graph",
+        "series": series_data,
+        "metadata": {col: "State (1=Open, 0=Closed)" for col in ui_df.columns}
+    }
 
     # Create Logical Groups
     if doors: combined_df['Group_Doors'] = combined_df[doors].any(axis=1)
@@ -347,7 +409,7 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
         output.extend(process_profile_cell("Working_Hours (08:00-22:00)", ~is_wk & is_work, False))
         output.extend(process_profile_cell("Non-Working_Hours (22:00-08:00)", ~is_wk & ~is_work, True))
         
-        return "\n".join(output)
+        return "\n".join(output), graph_artifact
 
     # ==========================================
     # BRANCH D: TIMELINES (2h, 24h, 7d)
@@ -488,7 +550,7 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> str:
             for p in day_stable:
                 output.append(f"      - '{p['start']} to {p['end']}' ({p['intervals']} intervals): State: {p['state']}")
 
-    return "\n".join(output)
+    return "\n".join(output), graph_artifact
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
@@ -496,7 +558,10 @@ if __name__ == "__main__":
     print("-" * 50)
     try:
         print("\n[Testing]")
-        print(get_door_window_status.invoke({"room": "2.4", "timeframe": "30d"}))
+        summary, raw_data = get_door_window_status.func(room="2.4", timeframe="now")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
         print("-" * 50)
         
     except Exception as e:

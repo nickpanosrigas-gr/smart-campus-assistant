@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from typing import Literal, Dict, Any, List, Optional
+from typing import Literal, Dict, Any, List, Optional, Tuple
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 import logging
@@ -211,22 +211,80 @@ def parse_full_nested_baselines(raw_bases: List[Dict], keys: List[str]) -> Dict[
     return final_result
 
 
-@tool("get_air_quality", args_schema=AirQualityInput)
-def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
+@tool("get_air_quality", args_schema=AirQualityInput, response_format="content_and_artifact")
+def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     """
     Tracks indoor Air Quality (CO2, PM2.5, PM10, TVOC).
     Focuses on absolute health limits and deviations from period averages.
     """
-    iaq_devices = registry.get_devices_by_room_and_type(room, "IAQ")
-    if not iaq_devices:
-        return f"Query_Context:\n  Room: {room}\nError: No IAQ sensors found in this room."
+    all_iaq_devices = registry.get_devices_by_room_and_type(room, "IAQ")
+    if not all_iaq_devices:
+        error_msg = f"Query_Context:\n  Room: {room}\nError: No IAQ sensors found in this room."
+        return error_msg, {"view_type": "error", "message": "No IAQ sensors found"}
 
-    sensor_info_lines = [f"  Sensors_Configured: {len(iaq_devices)}"]
-    for name, data in iaq_devices.items():
-        zone = data.get("zone", "Unspecified") if isinstance(data, dict) else "Unspecified"
-        tag = data.get("tag", "Unspecified") if isinstance(data, dict) else "Unspecified"
-        sensor_info_lines.append(f"    - {name} (IAQ): Zone: {zone}, Tag: {tag}")
+    # ==========================================
+    # SERVER ATTRIBUTE ACTIVE/OFFLINE CHECK
+    # ==========================================
+    active_iaq_devices = {}
+    offline_sensors = []
+    
+    for device_name, device_data in all_iaq_devices.items():
+        device_id = device_data.get("id") if isinstance(device_data, dict) else device_data
+        if not device_id: 
+            offline_sensors.append(device_name)
+            continue
+            
+        try:
+            attrs = tb_client.get_server_attributes(device_id, ["active"])
+            is_active = any(attr.get("key") == "active" and str(attr.get("value")).lower() == "true" for attr in attrs)
+            if is_active:
+                active_iaq_devices[device_name] = device_data
+            else:
+                offline_sensors.append(device_name)
+        except Exception as e:
+            logger.warning(f"Could not fetch active status for {device_name}: {e}")
+            offline_sensors.append(device_name)
 
+    is_outdoor_active = False
+    if OUTDOOR_PM_ID:
+        try:
+            w_attrs = tb_client.get_server_attributes(OUTDOOR_PM_ID, ["active"])
+            is_outdoor_active = any(attr.get("key") == "active" and str(attr.get("value")).lower() == "true" for attr in w_attrs)
+        except Exception:
+            pass
+            
+    if not is_outdoor_active and OUTDOOR_PM_NAME:
+        if OUTDOOR_PM_NAME not in offline_sensors:
+            offline_sensors.append(OUTDOOR_PM_NAME)
+
+    if not active_iaq_devices:
+        error_msg = f"Query_Context:\n  Room: {room}\nError: Found {len(all_iaq_devices)} IAQ sensors, but all are currently offline."
+        return error_msg, {"view_type": "error", "message": "All sensors offline"}
+
+    # Build Active Sensors Block
+    total_relevant = len(all_iaq_devices) + (1 if OUTDOOR_PM_ID else 0)
+    active_count = len(active_iaq_devices) + (1 if is_outdoor_active else 0)
+    
+    sensor_info_lines = [f"  Active_Sensors: {active_count}/{total_relevant} Online"]
+    
+    if is_outdoor_active and OUTDOOR_PM_NAME:
+        sensor_info_lines.append(f"    - {OUTDOOR_PM_NAME} (Outdoor PM)")
+        
+    for name, data in active_iaq_devices.items():
+        if isinstance(data, dict):
+            z = data.get("zone", "Unspecified")
+            t = data.get("tag", "Unspecified")
+            place = f"Zone: {z}, Tag: {t}"
+        else:
+            place = "Unspecified"
+        sensor_info_lines.append(f"    - {name} (IAQ): {place}")
+
+    if offline_sensors:
+        sensor_info_lines.append(f"  Offline_Sensors: {', '.join(offline_sensors)}")
+
+    # ==========================================
+    # CORE LOGIC
+    # ==========================================
     config = TIMEFRAME_CONFIG[timeframe]
     bin_size = config["bin_size"]
     
@@ -234,7 +292,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
     if timeframe not in ["30d", "90d"]:
         prev_method = getattr(tb_client, config["prev_method"])
         raw_bases = []
-        for d_data in iaq_devices.values():
+        for d_data in active_iaq_devices.values():
             d_id = d_data.get("id") if isinstance(d_data, dict) else d_data
             try:
                 raw_bases.append(prev_method(d_id, IAQ_KEYS))
@@ -260,7 +318,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
         ctx_i_base = {k: indoor_baseline.get(k, {}).get(current_ctx) for k in IAQ_KEYS}
 
         outdoor_curr = {}
-        if OUTDOOR_PM_ID:
+        if is_outdoor_active and OUTDOOR_PM_ID:
             try:
                 outdoor_curr = extract_current_values(tb_client.get_now(OUTDOOR_PM_ID, OUTDOOR_KEYS), OUTDOOR_KEYS, is_iaq=False)
             except Exception:
@@ -291,15 +349,71 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
             "  Indoor_Current (Room Sensors):"
         ])
         
-        for name, data in iaq_devices.items():
+        ui_current_values = {}
+        
+        # 1. Inject Online/Offline Status Colors
+        if OUTDOOR_PM_NAME:
+            ui_current_values[f"{OUTDOOR_PM_NAME}_status_color"] = "green" if is_outdoor_active else "red"
+            
+        for device_name in active_iaq_devices.keys():
+            ui_current_values[f"{device_name}_status_color"] = "green"
+            
+        for device_name in offline_sensors:
+            if device_name != OUTDOOR_PM_NAME:
+                ui_current_values[f"{device_name}_status_color"] = "red"
+                
+        # Inject outdoor values into UI payload
+        if outdoor_curr:
+            for k, v in outdoor_curr.items():
+                if v is not None:
+                    ui_current_values[k] = v
+        
+        # 2. Fetch Actual Values
+        i_curr_list = []
+        for name, data in active_iaq_devices.items():
             d_id = data.get("id") if isinstance(data, dict) else data
             zone = data.get("zone", "Unspecified") if isinstance(data, dict) else "Unspecified"
             
             i_curr = extract_current_values(tb_client.get_now(d_id, IAQ_KEYS), IAQ_KEYS, is_iaq=True)
+            i_curr_list.append(i_curr)
+            
+            # Inject explicit individual sensor readings
+            for k, v in i_curr.items():
+                if v is not None:
+                    ui_current_values[f"{name}_{k}"] = v
+            
             i_parts = [format_val(k, i_curr.get(k), ctx_i_base.get(k)) for k in IAQ_KEYS if i_curr.get(k) is not None]
             output.append(f"    - {name} (Zone: {zone}): {' | '.join(i_parts) if i_parts else 'Offline / No Data'}")
             
-        return "\n".join(output)
+        # Aggregate IAQ for UI Snapshot (Average across room sensors)
+        for k in IAQ_KEYS:
+            vals = [i_curr.get(k) for i_curr in i_curr_list if i_curr.get(k) is not None]
+            if vals:
+                ui_current_values[k] = sum(vals) / len(vals)
+                
+        # 3. Determine Overall Status Color
+        exceeded_count = 0
+        for k in IAQ_KEYS + OUTDOOR_KEYS:
+            if k in ui_current_values:
+                val = ui_current_values[k]
+                limit = ABSOLUTE_LIMITS.get(k)
+                if limit and val > limit:
+                    exceeded_count += 1
+                    
+        if exceeded_count >= 2:
+            status_color = "red"
+        elif exceeded_count == 1:
+            status_color = "orange"
+        else:
+            status_color = "green"
+
+        artifact = {
+            "view_type": "snapshot",
+            "current_values": ui_current_values,
+            "status_color": status_color
+        }
+            
+        return "\n".join(output), artifact
 
     # ==========================================
     # HISTORICAL DATA FETCHING
@@ -307,7 +421,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
     fetch_method = getattr(tb_client, config["method"])
     
     outdoor_df = pd.DataFrame()
-    if OUTDOOR_PM_ID:
+    if is_outdoor_active and OUTDOOR_PM_ID:
         try:
             outdoor_df = process_telemetry_to_df(fetch_method(OUTDOOR_PM_ID, OUTDOOR_KEYS), OUTDOOR_KEYS, bin_size, is_iaq=False)
             # Rename columns immediately so they do not collide with indoor sensors
@@ -317,16 +431,40 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
             logger.warning(f"Failed to fetch historical outdoor PM data: {e}")
             
     indoor_dfs = []
-    for d_data in iaq_devices.values():
+    for d_data in active_iaq_devices.values():
         d_id = d_data.get("id") if isinstance(d_data, dict) else d_data
         df = process_telemetry_to_df(fetch_method(d_id, IAQ_KEYS), IAQ_KEYS, bin_size, is_iaq=True)
         if not df.empty: indoor_dfs.append(df)
         
     if not indoor_dfs:
-        return f"Query_Context:\n  Room: {room}\nError: No historical IAQ data found for timeframe {timeframe}."
+        error_msg = f"Query_Context:\n  Room: {room}\nError: No historical IAQ data found for timeframe {timeframe}."
+        return error_msg, {"view_type": "graph", "series": [], "metadata": {}}
         
     indoor_df = pd.concat(indoor_dfs).groupby(level=0).median()
     master_df = indoor_df.join(outdoor_df, how='outer') if not outdoor_df.empty else indoor_df
+    
+    # --- BUILD THE GRAPH ARTIFACT ---
+    series_data = []
+    for dt, row in master_df.iterrows():
+        point = {"timestamp": dt.isoformat()}
+        for col in master_df.columns:
+            val = row[col]
+            if pd.notna(val):
+                point[col] = float(val)
+        if len(point) > 1:
+            series_data.append(point)
+            
+    # Resolve metadata units, mapping "outdoor_X" back to its unit
+    metadata = {}
+    for col in master_df.columns:
+        base_key = col.replace("outdoor_", "")
+        metadata[col] = UNITS.get(base_key, "")
+            
+    graph_artifact = {
+        "view_type": "graph",
+        "series": series_data,
+        "metadata": metadata
+    }
     
     overall_outdoor_mean = {}
     if not outdoor_df.empty:
@@ -418,7 +556,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
         output.extend(process_matrix_cell("Working_Hours (08:00-22:00)", is_weekend & is_working))
         output.extend(process_matrix_cell("Non-Working_Hours (22:00-08:00)", is_weekend & is_non_working))
         
-        return "\n".join(output)
+        return "\n".join(output), graph_artifact
 
     # ==========================================
     # BRANCH C: TIMELINE ACTIVITY (2h, 24h, 7d)
@@ -538,7 +676,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> str:
         else:
             output.append("    Stable_Periods (Background): None")
 
-    return "\n".join(output)
+    return "\n".join(output), graph_artifact
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -547,7 +685,10 @@ if __name__ == "__main__":
     
     try:
         print("\n[Testing]")
-        print(get_air_quality.invoke({"room": "4.9", "timeframe": "30d"}))
+        summary, raw_data = get_air_quality.func(room="2.4", timeframe="90d")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
         print("\n" + "="*50)
         
     except Exception as e:
