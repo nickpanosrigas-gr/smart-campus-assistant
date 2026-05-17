@@ -5,11 +5,11 @@
   --foreground: #171717;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+@theme {
+  --color-campus-bg-top: #0A664F;
+  --color-campus-bg-bottom: #0A0A0A;
+  --color-campus-text: #A3B8B2;
+  --color-campus-accent: #14C89B;
 }
 
 @media (prefers-color-scheme: dark) {
