@@ -2,6 +2,7 @@ import sys
 import logging
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from src.smart_campus_assistant.utils.initialization import run_initialization
 from src.smart_campus_assistant.graph.workflow import process_chat_message, handle_map_interaction
 
@@ -14,6 +15,14 @@ logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
 app = FastAPI(title="Smart Campus Assistant API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"], # Allow Next.js frontend
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
 async def startup_event():
@@ -47,14 +56,15 @@ async def websocket_endpoint(websocket: WebSocket):
             
             if msg_type == "chat_message":
                 user_query = data.get("query", "")
-                # Route to the LangGraph execution
                 await process_chat_message(user_query, thread_id, websocket)
                 
             elif msg_type == "map_interaction":
-                room = data.get("room")
+                # Updated to extract the array of rooms and the floor context
+                rooms = data.get("rooms", [])
+                floor = data.get("floor", "B")
                 domain = data.get("domain")
-                # Route to the instant tool execution & silent memory injection
-                await handle_map_interaction(room, domain, thread_id, websocket)
+                
+                await handle_map_interaction(rooms, floor, domain, thread_id, websocket)
                 
             else:
                 logger.warning(f"Unknown message type received: {msg_type}")

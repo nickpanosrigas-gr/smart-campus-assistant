@@ -5,10 +5,11 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 
 # Import the existing LLM setup and tools from your supervisor
+# (Note: Visual/UI intent pre-processing imports have been removed)
 from src.smart_campus_assistant.agents.supervisor import supervisor_llm, all_campus_tools, supervisor_prompt
-from src.smart_campus_assistant.agents.visual import get_ui_intent
 
 logger = logging.getLogger(__name__)
 
@@ -17,13 +18,22 @@ logger = logging.getLogger(__name__)
 # ==========================================
 class GraphState(TypedDict):
     messages: Annotated[list, add_messages]
+    # Rolling UI State: Overwrites itself instead of appending (no reducer)
+    map_context: dict 
 
 # ==========================================
 # 2. DEFINE THE NODES
 # ==========================================
-async def call_supervisor(state: GraphState, config: dict):
+async def call_supervisor(state: GraphState, config: RunnableConfig):
     messages = state["messages"]
-    full_context = [SystemMessage(content=supervisor_prompt)] + messages
+    map_context = state.get("map_context", {})
+    
+    # Dynamically inject the rolling map context into the prompt if it exists
+    dynamic_prompt = supervisor_prompt
+    if map_context:
+        dynamic_prompt += f"\n\n[SYSTEM LOG]: The user is currently viewing the following map data: {map_context}"
+        
+    full_context = [SystemMessage(content=dynamic_prompt)] + messages
     logger.info("Supervisor LLM is evaluating the state...")
     
     # Use ainvoke for asynchronous execution
@@ -58,20 +68,14 @@ app = workflow.compile(checkpointer=memory)
 # ==========================================
 
 async def process_chat_message(user_query: str, thread_id: str, websocket):
-    """Handles the sequential UI routing and then streams the LangGraph execution."""
+    """Handles the user query directly, tracks tools dynamically, and streams results."""
     
-    # --- 1. SEQUENTIAL UI ROUTING (FAST PATH) ---
-    try:
-        ui_intent = await get_ui_intent(user_query)
-        await websocket.send_json({
-            "type": "ui_layout",
-            "data": ui_intent.dict()
-        })
-    except Exception as e:
-        logger.error(f"UI Routing failed: {e}")
-    
-    # --- 2. MAIN LANGGRAPH EXECUTION (STREAMING) ---
+    # --- MAIN LANGGRAPH EXECUTION (STREAMING) ---
     config = {"configurable": {"thread_id": thread_id}}
+    
+    # Track backend data to send the perfect JSON UI payload without LLM hallucinations
+    ui_sync_data = {"tools": set(), "rooms": set()}
+    ui_sync_sent = False
     
     try:
         async for event in app.astream_events(
@@ -81,46 +85,61 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
         ):
             kind = event["event"]
             
-            # A. Catch Tool Starts (Status Updates & UI Correction)
+            # A. Catch Tool Starts (Dynamic Status Text & Aggregation)
             if kind == "on_tool_start":
                 tool_name = event["name"]
-                if tool_name == "verify_ui_state":
-                    # The Supervisor is locking in the final UI view
-                    args = event["data"].get("input", {})
-                    await websocket.send_json({
-                        "type": "ui_correction",
-                        "rooms": args.get("rooms", []),
-                        "domains": args.get("domains", [])
-                    })
-                else:
-                    await websocket.send_json({
-                        "type": "status",
-                        "message": f"Calling {tool_name}..."
-                    })
+                args = event["data"].get("input", {})
+                
+                # Add to our UI JSON Tracker
+                ui_sync_data["tools"].add(tool_name)
+                room_id = args.get("room_id") or args.get("room")
+                if room_id:
+                    ui_sync_data["rooms"].add(room_id)
+                
+                # Format a dynamic, clean status message for the user
+                clean_tool_name = tool_name.replace("get_", "").replace("_", " ").title()
+                status_msg = f"Checking {clean_tool_name} for {room_id}..." if room_id else f"Running {clean_tool_name}..."
+                
+                await websocket.send_json({
+                    "type": "status",
+                    "message": status_msg
+                })
             
             # B. Catch Tool Ends (Extracting Raw Artifacts for Frontend)
             elif kind == "on_tool_end":
                 tool_name = event["name"]
-                if tool_name != "verify_ui_state":
-                    output = event["data"].get("output")
+                output = event["data"].get("output")
+                
+                # Safely extract artifact depending on LangChain tool setup
+                raw_data = None
+                if isinstance(output, ToolMessage) and hasattr(output, 'artifact') and output.artifact:
+                    raw_data = output.artifact
+                elif isinstance(output, tuple) and len(output) > 1:
+                    raw_data = output[1]
                     
-                    # Safely extract artifact depending on LangChain tool setup
-                    raw_data = None
-                    if isinstance(output, ToolMessage) and output.artifact:
-                        raw_data = output.artifact
-                    elif isinstance(output, tuple) and len(output) > 1:
-                        raw_data = output[1]
-                        
-                    if raw_data:
-                        await websocket.send_json({
-                            "type": "tool_data",
-                            "tool": tool_name,
-                            "raw_data": raw_data
-                        })
+                if raw_data:
+                    await websocket.send_json({
+                        "type": "tool_data",
+                        "tool": tool_name,
+                        "raw_data": raw_data
+                    })
             
-            # C. Catch Chat Stream (Typewriter text effect)
+            # C. Catch Chat Stream (Typewriter effect & Synchronize Map UI)
             elif kind == "on_chat_model_stream":
                 chunk = event["data"]["chunk"].content
+                
+                # The moment the LLM is ready to answer, emit the perfect UI layout JSON FIRST
+                if not ui_sync_sent and ui_sync_data["tools"]:
+                    await websocket.send_json({
+                        "type": "ui_sync",
+                        "data": {
+                            "tools": list(ui_sync_data["tools"]),
+                            "rooms": list(ui_sync_data["rooms"])
+                        }
+                    })
+                    ui_sync_sent = True
+                
+                # Then stream the text naturally
                 if chunk:
                     await websocket.send_json({
                         "type": "text_stream",
@@ -134,14 +153,13 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
             "chunk": "\n[System Error: Unable to process request.]"
         })
         
-    # --- 3. END STREAM SIGNAL ---
+    # --- END STREAM SIGNAL ---
     await websocket.send_json({"type": "stream_end"})
 
 
-async def handle_map_interaction(room: str, domain: str, thread_id: str, websocket):
-    """Bypasses LLM, runs tool directly for zero-latency UI updates, and silently updates graph memory."""
+async def handle_map_interaction(rooms: list, floor: str, domain: str, thread_id: str, websocket):
+    """Bypasses LLM, runs tool directly for multiple rooms, and silently updates graph memory."""
     
-    # Map domain strings to your actual tool function names
     tool_mapping = {
         "Occupancy": "get_occupancy",
         "Air Quality": "get_air_quality",
@@ -154,33 +172,62 @@ async def handle_map_interaction(room: str, domain: str, thread_id: str, websock
     if not tool_name:
         return
         
-    # Locate the tool from your compiled list
     target_tool = next((t for t in all_campus_tools if t.name == tool_name), None)
+    if not target_tool:
+        return
+
+    # 1. Resolve "ALL" to actual rooms based on the active floor
+    if "ALL" in rooms:
+        if floor == "2":
+            target_rooms = ["2.1", "2.2", "2.3", "2.4"]
+        elif floor == "B":
+            target_rooms = ["building"]
+        else:
+            target_rooms = []
+    else:
+        target_rooms = rooms
+
+    combined_logs = []
+    room_health_updates = {}
     
-    if target_tool:
+    # Map raw backend UI color outputs to RoomHealth standard states for the frontend
+    color_to_health = {
+        "green": "Good",
+        "orange": "Warning",
+        "red": "Error"
+    }
+
+    # 2. Execute tools for each selected room
+    for room in target_rooms:
         try:
-            # 1. Direct Execution
-            result = await target_tool.ainvoke({"room_id": room, "timeframe": "now"})
+            # CRITICAL FIX: Pydantic schema expects 'room', not 'room_id'
+            result = await target_tool.ainvoke({"room": room, "timeframe": "now"})
             
-            # Unpack the YAML summary and raw artifact
             yaml_summary = result[0] if isinstance(result, tuple) else str(result)
             raw_data = result[1] if isinstance(result, tuple) else result 
 
-            # 2. Instant UI Update
-            await websocket.send_json({
-                "type": "map_data_update",
-                "room": room,
-                "domain": domain,
-                "data": raw_data
-            })
+            combined_logs.append(f"--- Room {room} ---\n{yaml_summary}")
             
-            # 3. Silent Context Injection
-            config = {"configurable": {"thread_id": thread_id}}
-            context_msg = SystemMessage(
-                content=f"[SYSTEM LOG]: The user just clicked on the map to view the {domain} for {room}. The current data is:\n{yaml_summary}"
-            )
-            # Update the Thread memory without generating an LLM response
-            app.update_state(config, {"messages": [context_msg]})
-            
+            if isinstance(raw_data, dict) and "status_color" in raw_data:
+                color = raw_data["status_color"]
+                room_health_updates[room] = color_to_health.get(color, "Good")
+
         except Exception as e:
             logger.error(f"Direct tool execution failed for {domain} in {room}: {e}")
+
+    # 3. Instant UI Update
+    if room_health_updates:
+        await websocket.send_json({
+            "type": "map_update",
+            "target_rooms": target_rooms,
+            "room_data": room_health_updates
+        })
+        
+    # 4. Silent Context Injection
+    if combined_logs:
+        config = {"configurable": {"thread_id": thread_id}}
+        full_log = "\n".join(combined_logs)
+        context_msg = SystemMessage(
+            content=f"[SYSTEM LOG]: The user clicked on the map to view {domain} for rooms: {', '.join(target_rooms)}. Current data:\n{full_log}"
+        )
+        app.update_state(config, {"messages": [context_msg]})

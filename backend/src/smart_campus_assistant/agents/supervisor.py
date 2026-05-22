@@ -7,7 +7,7 @@ from langchain_core.runnables import RunnableConfig
 from src.smart_campus_assistant.config.settings import settings
 
 # ==========================================
-# 1. IMPORT ALL RAW TOOLS DIRECTLY
+# 1. IMPORT ALL RAW TOOLS DIRECTLY (Removed visual_sync)
 # ==========================================
 from src.smart_campus_assistant.tools.topology import search_topology
 from src.smart_campus_assistant.tools.schedule import (
@@ -20,14 +20,12 @@ from src.smart_campus_assistant.tools.door_window import get_door_window_status
 from src.smart_campus_assistant.tools.lights import get_ambient_lights
 from src.smart_campus_assistant.tools.energy import get_energy_infrastructure
 from src.smart_campus_assistant.tools.diagnostics import get_campus_diagnostics
-from src.smart_campus_assistant.tools.visual_sync import verify_ui_state
 
 logger = logging.getLogger(__name__)
 
 # ==========================================
 # 2. CONFIGURE THE SUPERVISOR PROMPT
 # ==========================================
-# We must be extremely explicit here because the 4B model has to choose between ~12 tools now.
 supervisor_prompt = """You are the Smart Campus Assistant.
 Your job is to answer the user's request by calling the correct data tools and explaining the results.
 
@@ -63,17 +61,16 @@ llm = ChatOllama(
 )
 
 # Combine ALL tools into one massive arsenal for the LLM
+# Removed verify_ui_state since the backend python loop handles UI Syncing now
 all_campus_tools = [
     search_topology,
     get_room_schedule, get_course_schedule, get_instructor_schedule, get_semester_schedule,
     get_temp_humidity, get_air_quality, get_occupancy, get_door_window_status, get_ambient_lights,
-    get_energy_infrastructure, get_campus_diagnostics, verify_ui_state
+    get_energy_infrastructure, get_campus_diagnostics
 ]
 
 supervisor_llm = llm.bind_tools(all_campus_tools)
 
-# Note: We rename 'sub_systems' to 'all_campus_tools'. 
-# YOU MUST UPDATE YOUR workflow.py TO IMPORT 'all_campus_tools' INSTEAD OF 'sub_systems'!
 
 def run_supervisor(user_query: str, config: dict = None) -> str:
     """The main execution loop for the Supervisor."""
@@ -120,11 +117,9 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s -  %(levelname)s - %(message)s')
     logger.info("Testing Supervisor Agent (Ollama)...")
     
-    # Test query using the new Knowledge capabilities
     user_query = "Where is Dr. Angeliki Presvelou's office and what sensors are in it?"
     logger.info(f"User Query: {user_query}")
     
-    # Run the Supervisor
     final_output = run_supervisor(user_query)
     
     logger.info("FINAL SUPERVISOR RESPONSE:")
