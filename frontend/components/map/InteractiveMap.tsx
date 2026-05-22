@@ -11,7 +11,7 @@ interface InteractiveMapProps {
   activeLevel: string;
   setActiveLevel: (lvl: string) => void;
   selectedRooms: string[];
-  setSelectedRooms: (rooms: string[]) => void;
+  onRoomToggle: (roomId: string) => void; // CHANGED
   viewMode: "map" | "graph";
   setViewMode: (mode: "map" | "graph") => void;
   isZoomed: boolean;
@@ -22,21 +22,11 @@ interface InteractiveMapProps {
 export default function InteractiveMap(props: InteractiveMapProps) {
   const { 
     activeLevel, setActiveLevel, 
-    selectedRooms, setSelectedRooms, 
+    selectedRooms, onRoomToggle, 
     viewMode, 
     isZoomed, setIsZoomed,
     roomHealthData
   } = props;
-
-  const handleToggleRoom = (roomId: string) => {
-    if (selectedRooms.includes(roomId)) {
-      const newSelection = selectedRooms.filter(r => r !== roomId);
-      setSelectedRooms(newSelection);
-      if (newSelection.length !== 1 && isZoomed) setIsZoomed(false);
-    } else {
-      setSelectedRooms([...selectedRooms, roomId]);
-    }
-  };
 
   let zoomOrigin = "50% 50%";
   if (selectedRooms.length === 1 && isZoomed) {
@@ -54,7 +44,7 @@ export default function InteractiveMap(props: InteractiveMapProps) {
         {BUILDING_LEVELS.map(lvl => (
           <button
             key={lvl}
-            onClick={() => setActiveLevel(lvl)} // page.tsx handles the full wipe now
+            onClick={() => setActiveLevel(lvl)} 
             className={`w-10 h-10 rounded-xl font-bold transition-all ${
               activeLevel === lvl 
                 ? "bg-[#14C89B] text-black shadow-[0_0_15px_rgba(20,200,155,0.4)]" 
@@ -96,7 +86,7 @@ export default function InteractiveMap(props: InteractiveMapProps) {
               <Floor2Base 
                 activeTools={props.activeTools} 
                 selectedRooms={selectedRooms} 
-                onToggleRoom={handleToggleRoom} 
+                onToggleRoom={onRoomToggle} // PASSING UP
                 roomHealthData={roomHealthData}
               />
             ) : (
@@ -118,7 +108,6 @@ export default function InteractiveMap(props: InteractiveMapProps) {
           </motion.div>
         )}
       </AnimatePresence>
-
     </div>
   );
 }

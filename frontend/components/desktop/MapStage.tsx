@@ -8,11 +8,10 @@ import { RoomHealth } from "@/components/map/constants";
 interface MapStageProps {
   appState: AppState;
   activeTools: string[];
-  setActiveTools: (tools: string[]) => void;
   activeLevel: string;
   setActiveLevel: (level: string) => void;
   selectedRooms: string[];
-  setSelectedRooms: (rooms: string[]) => void;
+  onRoomToggle: (roomId: string) => void; // CHANGED
   viewMode: "map" | "graph";
   setViewMode: (mode: "map" | "graph") => void;
   isZoomed: boolean;
@@ -28,7 +27,9 @@ export default function MapStage(props: MapStageProps) {
 
   useEffect(() => {
     if (props.activeTools.length > 0) {
-      setCurrentView(props.activeTools[0]); // Always highlight the first tool in the list
+      setCurrentView(props.activeTools[0]);
+    } else {
+      setCurrentView("");
     }
   }, [props.activeTools]);
 
@@ -42,8 +43,6 @@ export default function MapStage(props: MapStageProps) {
 
   return (
     <div className="w-full h-full flex flex-col relative p-6 bg-gradient-to-br from-[#0d0d0d] to-[#141414]">
-      
-      {/* CANVAS ELEMENT VIEW AREA */}
       <div className="flex-1 flex min-h-0 mb-6 relative items-center justify-center">
         <InteractiveMap 
           appState={props.appState}
@@ -51,7 +50,7 @@ export default function MapStage(props: MapStageProps) {
           activeLevel={props.activeLevel}
           setActiveLevel={props.setActiveLevel}
           selectedRooms={props.selectedRooms}
-          setSelectedRooms={props.setSelectedRooms}
+          onRoomToggle={props.onRoomToggle} // PASSING UP
           viewMode={props.viewMode}
           setViewMode={props.setViewMode}
           isZoomed={props.isZoomed}
@@ -60,29 +59,15 @@ export default function MapStage(props: MapStageProps) {
         />
       </div>
 
-      {/* DUAL TOGGLE GROUPS (ANIMATED) */}
       <LayoutGroup>
         <div className="w-full shrink-0 flex items-center justify-center gap-4 flex-wrap pb-2">
-          
-          {/* Available / Selected Group */}
           {availableToggles.length > 0 && (
-            <motion.div
-              layout
-              className="flex items-center bg-[#053D2F]/80 border border-[#0A664F] rounded-full p-1.5 shadow-[0_4px_20px_rgba(20,200,155,0.15)]"
-            >
+            <motion.div layout className="flex items-center bg-[#053D2F]/80 border border-[#0A664F] rounded-full p-1.5 shadow-[0_4px_20px_rgba(20,200,155,0.15)]">
               {availableToggles.map(toggle => {
                 const isSelected = toggle === currentView;
                 return (
-                  <motion.button
-                    layout="position" 
-                    key={toggle}
-                    onClick={() => handleToggleClick(toggle)}
-                    className={`px-6 py-2.5 rounded-full text-sm font-semibold transition-colors duration-300 ${
-                      isSelected
-                        ? "bg-[#14C89B] text-[#0A0A0A] shadow-[0_0_15px_rgba(20,200,155,0.4)]"
-                        : "bg-transparent text-[#14C89B] hover:bg-[#0A664F]/60"
-                    }`}
-                  >
+                  <motion.button layout="position" key={toggle} onClick={() => handleToggleClick(toggle)}
+                    className={`px-6 py-2.5 rounded-full text-sm font-semibold transition-colors duration-300 ${isSelected ? "bg-[#14C89B] text-[#0A0A0A] shadow-[0_0_15px_rgba(20,200,155,0.4)]" : "bg-transparent text-[#14C89B] hover:bg-[#0A664F]/60"}`}>
                     {toggle}
                   </motion.button>
                 );
@@ -90,28 +75,18 @@ export default function MapStage(props: MapStageProps) {
             </motion.div>
           )}
 
-          {/* Unavailable Group */}
           {unavailableToggles.length > 0 && (
-            <motion.div
-              layout
-              className="flex items-center bg-[#1A1A1A]/80 border border-[#333333] rounded-full p-1.5 shadow-inner"
-            >
+            <motion.div layout className="flex items-center bg-[#1A1A1A]/80 border border-[#333333] rounded-full p-1.5 shadow-inner">
               {unavailableToggles.map(toggle => (
-                <motion.button
-                  layout="position"
-                  key={toggle}
-                  onClick={() => handleToggleClick(toggle)}
-                  className="px-5 py-2.5 rounded-full text-sm font-medium bg-transparent text-[#A3B8B2]/50 hover:text-[#A3B8B2] hover:bg-[#2A2A2A] transition-colors duration-300"
-                >
+                <motion.button layout="position" key={toggle} onClick={() => handleToggleClick(toggle)}
+                  className="px-5 py-2.5 rounded-full text-sm font-medium bg-transparent text-[#A3B8B2]/50 hover:text-[#A3B8B2] hover:bg-[#2A2A2A] transition-colors duration-300">
                   {toggle}
                 </motion.button>
               ))}
             </motion.div>
           )}
-
         </div>
       </LayoutGroup>
-
     </div>
   );
 }

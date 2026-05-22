@@ -23,6 +23,8 @@ dependencies = [
     "python-frontmatter>=1.1.0",
     "fastapi>=0.136.1",
     "uvicorn>=0.47.0",
+    "transformers>=5.9.0",
+    "tiktoken>=0.13.0",
 ]
 
 [build-system]
