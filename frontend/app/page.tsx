@@ -45,6 +45,9 @@ export default function DesktopDashboard() {
   const [messages, setMessages] = useState<Array<{ sender: "user" | "agent"; text: string }>>([]);
   
   const ws = useRef<WebSocket | null>(null);
+  
+  // --- NEW: REF TO PREVENT STALE CLOSURES IN WEBSOCKET ---
+  const activeLevelRef = useRef(activeLevel);
 
   // Derived current state for the active floor
   const currentFloor = floorStates[activeLevel] || { selectedRooms: [], activeTools: [], roomHealthData: {}, isZoomed: false };
@@ -72,12 +75,14 @@ export default function DesktopDashboard() {
 
   useEffect(() => {
     sessionStorage.setItem("activeLevel", activeLevel);
+    // Keep the ref strictly in sync with the state so the WebSocket always sees the latest floor
+    activeLevelRef.current = activeLevel; 
   }, [activeLevel]);
   // ------------------------------
 
   useEffect(() => {
     ws.current = new WebSocket(WS_URL);
-    ws.current.onopen = () => console.log("✅ Connected to Smart Campus Backend");
+    ws.current.onopen = () => console.log("Connected to Smart Campus Backend");
 
     ws.current.onmessage = (event) => {
       try {
@@ -87,15 +92,17 @@ export default function DesktopDashboard() {
           setAppState("tool_execution");
           if (data.tools_used) {
              setFloorStates(prev => {
-               const floor = prev[activeLevel] || { selectedRooms: [], activeTools: [], roomHealthData: {}, isZoomed: false };
+               // Use the ref here to avoid stale closures
+               const currentLvl = activeLevelRef.current;
+               const floor = prev[currentLvl] || { selectedRooms: [], activeTools: [], roomHealthData: {}, isZoomed: false };
                const newTools = data.tools_used.filter((t: string) => !floor.activeTools.includes(t));
-               return { ...prev, [activeLevel]: { ...floor, activeTools: [...newTools, ...floor.activeTools] }};
+               return { ...prev, [currentLvl]: { ...floor, activeTools: [...newTools, ...floor.activeTools] }};
              });
           }
         }
         
         if (data.type === "map_update" || data.room_data || data.target_rooms) {
-          let targetLevel = activeLevel;
+          let targetLevel = activeLevelRef.current;
           
           // Auto-Switch Floors
           if (data.target_rooms && data.target_rooms.length > 0) {
@@ -156,8 +163,9 @@ export default function DesktopDashboard() {
         console.error("Error parsing websocket message", err);
       }
     };
+    
     return () => { if (ws.current) ws.current.close(); };
-  }, [activeLevel]);
+  }, []); // <--- CRITICAL FIX: Empty dependency array so it only mounts once
 
   const handleUserMessage = (msg: string) => {
     if (!msg.trim()) return;
@@ -252,8 +260,7 @@ export default function DesktopDashboard() {
     sessionStorage.removeItem("floorStates");
     sessionStorage.removeItem("activeLevel");
 
-    // 3. Notify backend to clear LangGraph memory checkpointer (if configured)
-    // Note: You may need to add a "reset_session" catcher in main.py
+    // 3. Notify backend to clear LangGraph memory checkpointer
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({ type: "reset_session" }));
     }
@@ -289,7 +296,7 @@ export default function DesktopDashboard() {
           messages={messages}
           contextData={contextData}  
           sessionTools={sessionTools} 
-          onResetSession={handleResetSession} // <-- Pass the new function here
+          onResetSession={handleResetSession}
         />
       </div>
     </main>

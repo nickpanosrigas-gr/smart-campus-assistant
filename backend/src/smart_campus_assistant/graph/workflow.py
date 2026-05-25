@@ -124,6 +124,10 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
             if kind == "on_tool_start":
                 tool_name = event["name"]
                 if tool_name != "tools":
+                    args = event["data"].get("input", {})
+                    room_id = args.get("room_id") or args.get("room", "N/A")
+                    
+                    logger.info(f"[AGENT TOOL] Executing: {tool_name} | Target: {room_id} | Args: {args}")
                     
                     # Map the raw python name to the clean UI name using the global constant
                     ui_tool_name = BACKEND_TO_UI_TOOLS.get(tool_name)
@@ -185,11 +189,16 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
                     })
                     
     except Exception as e:
-        logger.error(f"Graph execution error: {e}")
-        await websocket.send_json({
-            "type": "text",
-            "text": "\n[System Error: Unable to process request.]"
-        })
+        err_msg = str(e).lower()
+        if "close message has been sent" in err_msg or "closed" in err_msg or "disconnect" in err_msg:
+            logger.warning(f"[STREAM] Frontend dropped connection. Halting LLM stream gracefully.")
+            return  # Safely exit without crashing
+            
+        logger.error(f"[GRAPH ERROR] {e}")
+        try:
+            await websocket.send_json({"type": "text", "text": "\n[System Error: Unable to process request.]"})
+        except Exception:
+            pass # Socket is completely dead, ignore
         
     # --- CALCULATE EXACT QWEN TOKENS ---
     current_state = app.get_state(config)
@@ -275,6 +284,8 @@ async def handle_map_interaction(rooms: list, floor: str, domain: str, thread_id
         else: target_rooms = []
     else:
         target_rooms = rooms
+
+    logger.info(f"[USER TOOL] Map Clicked: {tool_name} | Floor: {floor} | Target Rooms: {len(target_rooms)} rooms")
 
     combined_logs = []
     room_health_updates = {}

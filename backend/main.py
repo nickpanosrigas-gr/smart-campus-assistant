@@ -7,56 +7,43 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.smart_campus_assistant.utils.initialization import run_initialization
 from src.smart_campus_assistant.graph.workflow import process_chat_message, handle_map_interaction
 
-# Setup global logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
 app = FastAPI(title="Smart Campus Assistant API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"], # Allow Next.js frontend
+    allow_origins=["http://localhost:3000"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+active_sessions = {}
+
 @app.on_event("startup")
 async def startup_event():
-    print("=======================================")
-    print(" Smart Campus Assistant Initializing")
-    print("=======================================")
-    
-    # Run service health checks and Vector DB sync
     init_success = run_initialization()
     if not init_success:
-        logger.critical("CRITICAL: Initialization failed. Please check the logs and ensure Docker containers (Qdrant, Ollama) are running.")
+        logger.critical("CRITICAL: Initialization failed.")
         sys.exit(1)
-        
-    print("\n=======================================")
-    print(" Systems GO. Backend WebSocket Ready.")
-    print("=======================================\n")
 
 @app.websocket("/ws/chat")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     
-    # TODO: In production, verify the NextAuth JWT here and extract the @hua.gr email
-    base_user = "manager@hua.gr" 
+    base_user = "it2022094@hua.gr" 
     
-    # 2. Generate an initial unique session UUID combined with the user email
-    session_uuid = str(uuid.uuid4())
-    thread_id = f"{base_user}-{session_uuid}"
-    
-    logger.info(f"WebSocket connection established for {thread_id}")
+    # Check if user already has an active session. If not, generate one.
+    if base_user not in active_sessions:
+        active_sessions[base_user] = str(uuid.uuid4())
+        
+    thread_id = f"{base_user}-{active_sessions[base_user]}"
+    logger.info(f"[WEBSOCKET] Connected: {thread_id}")
     
     try:
         while True:
-            # Wait for messages from the Next.js frontend
             data = await websocket.receive_json()
             msg_type = data.get("type")
             
@@ -65,28 +52,21 @@ async def websocket_endpoint(websocket: WebSocket):
                 await process_chat_message(user_query, thread_id, websocket)
                 
             elif msg_type == "map_interaction":
-                # Updated to extract the array of rooms and the floor context
                 rooms = data.get("rooms", [])
                 floor = data.get("floor", "B")
                 domain = data.get("domain")
-                
                 await handle_map_interaction(rooms, floor, domain, thread_id, websocket)
             
-            # 3. ADD THE RESET_SESSION CATCHER
             elif msg_type == "reset_session":
-                # Generate a completely new UUID for this user
-                session_uuid = str(uuid.uuid4())
-                thread_id = f"{base_user}-{session_uuid}"
-                logger.info(f"Session manually reset. Memory cleared. New thread_id: {thread_id}")
-                
-            else:
-                logger.warning(f"Unknown message type received: {msg_type}")
+                # Generate a fresh UUID and overwrite the dictionary
+                active_sessions[base_user] = str(uuid.uuid4())
+                thread_id = f"{base_user}-{active_sessions[base_user]}"
+                logger.info(f"[SESSION] Manually Reset. New ID: {thread_id}")
                 
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected for {thread_id}")
+        logger.info(f"[WEBSOCKET] Disconnected: {thread_id}")
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
+        logger.error(f"[WEBSOCKET] Error: {e}")
 
 if __name__ == "__main__":
-    # Run using uvicorn for async support
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
