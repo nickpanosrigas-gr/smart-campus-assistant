@@ -1,6 +1,7 @@
 import sys
 import logging
 import uvicorn
+import uuid
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from src.smart_campus_assistant.utils.initialization import run_initialization
@@ -45,7 +46,12 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     
     # TODO: In production, verify the NextAuth JWT here and extract the @hua.gr email
-    thread_id = "manager@hua.gr" 
+    base_user = "manager@hua.gr" 
+    
+    # 2. Generate an initial unique session UUID combined with the user email
+    session_uuid = str(uuid.uuid4())
+    thread_id = f"{base_user}-{session_uuid}"
+    
     logger.info(f"WebSocket connection established for {thread_id}")
     
     try:
@@ -65,6 +71,13 @@ async def websocket_endpoint(websocket: WebSocket):
                 domain = data.get("domain")
                 
                 await handle_map_interaction(rooms, floor, domain, thread_id, websocket)
+            
+            # 3. ADD THE RESET_SESSION CATCHER
+            elif msg_type == "reset_session":
+                # Generate a completely new UUID for this user
+                session_uuid = str(uuid.uuid4())
+                thread_id = f"{base_user}-{session_uuid}"
+                logger.info(f"Session manually reset. Memory cleared. New thread_id: {thread_id}")
                 
             else:
                 logger.warning(f"Unknown message type received: {msg_type}")

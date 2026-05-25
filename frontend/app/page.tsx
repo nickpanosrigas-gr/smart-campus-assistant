@@ -239,6 +239,26 @@ export default function DesktopDashboard() {
     }
   };
 
+  const handleResetSession = () => {
+    // 1. Reset all frontend variables to their defaults
+    setFloorStates({});
+    setActiveLevel("B");
+    setMessages([]);
+    setSessionTools([]);
+    setContextData({ tokens: 0 });
+    setAppState("idle");
+    
+    // 2. Clear out local storage so it doesn't immediately reload the old state
+    sessionStorage.removeItem("floorStates");
+    sessionStorage.removeItem("activeLevel");
+
+    // 3. Notify backend to clear LangGraph memory checkpointer (if configured)
+    // Note: You may need to add a "reset_session" catcher in main.py
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({ type: "reset_session" }));
+    }
+  };
+
   return (
     <main className="w-full h-screen flex overflow-hidden bg-gradient-to-b from-[#0A664F] to-[#0A0A0A] text-[#A3B8B2] p-4 gap-4">
       
@@ -269,9 +289,9 @@ export default function DesktopDashboard() {
           messages={messages}
           contextData={contextData}  
           sessionTools={sessionTools} 
+          onResetSession={handleResetSession} // <-- Pass the new function here
         />
       </div>
-
     </main>
   );
 }
