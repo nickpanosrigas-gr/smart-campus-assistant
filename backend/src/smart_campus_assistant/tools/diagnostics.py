@@ -9,24 +9,39 @@ from pydantic import BaseModel, Field
 import logging
 
 # Import project singletons
+from src.smart_campus_assistant.config.settings import settings
 from src.smart_campus_assistant.utils.device_registry import registry
 from src.smart_campus_assistant.clients.thingsboard_client import tb_client
 
 logger = logging.getLogger(__name__)
 
-# Allowed rooms derived from registry
-CampusRooms = Literal[
+# Target list updated to use only 'building' for the campus-wide view
+Targets = Literal[
     'parkin.c', 'parkin.b', 'data_center', 'entrance', 'restaurant', 
     '1.1', '1.2', 'kitchen', '2.1', '2.2', '2.3', '2.4', 
-    '3.7', '3.8', '3.9', '4.9', '5.6', '5.7', 'roof', 'infrastructure'
+    '3.7', '3.8', '3.9', '4.9', '5.6', '5.7', 'roof', 'infrastructure',
+    'building'
 ]
+
+Timeframes = Literal[
+    'now', '2h', '24h', '7d', '30d', '90d'
+]
+
+# Config mapping for API calls and pandas grouping
+TIMEFRAME_CONFIG = {
+    "now": {"method": "get_now", "bin_size": None},
+    "2h":  {"method": "get_2h", "bin_size": "10min"},
+    "24h": {"method": "get_24h", "bin_size": "2h"}, 
+    "7d":  {"method": "get_7d", "bin_size": "2h"},    
+    "30d": {"method": "get_30d", "bin_size": "1D"},
+    "90d": {"method": "get_90d", "bin_size": "1D"}    
+}
 
 # ==========================================
 # INTERNAL DIAGNOSTIC ENGINE
 # ==========================================
 
 def _safe_extract_float(data_dict: dict, keys_to_check: list) -> Optional[float]:
-    """Safely extracts a float value from ThingsBoard's timeseries list format, handling None values."""
     for k in keys_to_check:
         if k in data_dict and data_dict[k]:
             val = data_dict[k][0].get('value')
@@ -38,7 +53,6 @@ def _safe_extract_float(data_dict: dict, keys_to_check: list) -> Optional[float]
     return None
 
 def _get_device_attributes(device_id: str) -> dict:
-    """Fetches SERVER_SCOPE attributes (like 'active', 'lastDisconnectTime') to reliably check connectivity."""
     try:
         endpoint = f"/api/plugins/telemetry/DEVICE/{device_id}/values/attributes/SERVER_SCOPE"
         response = tb_client._request("GET", endpoint)
@@ -54,24 +68,15 @@ def _get_device_attributes(device_id: str) -> dict:
         return {}
 
 def _format_meta(meta: Any) -> str:
-    """Formats the device registry metadata into a clean display string."""
     if not isinstance(meta, dict):
         return ""
-        
     parts = []
     if meta.get("zone"): parts.append(f"Zone: {meta['zone']}")
     if meta.get("tag"): parts.append(f"Tag: {meta['tag']}")
     if meta.get("group"): parts.append(f"Group: {meta['group']}")
-    
-    if parts:
-        return f" [{', '.join(parts)}]"
-    return ""
+    return f" [{', '.join(parts)}]" if parts else ""
 
 def _audit_device(device_name: str, device_id: str) -> dict:
-    """
-    Fetches diagnostic data using optimized methods. 
-    Uses TB Server Attributes for definitive Online/Offline status.
-    """
     now_ts = int(time.time() * 1000)
     
     is_pc_or_wo = "-PC" in device_name.upper() or "-WO" in device_name.upper()
@@ -84,19 +89,16 @@ def _audit_device(device_name: str, device_id: str) -> dict:
         "line_1_period_in", "line_1_period_out", "people_count_max", "buzzer_status"
     ]
     
-    # 1. Connectivity Audit via Server Attributes (Bulletproof method)
     attrs = _get_device_attributes(device_id)
     is_online = attrs.get("active", False)
-    
-    # Fallback just in case ThingsBoard drops the attribute entirely
     if "active" not in attrs:
         is_online = True
         
     last_seen_str = "Unknown"
     offline_duration_str = ""
+    last_ts = attrs.get("lastDisconnectTime") or attrs.get("inactivityAlarmTime") or attrs.get("lastActivityTime")
     
     if not is_online:
-        last_ts = attrs.get("lastDisconnectTime") or attrs.get("inactivityAlarmTime") or attrs.get("lastActivityTime")
         if last_ts:
             dt_last = datetime.fromtimestamp(last_ts / 1000.0)
             now_dt = datetime.now()
@@ -109,7 +111,6 @@ def _audit_device(device_name: str, device_id: str) -> dict:
         else:
             offline_duration_str = "Unknown duration"
 
-    # Initialize defaults
     current_battery = None
     drain_per_day = 0.0
     est_days = 999
@@ -117,504 +118,664 @@ def _audit_device(device_name: str, device_id: str) -> dict:
     tamper = False
     tamper_time = ""
 
-    # IF ONLINE: Run Power and Anomaly Audits
-    if is_online:
-        # 2. Fetch Absolute Latest Data (Solves blank/None values)
-        try:
-            latest_data = tb_client.get_now(device_id, bat_keys + other_keys)
-        except Exception as e:
-            logger.error(f"Failed to fetch latest data for {device_name}: {e}")
-            latest_data = {}
+    try:
+        latest_data = tb_client.get_now(device_id, bat_keys + other_keys)
+    except Exception:
+        latest_data = {}
 
-        # 3. Fetch Aggregated Split Data (7 days in 2h intervals) for flatline checks
+    try:
+        other_data = tb_client.get_7d_2h_splits(device_id, other_keys)
+    except Exception:
+        other_data = {}
+
+    if not is_pc_or_wo:
+        current_battery = _safe_extract_float(latest_data, bat_keys)
         try:
-            other_data = tb_client.get_7d_2h_splits(device_id, other_keys)
+            battery_data = tb_client.get_7d(device_id, bat_keys)
         except Exception:
-            other_data = {}
+            battery_data = {}
 
-        # 4. Power Audit (Only for battery devices)
-        if not is_pc_or_wo:
-            current_battery = _safe_extract_float(latest_data, bat_keys)
+        bat_key = "battery_level" if "battery_level" in battery_data and battery_data["battery_level"] else "battery"
+        if bat_key in battery_data and battery_data[bat_key]:
+            df_bat = pd.DataFrame(battery_data[bat_key])
+            df_bat['value'] = pd.to_numeric(df_bat['value'], errors='coerce')
+            df_bat.dropna(inplace=True)
             
-            # Fetch high-res history strictly for drain calculation
-            try:
-                battery_data = tb_client.get_7d(device_id, bat_keys)
-            except Exception:
-                battery_data = {}
+            if not df_bat.empty:
+                if current_battery is None:
+                    current_battery = df_bat.iloc[-1]['value']
+                if len(df_bat) > 5: 
+                    max_b = df_bat['value'].max()
+                    min_b = df_bat['value'].min()
+                    days_span = (df_bat['ts'].max() - df_bat['ts'].min()) / (1000 * 3600 * 24)
+                    if days_span > 1:
+                        drain_per_day = (max_b - min_b) / days_span
+                        if drain_per_day > 0 and current_battery is not None:
+                            est_days = current_battery / drain_per_day
 
-            bat_key = "battery_level" if "battery_level" in battery_data and battery_data["battery_level"] else "battery"
-            if bat_key in battery_data and battery_data[bat_key]:
-                df_bat = pd.DataFrame(battery_data[bat_key])
-                df_bat['value'] = pd.to_numeric(df_bat['value'], errors='coerce')
-                df_bat.dropna(inplace=True)
-                
-                if not df_bat.empty:
-                    if current_battery is None:
-                        current_battery = df_bat.iloc[-1]['value']
-                        
-                    # Calculate drain if we have points spanning at least 1 day
-                    if len(df_bat) > 5: 
-                        max_b = df_bat['value'].max()
-                        min_b = df_bat['value'].min()
-                        days_span = (df_bat['ts'].max() - df_bat['ts'].min()) / (1000 * 3600 * 24)
-                        if days_span > 1:
-                            drain_per_day = (max_b - min_b) / days_span
-                            if drain_per_day > 0 and current_battery is not None:
-                                est_days = current_battery / drain_per_day
-
-        # 5. Hardware / Signal Anomalies Audit
-        current_rssi = _safe_extract_float(latest_data, ["rssi"])
-        if current_rssi is not None and current_rssi < -105:
-            anomalies.append(f"[WEAK_SIGNAL] RSSI verified at {int(current_rssi)} dBm")
-            
-        current_snr = _safe_extract_float(latest_data, ["loRaSNR"])
-        if current_snr is not None and current_snr < 0:
-            anomalies.append(f"[POOR_SNR] Signal-to-Noise Ratio at {current_snr}")
+    current_rssi = _safe_extract_float(latest_data, ["rssi"])
+    if current_rssi is not None and current_rssi < -105:
+        anomalies.append(f"[WEAK_SIGNAL] RSSI verified at {int(current_rssi)} dBm")
         
-        # Tamper Checks
-        t_keys = ["tamper_alarm", "tamper", "tamper_status"]
-        for t_key in t_keys:
-            # Check historical splits first
-            if t_key in other_data and other_data[t_key]:
-                df_t = pd.DataFrame(other_data[t_key])
-                df_t['value'] = pd.to_numeric(df_t['value'], errors='coerce')
-                recent_t = df_t[df_t['ts'] > (now_ts - 24*3600*1000)]
-                if (recent_t['value'] > 0).any():
-                    tamper = True
-                    t_ts = recent_t[recent_t['value'] > 0].iloc[0]['ts']
-                    tamper_time = datetime.fromtimestamp(t_ts / 1000.0).strftime("%H:%M:%S EEST")
-                    break
-            # Fallback to latest_data
-            if not tamper and t_key in latest_data and latest_data[t_key]:
-                val = _safe_extract_float(latest_data, [t_key])
-                if val is not None and val > 0:
-                    tamper = True
-                    t_ts = latest_data[t_key][0]['ts']
-                    tamper_time = datetime.fromtimestamp(t_ts / 1000.0).strftime("%H:%M:%S EEST")
-                    break
+    current_snr = _safe_extract_float(latest_data, ["loRaSNR"])
+    if current_snr is not None and current_snr < 0:
+        anomalies.append(f"[POOR_SNR] Signal-to-Noise Ratio at {current_snr}")
+    
+    t_keys = ["tamper_alarm", "tamper", "tamper_status"]
+    for t_key in t_keys:
+        if t_key in other_data and other_data[t_key]:
+            df_t = pd.DataFrame(other_data[t_key])
+            df_t['value'] = pd.to_numeric(df_t['value'], errors='coerce')
+            recent_t = df_t[df_t['ts'] > (now_ts - 24*3600*1000)]
+            if (recent_t['value'] > 0).any():
+                tamper = True
+                t_ts = recent_t[recent_t['value'] > 0].iloc[0]['ts']
+                tamper_time = datetime.fromtimestamp(t_ts / 1000.0).strftime("%H:%M:%S EEST")
+                break
+        if not tamper and t_key in latest_data and latest_data[t_key]:
+            val = _safe_extract_float(latest_data, [t_key])
+            if val is not None and val > 0:
+                tamper = True
+                t_ts = latest_data[t_key][0]['ts']
+                tamper_time = datetime.fromtimestamp(t_ts / 1000.0).strftime("%H:%M:%S EEST")
+                break
 
-        # Flatline & Hardware Fault Checks
-        for k in ["temperature", "humidity", "co2", "air_temperature"]:
-            # 1. 65535 Hardware Fault Check
-            curr_val = _safe_extract_float(latest_data, [k])
-            if curr_val == 65535.0:
-                anomalies.append(f"[{k.upper()}_HARDWARE_FAULT] Error Code 65535 (Sensor Element Disconnected/Short-Circuit)")
-                continue  # Skip flatline check since we already explicitly diagnosed a broken sensor
-            
-            # 2. Flatline Checks (Trace duration backwards through the full 7-day data)
-            if k in other_data and other_data[k]:
-                df_k = pd.DataFrame(other_data[k])
-                df_k['value'] = pd.to_numeric(df_k['value'], errors='coerce')
+    for k in ["temperature", "humidity", "co2", "air_temperature"]:
+        curr_val = _safe_extract_float(latest_data, [k])
+        if curr_val == 65535.0:
+            anomalies.append(f"[{k.upper()}_HARDWARE_FAULT] Error Code 65535")
+            continue
+        
+        if k in other_data and other_data[k]:
+            df_k = pd.DataFrame(other_data[k])
+            df_k['value'] = pd.to_numeric(df_k['value'], errors='coerce')
+            recent_k = df_k[df_k['ts'] > (now_ts - 24*3600*1000)]
+            if len(recent_k) > 5 and recent_k['value'].max() == recent_k['value'].min():
+                locked_val = recent_k['value'].iloc[0]
+                df_k_sorted = df_k.sort_values(by='ts', ascending=False)
+                diff_mask = df_k_sorted['value'] != locked_val
                 
-                # Check the last 24 hours first
-                recent_k = df_k[df_k['ts'] > (now_ts - 24*3600*1000)]
-                if len(recent_k) > 5 and recent_k['value'].max() == recent_k['value'].min():
-                    locked_val = recent_k['value'].iloc[0]
-                    
-                    # Trace back to see exactly how long it's been locked
-                    df_k_sorted = df_k.sort_values(by='ts', ascending=False)
-                    diff_mask = df_k_sorted['value'] != locked_val
-                    
-                    if not diff_mask.any():
-                        duration_str = "> 7 days"
+                if not diff_mask.any():
+                    duration_str = "> 7 days"
+                else:
+                    last_good_ts = df_k_sorted[diff_mask].iloc[0]['ts']
+                    duration_hours = (now_ts - last_good_ts) / (1000 * 3600)
+                    if duration_hours >= 48:
+                        duration_str = f"{int(duration_hours / 24)} days"
                     else:
-                        last_good_ts = df_k_sorted[diff_mask].iloc[0]['ts']
-                        duration_hours = (now_ts - last_good_ts) / (1000 * 3600)
-                        if duration_hours >= 48:
-                            duration_str = f"{int(duration_hours / 24)} days"
-                        else:
-                            duration_str = f"{int(duration_hours)}h"
-                            
-                    anomalies.append(f"[{k.upper()}_FLATLINE] locked at {locked_val:.1f} for {duration_str}")
+                        duration_str = f"{int(duration_hours)}h"
+                anomalies.append(f"[{k.upper()}_FLATLINE] locked at {locked_val:.1f} for {duration_str}")
 
     return {
         "name": device_name,
         "is_online": is_online,
         "last_seen_str": last_seen_str,
         "offline_duration_str": offline_duration_str,
+        "last_ts": last_ts,
         "battery": current_battery,
         "drain_per_day": drain_per_day,
         "est_days": est_days,
-        "anomalies": anomalies,
+        "anomalies": list(set(anomalies)),
         "tamper": tamper,
         "tamper_time": tamper_time,
         "is_plugged_in": is_pc_or_wo,
         "is_weather": is_weather
     }
 
+def _fetch_historical_context(name: str, uid: str, method_name: str) -> dict:
+    audit = _audit_device(name, uid)
+    fetch_method = getattr(tb_client, method_name)
+    
+    df_bat = pd.DataFrame()
+    hist_errors = []
+    
+    try:
+        data = fetch_method(uid, ["battery", "battery_level", "tamper", "tamper_alarm"])
+        bat_key = "battery_level" if "battery_level" in data and data["battery_level"] else "battery"
+        if bat_key in data and data[bat_key]:
+            df_bat = pd.DataFrame(data[bat_key])
+            df_bat['value'] = pd.to_numeric(df_bat['value'], errors='coerce')
+            df_bat['datetime'] = pd.to_datetime(df_bat['ts'], unit='ms', utc=True).dt.tz_convert(settings.TIMEZONE)
+            df_bat.set_index('datetime', inplace=True)
+            df_bat.rename(columns={'value': name}, inplace=True)
+            df_bat.drop(columns=['ts'], inplace=True)
+            df_bat = df_bat.sort_index()
+
+        for t_key in ["tamper", "tamper_alarm"]:
+            if t_key in data and data[t_key]:
+                df_t = pd.DataFrame(data[t_key])
+                df_t['value'] = pd.to_numeric(df_t['value'], errors='coerce')
+                if (df_t['value'] > 0).any():
+                    hist_errors.append("Tamper alarm triggered historically")
+                    break
+    except Exception:
+        pass
+
+    if audit["battery"] is not None:
+        inject_ts = None
+        if audit["is_online"]:
+            inject_ts = pd.Timestamp.now(tz=settings.TIMEZONE)
+        elif audit.get("last_ts"):
+            inject_ts = pd.to_datetime(audit["last_ts"], unit='ms', utc=True).tz_convert(settings.TIMEZONE)
+            
+        if inject_ts:
+            latest_df = pd.DataFrame({name: [audit["battery"]]}, index=[inject_ts])
+            if df_bat.empty:
+                df_bat = latest_df
+            else:
+                df_bat = pd.concat([df_bat, latest_df])
+                df_bat = df_bat[~df_bat.index.duplicated(keep='last')].sort_index()
+
+    return {
+        "name": name,
+        "df": df_bat,
+        "hist_errors": hist_errors,
+        "audit": audit
+    }
+
 # ==========================================
-# TOOL 1: TARGETED DEVICE AUDIT
+# UNIFIED TOOL
 # ==========================================
 
-class DeviceAuditInput(BaseModel):
-    target: CampusRooms = Field(..., description="The specific room to run diagnostics on.")
-    sensor_type: Optional[str] = Field(None, description="Optional. Filter by sensor type (e.g., 'IAQ', 'PC', 'DESK').")
+class DiagnosticsInput(BaseModel):
+    target: Targets = Field(..., description="The room or 'building' to run diagnostics on.")
+    timeframe: Timeframes = Field(..., description="The time window. 'now' for a snapshot, else a timeline profile.")
 
-@tool("get_diagnostics", args_schema=DeviceAuditInput, response_format="content_and_artifact")
-def get_diagnostics(target: CampusRooms, sensor_type: Optional[str] = None) -> Tuple[str, dict]:
+@tool("get_diagnostics", args_schema=DiagnosticsInput, response_format="content_and_artifact")
+def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
     """
-    Deep-dive diagnostic audit for a specific room. 
-    Checks Connectivity (Offline/RSSI), Power (Battery Drain), and Hardware Health (Flatlines/Tampers).
+    Unified Diagnostic System. Checks Connectivity (Offline), Power (Battery Drain/Levels), and Hardware Health.
     """
-    if sensor_type:
-        devices = registry.get_devices_by_room_and_type(target, sensor_type)
-        filter_str = f"  Sensor_Filter: {sensor_type.upper()}"
+    if target == 'building':
+        target_rooms = registry.get_available_rooms()
     else:
-        devices = registry.get_all_devices_in_room(target)
-        filter_str = "  Sensor_Filter: None"
-        
-    if not devices:
-        error_msg = f"Error: No devices found in room '{target}'."
+        target_rooms = [target]
+
+    tasks = []
+    for room in target_rooms:
+        devices = registry.get_all_devices_in_room(room)
+        for name, meta in devices.items():
+            uid = meta.get("id") if isinstance(meta, dict) else meta
+            tasks.append((room, name, uid, meta))
+
+    if not tasks:
+        error_msg = f"Error: No devices found for target '{target}'."
         return error_msg, {"view_type": "error", "message": error_msg}
 
     current_time_str = datetime.now().strftime("%A, %b %d, %Y at %I:%M:%S %p EEST")
-    total_scanned = len(devices)
-    
-    online_count = 0
-    offline_lines = []
-    
-    battery_vals = []
-    plugged_in_count = 0
-    power_warnings = []
-    
-    operational_count = 0
-    anomaly_lines = []
-    tamper_lines = []
-    
-    # State tracking for UI Artifact
-    ui_current_values = {}
-    room_has_red = False
-    room_has_orange = False
-
-    for name, meta in devices.items():
-        # Safely extract ID from the new dict structure
-        uid = meta.get("id") if isinstance(meta, dict) else meta
-        
-        # Build the metadata display string
-        meta_str = _format_meta(meta)
-        name_disp = f"{name}{meta_str}"
-        
-        data = _audit_device(name, uid)
-        
-        # --- UI Artifact Data Injection ---
-        if data["is_plugged_in"]:
-            ui_current_values[f"{name}_battery"] = "Plugged In"
-        elif data["battery"] is not None:
-            ui_current_values[f"{name}_battery"] = data["battery"]
-        else:
-            ui_current_values[f"{name}_battery"] = "No Battery"
-            
-        sensor_color = "green"
-        if not data["is_online"] or data["tamper"]:
-            sensor_color = "red"
-        else:
-            has_major_fault = any("HARDWARE_FAULT" in a or "FLATLINE" in a for a in data["anomalies"])
-            has_signal_issue = any("WEAK_SIGNAL" in a or "POOR_SNR" in a for a in data["anomalies"])
-            
-            if has_major_fault:
-                sensor_color = "red"
-            elif has_signal_issue:
-                sensor_color = "orange"
-                
-            # Battery check overrides to red/orange if critical
-            if not data["is_plugged_in"] and data["battery"] is not None:
-                if data["is_weather"]:
-                    if data["battery"] < 2.4:
-                        sensor_color = "red"
-                else:
-                    if data["battery"] < 15.0:
-                        sensor_color = "red"
-                    elif data["battery"] < 50.0 and sensor_color == "green":
-                        sensor_color = "orange"
-                        
-        ui_current_values[f"{name}_status_color"] = sensor_color
-        
-        if sensor_color == "red":
-            room_has_red = True
-        elif sensor_color == "orange":
-            room_has_orange = True
-        # ----------------------------------
-        
-        # 1. Connectivity
-        if data["is_online"]:
-            online_count += 1
-        else:
-            offline_lines.append(f"    - {name_disp}: (Offline {data['offline_duration_str']})")
-            continue # If offline, suppress all other false-positive warnings
-            
-        # 2. Power
-        if data["is_plugged_in"]:
-            plugged_in_count += 1
-        elif data["battery"] is not None:
-            if data["is_weather"]:
-                if data["battery"] < 2.4:
-                    power_warnings.append(f"    - {name_disp}: [LOW_BATTERY] {data['battery']:.2f}V remaining | Est. {int(data['est_days'])} days")
-            else:
-                battery_vals.append(data["battery"])
-                if data["battery"] < 15.0:
-                    power_warnings.append(f"    - {name_disp}: [LOW_BATTERY] {data['battery']:.1f}% remaining | Est. {int(data['est_days'])} days")
-                elif data["est_days"] < 14:
-                    power_warnings.append(f"    - {name_disp}: [HIGH_DRAIN_RATE_ANOMALY] {data['battery']:.1f}% remaining | Est. {int(data['est_days'])} days")
-                
-        # 3. Hardware
-        has_anomaly = False
-        if data["anomalies"]:
-            has_anomaly = True
-            for a in data["anomalies"]:
-                anomaly_lines.append(f"    - {name_disp}: {a}")
-                
-        if data["tamper"]:
-            tamper_lines.append(f"    - {name_disp}: Tamper alarm triggered at {data['tamper_time']}")
-            
-        if not has_anomaly and not data["tamper"]:
-            operational_count += 1
-
-    avg_bat = int(np.mean(battery_vals)) if battery_vals else 0
-    plugged_str = f" | {plugged_in_count} Plugged In" if plugged_in_count > 0 else ""
-
-    # Format Text Output
-    output = [
-        "Query_Context:",
-        "  Domain: Diagnostics (Targeted Audit)",
-        f"  Target_Room: {target}",
-        filter_str,
-        f"  Total_Devices_Scanned: {total_scanned}",
-        f"  Current_Time: {current_time_str}",
-        "",
-        "Connectivity_Audit:",
-        f"  Status: {online_count}/{total_scanned} Online"
-    ]
-    
-    if offline_lines:
-        output.append("  Offline_Devices:")
-        output.extend(offline_lines)
-    else:
-        output.append("  Offline_Devices: None")
-        
-    output.extend([
-        "",
-        "Power_Audit:",
-        f"  Aggregate_Health: {len(battery_vals)} Reporting (Avg Battery: {avg_bat}%){plugged_str}"
-    ])
-    
-    if power_warnings:
-        output.append("  Depletion_Warnings:")
-        output.extend(power_warnings)
-    else:
-        output.append("  Depletion_Warnings: None")
-        
-    output.extend([
-        "",
-        "Hardware_Health_Audit:",
-        f"  Aggregate_Health: {operational_count}/{online_count} Operational"
-    ])
-    
-    if anomaly_lines:
-        output.append("  Anomalies_Detected:")
-        output.extend(anomaly_lines)
-    else:
-        output.append("  Anomalies_Detected: None")
-        
-    if tamper_lines:
-        output.append("  Tamper_Alarms:")
-        output.extend(tamper_lines)
-    else:
-        output.append("  Tamper_Alarms: None")
-
-    # Format Artifact Payload
-    if room_has_red:
-        overall_status_color = "red"
-    elif room_has_orange:
-        overall_status_color = "orange"
-    else:
-        overall_status_color = "green"
-        
-    artifact = {
-        "view_type": "diagnostics",
-        "current_values": ui_current_values,
-        "status_color": overall_status_color
-    }
-
-    return "\n".join(output), artifact
-
-# ==========================================
-# TOOL 2: CAMPUS-WIDE SUMMARY
-# ==========================================
-
-class EmptyInput(BaseModel):
-    pass
-
-@tool("get_campus_diagnostics", args_schema=EmptyInput, response_format="content_and_artifact")
-def get_campus_diagnostics() -> Tuple[str, dict]:
-    """
-    Triage report for the entire campus. Aggregates all healthy data into single lines 
-    and explicitly lists ONLY the devices that require human intervention.
-    Runs concurrently for high performance.
-    """
-    current_time_str = datetime.now().strftime("%A, %b %d, %Y at %I:%M:%S %p EEST")
-    
-    all_rooms = registry.get_available_rooms()
-    
-    # Setup batch processing tasks
-    tasks = []
-    for room in all_rooms:
-        for name, meta in registry.get_all_devices_in_room(room).items():
-            uid = meta.get("id") if isinstance(meta, dict) else meta
-            tasks.append((room, name, uid, meta))
-            
     total_scanned = len(tasks)
-    
-    online_count = 0
-    battery_vals = []
-    
-    offline_list = []
-    power_list = []
-    anomaly_list = []
-    tamper_list = []
-    
-    ui_current_values = {}
-    campus_has_red = False
-    campus_has_orange = False
 
-    # Execute all device checks simultaneously using ThreadPoolExecutor
-    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
-        future_to_task = {executor.submit(_audit_device, name, uid): (room, name, meta) for room, name, uid, meta in tasks}
+    # ==========================================
+    # BRANCH A: REAL-TIME SNAPSHOT ("NOW")
+    # ==========================================
+    if timeframe == "now":
+        online_count = 0
+        offline_lines = []
+        power_warnings = []
+        anomaly_lines = []
+        tamper_lines = []
+        battery_estimates_lines = []
         
-        for future in concurrent.futures.as_completed(future_to_task):
-            room, name, meta = future_to_task[future]
-            meta_str = _format_meta(meta)
-            name_disp = f"'{name}'{meta_str}"
+        ui_sensors = {}
+        room_status_counts = {"error": 0, "critical": 0, "warning": 0, "good": 0}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+            future_to_task = {executor.submit(_audit_device, name, uid): (room, name, meta) for room, name, uid, meta in tasks}
             
-            try:
-                data = future.result()
+            for future in concurrent.futures.as_completed(future_to_task):
+                room, name, meta = future_to_task[future]
+                meta_str = _format_meta(meta)
+                name_disp = f"'{name}'{meta_str}" if target == 'building' else f"{name}{meta_str}"
                 
-                # --- UI Artifact Data Injection ---
-                if data["is_plugged_in"]:
-                    ui_current_values[f"{name}_battery"] = "Plugged In"
-                elif data["battery"] is not None:
-                    ui_current_values[f"{name}_battery"] = data["battery"]
-                else:
-                    ui_current_values[f"{name}_battery"] = "No Battery"
+                try:
+                    data = future.result()
                     
-                sensor_color = "green"
-                if not data["is_online"] or data["tamper"]:
-                    sensor_color = "red"
-                else:
+                    sensor_status = "error"
+                    reason = "Unknown"
                     has_major_fault = any("HARDWARE_FAULT" in a or "FLATLINE" in a for a in data["anomalies"])
                     has_signal_issue = any("WEAK_SIGNAL" in a or "POOR_SNR" in a for a in data["anomalies"])
                     
-                    if has_major_fault:
-                        sensor_color = "red"
-                    elif has_signal_issue:
-                        sensor_color = "orange"
-                        
+                    bat_pct = 100.0
                     if not data["is_plugged_in"] and data["battery"] is not None:
+                        bat_pct = data["battery"]
                         if data["is_weather"]:
-                            if data["battery"] < 2.4:
-                                sensor_color = "red"
-                        else:
-                            if data["battery"] < 15.0:
-                                sensor_color = "red"
-                            elif data["battery"] < 50.0 and sensor_color == "green":
-                                sensor_color = "orange"
-                                
-                ui_current_values[f"{name}_status_color"] = sensor_color
-                
-                if sensor_color == "red":
-                    campus_has_red = True
-                elif sensor_color == "orange":
-                    campus_has_orange = True
-                # ----------------------------------
-                
-                # Connectivity
-                if data["is_online"]:
-                    online_count += 1
-                else:
-                    offline_list.append(f"    - {room}: {name_disp} (Offline {data['offline_duration_str']})")
-                    continue # Skip power/hardware alerts for offline devices
-                    
-                # Power
-                if not data["is_plugged_in"] and data["battery"] is not None:
-                    if data["is_weather"]:
-                        if data["battery"] < 2.4:
-                            power_list.append(f"    - {room}: {name_disp} [LOW_BATTERY] ({data['battery']:.2f}V remaining | Est. {int(data['est_days'])} days)")
+                            bat_pct = max(0, min(100, (data["battery"] - 2.4) / (3.0 - 2.4) * 100))
+
+                    if not data["is_online"]:
+                        sensor_status = "error"
+                        reason = f"Dead/Offline ({data['offline_duration_str']})"
+                    elif data["tamper"]:
+                        sensor_status = "error"
+                        reason = "Tamper Alarm Triggered"
+                    elif has_major_fault:
+                        sensor_status = "error"
+                        reason = "Error Readings / Hardware Fault"
                     else:
-                        battery_vals.append(data["battery"])
-                        if data["battery"] < 15.0:
-                            power_list.append(f"    - {room}: {name_disp} [LOW_BATTERY] ({data['battery']:.1f}% remaining | Est. {int(data['est_days'])} days)")
-                        elif data["est_days"] < 14:
-                            power_list.append(f"    - {room}: {name_disp} [HIGH_DRAIN_RATE_ANOMALY] ({data['battery']:.1f}% remaining | Est. {int(data['est_days'])} days)")
-                        
-                # Hardware
-                if data["anomalies"]:
-                    for a in data["anomalies"]:
-                        anomaly_list.append(f"    - {room}: {name_disp} {a}")
-                        
-                if data["tamper"]:
-                    tamper_list.append(f"    - {room}: {name_disp} (Casing opened at {data['tamper_time']})")
+                        reasons = []
+                        if data["is_plugged_in"]:
+                            sensor_status = "good"
+                        else:
+                            if bat_pct > 40: sensor_status = "good"
+                            elif bat_pct >= 16: 
+                                sensor_status = "warning"
+                                reasons.append("Low Battery")
+                            elif bat_pct >= 1: 
+                                sensor_status = "critical"
+                                reasons.append("Extremely Low Battery")
+                            else: 
+                                sensor_status = "error"
+                                reasons.append("Battery Depleted")
+                                
+                        if has_signal_issue:
+                            if sensor_status == "good": sensor_status = "warning"
+                            reasons.append("Low Signal")
+                            
+                        if not reasons:
+                            reason = "Operating Normally"
+                        else:
+                            reason = " & ".join(reasons)
                     
-            except Exception as e:
-                logger.error(f"Concurrent execution failed for {name} in {room}: {e}")
+                    room_status_counts[sensor_status] += 1
+                    
+                    if not data["is_online"]:
+                        battery_val = 0.0 
+                    elif data["is_plugged_in"]:
+                        battery_val = "Plugged In"
+                    else:
+                        battery_val = data["battery"] if data["battery"] is not None else "No Data"
+                        
+                    ui_sensors[name] = {
+                        "status": sensor_status,
+                        "category": "DIAGNOSTIC",
+                        "reason": reason,
+                        "readings": {
+                            "battery": battery_val,
+                            "est_days": int(data["est_days"]) if (data["battery"] is not None and not data["is_plugged_in"]) else None,
+                            "is_online": data["is_online"],
+                            "tamper_alarm": data["tamper"]
+                        }
+                    }
 
-    uptime_pct = (online_count / total_scanned * 100) if total_scanned > 0 else 0
-    avg_bat = int(np.mean(battery_vals)) if battery_vals else 0
-    overall_status = "ATTENTION_REQUIRED" if (offline_list or power_list or anomaly_list or tamper_list) else "HEALTHY"
+                    if data["is_online"]:
+                        online_count += 1
+                    else:
+                        offline_lines.append(f"    - {name_disp} (Offline {data['offline_duration_str']})")
+                        if data["is_weather"]:
+                            last_bat = f"Last known: {data['battery']:.2f}V" if data['battery'] is not None else "Unknown Voltage"
+                        else:
+                            last_bat = f"Last known: {data['battery']:.1f}%" if data['battery'] is not None else "Unknown Battery"
+                        battery_estimates_lines.append(f"    - {name_disp}: 0.0 (Dead/Offline. {last_bat})")
+                        continue
+                        
+                    if data["is_plugged_in"]:
+                        battery_estimates_lines.append(f"    - {name_disp}: Plugged In (Unlimited)")
+                    elif data["battery"] is not None:
+                        unit = "V" if data["is_weather"] else "%"
+                        val_format = ".2f" if data["is_weather"] else ".1f"
+                        
+                        battery_estimates_lines.append(f"    - {name_disp}: {data['battery']:{val_format}}{unit} | Est. {int(data['est_days'])} days remaining")
+                        
+                        if bat_pct < 16:
+                            power_warnings.append(f"    - {name_disp}: [CRITICAL_BATTERY] {data['battery']:{val_format}}{unit} remaining")
+                        elif bat_pct <= 40:
+                            power_warnings.append(f"    - {name_disp}: [LOW_BATTERY] {data['battery']:{val_format}}{unit} remaining")
+                        elif data["est_days"] < 14:
+                            power_warnings.append(f"    - {name_disp}: [HIGH_DRAIN_RATE_ANOMALY] Est. {int(data['est_days'])} days remaining")
+                    
+                    if data["anomalies"]:
+                        for a in data["anomalies"]: anomaly_lines.append(f"    - {name_disp} {a}")
+                    if data["tamper"]:
+                        tamper_lines.append(f"    - {name_disp} (Casing opened at {data['tamper_time']})")
+                        
+                except Exception as e:
+                    logger.error(f"Concurrent execution failed for {name} in {room}: {e}")
 
-    # Format Text Output
+        offline_lines.sort()
+        anomaly_lines.sort()
+        tamper_lines.sort()
+        power_warnings.sort()
+        battery_estimates_lines.sort()
+
+        overall_status = "error"
+        if room_status_counts["error"] > 0: overall_status = "error"
+        elif room_status_counts["critical"] > 0: overall_status = "critical"
+        elif room_status_counts["warning"] > 0: overall_status = "warning"
+        else: overall_status = "good"
+
+        uptime_pct = (online_count / total_scanned * 100) if total_scanned > 0 else 0
+        output = [
+            "Query_Context:",
+            "  Domain: Diagnostics (System Health Audit)",
+            f"  Target: {target.upper()}",
+            "  Timeframe: Now (Snapshot)",
+            f"  Total_Devices_Scanned: {total_scanned}",
+            f"  Current_Time: {current_time_str}",
+            "",
+            "Connectivity_Audit:",
+            f"  Status: {online_count}/{total_scanned} Online ({uptime_pct:.1f}% Uptime)"
+        ]
+        
+        if offline_lines:
+            output.append("  Offline_Devices:")
+            output.extend(offline_lines)
+        else:
+            output.append("  Offline_Devices: None")
+            
+        output.append("\nHardware_Health_Audit:")
+        if anomaly_lines:
+            output.append("  Anomalies_Detected:")
+            output.extend(anomaly_lines)
+        else:
+            output.append("  Anomalies_Detected: None")
+            
+        if tamper_lines:
+            output.append("  Tamper_Alarms:")
+            output.extend(tamper_lines)
+        else:
+            output.append("  Tamper_Alarms: None")
+
+        output.append("\nPower_Depletion_Warnings:")
+        if power_warnings:
+            output.extend(power_warnings)
+        else:
+            output.append("  None")
+            
+        output.append("\nBattery_Life_Estimates:")
+        output.extend(battery_estimates_lines)
+
+        artifact = {
+            "view_type": "snapshot",
+            "status": overall_status,
+            "room_aggregates": {
+                "total": total_scanned,
+                "good": room_status_counts["good"],
+                "warning": room_status_counts["warning"],
+                "critical": room_status_counts["critical"],
+                "error": room_status_counts["error"]
+            }
+        }
+        
+        if target != 'building':
+            artifact["sensors"] = ui_sensors
+
+        return "\n".join(output), artifact
+
+    # ==========================================
+    # BRANCH B: HISTORICAL TIMELINE
+    # ==========================================
+    config = TIMEFRAME_CONFIG[timeframe]
+    method_name = config["method"]
+    bin_size = config["bin_size"]
+    
+    historical_contexts = {}
+    all_dfs = []
+    all_sensor_names = [name for _, name, _, _ in tasks]
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=15) as executor:
+        future_to_task = {executor.submit(_fetch_historical_context, name, uid, method_name): name for _, name, uid, _ in tasks}
+        
+        for future in concurrent.futures.as_completed(future_to_task):
+            name = future_to_task[future]
+            try:
+                res = future.result()
+                historical_contexts[name] = res
+                if not res["df"].empty:
+                    all_dfs.append(res["df"])
+            except Exception:
+                pass
+
+    if not all_dfs:
+        error_msg = f"Query_Context:\n  Target: {target}\nError: No historical diagnostic data found for timeframe {timeframe}."
+        return error_msg, {"view_type": "graph", "series": [], "metadata": {}}
+
+    combined_df = pd.concat(all_dfs, axis=1, sort=True)
+    combined_df = combined_df.reindex(sorted(combined_df.columns), axis=1)
+    combined_df = combined_df.resample(bin_size).median().ffill().bfill()
+
+    # --- BUILD THE GRAPH ARTIFACT (WITH DELTA-ONLY LOGIC) ---
+    series_data = []
+    
+    if target == 'building':
+        last_agg = None
+        for dt, row in combined_df.iterrows():
+            counts = {"good": 0, "warning": 0, "critical": 0, "error": 0}
+            
+            for name in all_sensor_names:
+                ctx = historical_contexts.get(name, {})
+                audit = ctx.get("audit", {})
+                is_weather = audit.get("is_weather", False)
+                is_plugged = audit.get("is_plugged_in", False)
+                
+                is_online_now = True
+                if not audit.get("is_online", True) and audit.get("last_ts"):
+                    death_dt = pd.to_datetime(audit["last_ts"], unit='ms', utc=True).tz_convert(settings.TIMEZONE)
+                    if dt > death_dt:
+                        is_online_now = False
+
+                has_major_fault = any("HARDWARE_FAULT" in a or "FLATLINE" in a for a in audit.get("anomalies", []))
+                has_signal_issue = any("WEAK_SIGNAL" in a or "POOR_SNR" in a for a in audit.get("anomalies", []))
+
+                if not is_online_now or audit.get("tamper", False) or has_major_fault:
+                    counts["error"] += 1
+                else:
+                    status = "error"
+                    if is_plugged:
+                        status = "warning" if has_signal_issue else "good"
+                    else:
+                        val = row.get(name) if name in combined_df.columns else audit.get("battery")
+                        if pd.isna(val) or val is None:
+                            status = "error"
+                        else:
+                            bat_pct = float(val)
+                            if is_weather:
+                                bat_pct = max(0, min(100, (bat_pct - 2.4) / (3.0 - 2.4) * 100))
+                                
+                            if bat_pct > 40: status = "good"
+                            elif bat_pct >= 16: status = "warning"
+                            elif bat_pct >= 1: status = "critical"
+                            else: status = "error"
+                            
+                            if has_signal_issue and status == "good":
+                                status = "warning"
+                                
+                    counts[status] += 1
+
+            current_agg = (counts["good"], counts["warning"], counts["critical"], counts["error"])
+            if last_agg is None or current_agg != last_agg:
+                point = {"timestamp": dt.isoformat()}
+                if last_agg is None:
+                    point["total"] = total_scanned
+                point.update(counts)
+                series_data.append(point)
+                last_agg = current_agg
+                
+        # Inject exact current snapshot at "now" using manual recalculation of status to match current time
+        now_dt = pd.Timestamp.now(tz=settings.TIMEZONE)
+        now_counts = {"good": 0, "warning": 0, "critical": 0, "error": 0}
+        
+        for name in all_sensor_names:
+            ctx = historical_contexts.get(name, {})
+            audit = ctx.get("audit", {})
+            is_weather = audit.get("is_weather", False)
+            is_plugged = audit.get("is_plugged_in", False)
+            
+            has_major_fault = any("HARDWARE_FAULT" in a or "FLATLINE" in a for a in audit.get("anomalies", []))
+            has_signal_issue = any("WEAK_SIGNAL" in a or "POOR_SNR" in a for a in audit.get("anomalies", []))
+
+            if not audit.get("is_online", True) or audit.get("tamper", False) or has_major_fault:
+                now_counts["error"] += 1
+            else:
+                status = "error"
+                if is_plugged:
+                    status = "warning" if has_signal_issue else "good"
+                else:
+                    bat_val = audit.get("battery")
+                    if bat_val is None:
+                        status = "error"
+                    else:
+                        bat_pct = float(bat_val)
+                        if is_weather:
+                            bat_pct = max(0, min(100, (bat_pct - 2.4) / (3.0 - 2.4) * 100))
+                            
+                        if bat_pct > 40: status = "good"
+                        elif bat_pct >= 16: status = "warning"
+                        elif bat_pct >= 1: status = "critical"
+                        else: status = "error"
+                        
+                        if has_signal_issue and status == "good":
+                            status = "warning"
+                            
+                now_counts[status] += 1
+                        
+        current_agg = (now_counts["good"], now_counts["warning"], now_counts["critical"], now_counts["error"])
+        if last_agg is None or current_agg != last_agg:
+            point = {"timestamp": now_dt.isoformat()}
+            if last_agg is None:
+                point["total"] = total_scanned
+            point.update(now_counts)
+            series_data.append(point)
+
+        graph_artifact = {
+            "view_type": "graph",
+            "series": series_data,
+            "metadata": {
+                "good": "Healthy (Good)",
+                "warning": "Warning State",
+                "critical": "Critical State",
+                "error": "Error / Offline"
+            }
+        }
+    else:
+        # Standard Single Room Logic
+        last_sent_values = {col: None for col in combined_df.columns}
+        for dt, row in combined_df.iterrows():
+            point = {"timestamp": dt.isoformat()}
+            for col in combined_df.columns:
+                val = row[col]
+                audit = historical_contexts.get(col, {}).get("audit", {})
+                is_online = audit.get("is_online", True)
+                
+                if not is_online and audit.get("last_ts"):
+                    death_dt = pd.to_datetime(audit["last_ts"], unit='ms', utc=True).tz_convert(settings.TIMEZONE)
+                    if dt > death_dt:
+                        val = 0.0
+                        
+                if pd.notna(val):
+                    val = round(float(val), 2 if audit.get("is_weather", False) else 1)
+                    if last_sent_values[col] is None or val != last_sent_values[col]:
+                        point[col] = val
+                        last_sent_values[col] = val
+                        
+            if len(point) > 1:
+                series_data.append(point)
+
+        graph_artifact = {
+            "view_type": "graph",
+            "series": series_data,
+            "metadata": {col: "Battery (V)" if "WEATHER" in col.upper() else "Battery %" for col in combined_df.columns}
+        }
+
+    # Build Text Output for LLM
     output = [
         "Query_Context:",
-        "  Domain: Diagnostics (Campus-Wide Summary)",
-        "  Target: Entire Campus",
+        "  Domain: Diagnostics (Historical Timeline)",
+        f"  Target: {target.upper()}",
+        f"  Timeframe: {timeframe}",
         f"  Total_Devices_Scanned: {total_scanned}",
-        f"  Current_Time: {current_time_str}",
         "",
-        "Global_Health_Overview:",
-        f"  Total_Active: {online_count}/{total_scanned} ({uptime_pct:.1f}% Uptime)",
-        f"  Campus_Average_Battery: {avg_bat}%",
-        f"  Overall_Status: [{overall_status}]",
-        "",
-        "Actionable_Maintenance_Queue:"
+        "Historical_Warnings:"
     ]
+    
+    err_lines = []
+    for col in combined_df.columns:
+        ctx = historical_contexts.get(col, {})
+        audit = ctx.get("audit", {})
+        hist_errors = ctx.get("hist_errors", [])
+        
+        sensor_warnings = []
+        if not audit.get("is_online", True):
+            sensor_warnings.append(f"[OFFLINE] {audit.get('offline_duration_str', 'Unknown')}")
+            
+        if audit.get("tamper", False):
+            sensor_warnings.append(f"[TAMPER] Triggered at {audit.get('tamper_time')}")
+            
+        for err in hist_errors:
+            if "Tamper" in err and not audit.get("tamper", False):
+                sensor_warnings.append(f"[{err}]")
+                
+        for a in audit.get("anomalies", []):
+            sensor_warnings.append(a)
+            
+        bat = audit.get("battery")
+        if bat is not None and not audit.get("is_plugged_in", False):
+            bat_pct = bat
+            unit = "V" if audit.get("is_weather", False) else "%"
+            val_format = ".2f" if audit.get("is_weather", False) else ".1f"
+            
+            if audit.get("is_weather", False):
+                bat_pct = max(0, min(100, (bat - 2.4) / (3.0 - 2.4) * 100))
+                
+            if bat_pct < 16:
+                sensor_warnings.append(f"[CRITICAL_BATTERY] {bat:{val_format}}{unit} remaining")
+            elif bat_pct <= 40:
+                sensor_warnings.append(f"[LOW_BATTERY] {bat:{val_format}}{unit} remaining")
+                
+        if sensor_warnings:
+            err_lines.append(f"  - {col}: {', '.join(sensor_warnings)}")
 
-    if offline_list:
-        output.append(f"  Offline_Sensors ({len(offline_list)}):")
-        output.extend(offline_list)
+    if err_lines:
+        err_lines.sort()
+        output.extend(err_lines)
     else:
-        output.append("  Offline_Sensors: None")
+        output.append("  - None detected in this timeframe.")
         
-    if power_list:
-        output.append(f"  Power_Depletion_Warnings ({len(power_list)}):")
-        output.extend(power_list)
-    else:
-        output.append("  Power_Depletion_Warnings: None")
+    output.append("")
+    output.append("Battery_Drain_Summary (Over Timeframe):")
+    
+    drain_lines = []
+    for col in combined_df.columns:
+        raw_df = historical_contexts.get(col, {}).get("df", pd.DataFrame())
         
-    if anomaly_list:
-        output.append(f"  Hardware_Anomalies ({len(anomaly_list)}):")
-        output.extend(anomaly_list)
+        if not raw_df.empty:
+            start_val = raw_df[col].iloc[0]
+            last_recorded = raw_df[col].iloc[-1]
+            diff = start_val - last_recorded
+            
+            ctx = historical_contexts.get(col, {})
+            audit = ctx.get("audit", {})
+            is_online = audit.get("is_online", True)
+            is_weather = audit.get("is_weather", False)
+            
+            unit = "V" if is_weather else "%"
+            val_format = ".2f" if is_weather else ".1f"
+            
+            days_span = (raw_df.index[-1] - raw_df.index[0]).total_seconds() / (3600 * 24)
+            span_str = f" over {int(days_span)} days" if days_span >= 1 else ""
+            
+            est_str = ""
+            if is_online and diff > 0 and days_span > 1:
+                drain_per_day = diff / days_span
+                if drain_per_day > 0:
+                    est_days = int(last_recorded / drain_per_day)
+                    est_str = f" | Est. {est_days} days remaining"
+            
+            if not is_online:
+                off_str = audit.get('offline_duration_str', 'Unknown')
+                drain_lines.append(f"  - {col}: Dropped {diff:{val_format}}{unit} (From {start_val:{val_format}}{unit} to {last_recorded:{val_format}}{unit}){span_str} | Currently 0.0{unit} [Dead/Offline: {off_str}]")
+            elif diff < 0:
+                drain_lines.append(f"  - {col}: Battery Replaced (Jumped from {start_val:{val_format}}{unit} to {last_recorded:{val_format}}{unit})")
+            elif diff > 0:
+                drain_lines.append(f"  - {col}: Dropped {diff:{val_format}}{unit} (From {start_val:{val_format}}{unit} to {last_recorded:{val_format}}{unit}){span_str}{est_str}")
+            else:
+                drain_lines.append(f"  - {col}: Stable at {last_recorded:{val_format}}{unit}")
+                
+    if drain_lines:
+        drain_lines.sort()
+        output.extend(drain_lines)
     else:
-        output.append("  Hardware_Anomalies: None")
-        
-    if tamper_list:
-        output.append(f"  Tamper_Alarms ({len(tamper_list)}):")
-        output.extend(tamper_list)
-    else:
-        output.append("  Tamper_Alarms: None")
+        output.append("  - No significant battery data detected.")
 
-    # Format Artifact Payload
-    if campus_has_red:
-        overall_status_color = "red"
-    elif campus_has_orange:
-        overall_status_color = "orange"
-    else:
-        overall_status_color = "green"
-        
-    artifact = {
-        "view_type": "diagnostics",
-        "current_values": ui_current_values,
-        "status_color": overall_status_color
-    }
-
-    return "\n".join(output), artifact
+    return "\n".join(output), graph_artifact
 
 # ==========================================
 # TEST EXECUTION BLOCK
@@ -623,22 +784,29 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
     print("Testing Diagnostics Tool...")
     print("-" * 50)
-    
+
     try:
-        print("\n[Testing Targeted Audit (Room 2.4)]")
-        summary, raw_data = get_diagnostics.func(target="2.4", sensor_type=None)
+        print("\n[Testing]")
+        summary, raw_data = get_diagnostics.func(target="2.4", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
-
-        print("\n[Testing Targeted Audit (Room entrance, PC sensors)]")
-        summary2, raw_data2 = get_diagnostics.func(target="entrance", sensor_type="PC")
-        print(summary2)
-        print("\n[Artifact Payload]")
-        print(raw_data2)
-        
         print("\n" + "-"*50)
-        print("All Diagnostics tool tests completed successfully.")
-        
+
+        print("\n[Testing]")
+        summary, raw_data = get_diagnostics.func(target="2.4", timeframe="90d")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("\n" + "-"*50)
+
+        print("\n[Testing]")
+        summary, raw_data = get_diagnostics.func(target="building", timeframe="30d")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("\n" + "-"*50)
+
     except Exception as e:
+
         logger.error(f"\nError during execution: {e}", exc_info=True)

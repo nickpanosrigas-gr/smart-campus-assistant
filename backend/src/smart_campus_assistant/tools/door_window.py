@@ -202,16 +202,21 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
             "Current_State:"
         ])
         
-        ui_current_values = {}
+        # --- NEW NESTED ARTIFACT LOGIC ---
+        ui_aggregates = {"open_count": 0, "total_count": total_count}
+        ui_sensors = {}
         
-        # 1. Offline Sensors (Red)
+        # 1. Offline Sensors processing
         for device_name in offline_sensors:
-            ui_current_values[f"{device_name}_status_color"] = "red"
-            ui_current_values[device_name] = None
+            ui_sensors[device_name] = {
+                "status": "error",
+                "category": "MC",
+                "readings": None
+            }
         
         open_count = 0
         
-        # 2. Active Sensors
+        # 2. Active Sensors processing & text output
         for device_name, device_data in active_mc_devices.items():
             device_id = device_data.get("id")
             tag = device_data.get("tag", "Unspecified")
@@ -219,35 +224,49 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
             raw_data = tb_client.get_now(device_id, ["magnet_status"])
             if "magnet_status" in raw_data and raw_data["magnet_status"]:
                 is_open = parse_magnet_status(raw_data["magnet_status"][0]["value"])
+                
+                # Keep text intact for LLM
                 output.append(f"  {device_name} ({tag}): {get_state_label(is_open)}")
                 
-                ui_current_values[device_name] = "Open" if is_open else "Closed"
-                
+                # Update counters and status
                 if is_open:
-                    ui_current_values[f"{device_name}_status_color"] = "orange"
                     open_count += 1
+                    sensor_status = "warning"
                 else:
-                    ui_current_values[f"{device_name}_status_color"] = "green"
+                    sensor_status = "good"
+                    
+                ui_sensors[device_name] = {
+                    "status": sensor_status,
+                    "category": "MC",
+                    "readings": {"magnet_status": "Open" if is_open else "Closed"}
+                }
             else:
+                # Keep text intact for LLM
                 output.append(f"  {device_name} ({tag}): No Data")
-                ui_current_values[f"{device_name}_status_color"] = "red" # Treat missing data as offline error
-                ui_current_values[device_name] = None
+                ui_sensors[device_name] = {
+                    "status": "error",
+                    "category": "MC",
+                    "readings": None
+                }
+                
+        ui_aggregates["open_count"] = open_count
                 
         # 3. Overall Room Status Logic
         if total_count > 0:
             if open_count == total_count:
-                status_color = "red"
+                overall_status = "critical"
             elif open_count > (total_count / 2):
-                status_color = "orange"
+                overall_status = "warning"
             else:
-                status_color = "green"
+                overall_status = "good"
         else:
-            status_color = "gray"
+            overall_status = "error" # Gray/Unknown fallback becomes error if no sensors
 
         artifact = {
             "view_type": "snapshot",
-            "current_values": ui_current_values,
-            "status_color": status_color
+            "status": overall_status,
+            "room_aggregates": ui_aggregates,
+            "sensors": ui_sensors
         }
                 
         return "\n".join(output), artifact
@@ -311,25 +330,42 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
     combined_df = combined_df.resample('1min').ffill()
     
     # Create the timeline Graph Artifact
-    series_data = []
     # Drop calculated groups for the pure visual payload, only keep sensor columns
     ui_df = combined_df[[col for col in combined_df.columns if col in active_mc_devices.keys()]].copy()
     
-    for dt, row in ui_df.iterrows():
+    # --- NEW: Binning & Delta (Change-Only) logic for the graph artifact ---
+    if timeframe in ["30d", "90d"]:
+        # For 30d/90d, show 1 if it was opened at any point during that day
+        artifact_df = ui_df.resample('1D').max()
+    else:
+        # Use the base DataFrame for short timeframes to preserve exact minute changes
+        artifact_df = ui_df
+        
+    series_data = []
+    # Track the last value sent to the frontend for each sensor
+    last_sent_values = {col: None for col in artifact_df.columns}
+    
+    for dt, row in artifact_df.iterrows():
         point = {"timestamp": dt.isoformat()}
-        has_val = False
-        for col in ui_df.columns:
+        
+        for col in artifact_df.columns:
             val = row[col]
             if pd.notna(val):
-                point[col] = 1 if val else 0  # Map boolean to 1 (Open) or 0 (Closed) for graph
-                has_val = True
-        if has_val:
+                mapped_val = 1 if val else 0  # Map boolean to 1 (Open) or 0 (Closed)
+                
+                # Only include this sensor in the payload if its value CHANGED
+                if mapped_val != last_sent_values[col]:
+                    point[col] = mapped_val
+                    last_sent_values[col] = mapped_val
+                    
+        # Only append the timestamp to the array if at least ONE sensor changed state
+        if len(point) > 1:
             series_data.append(point)
             
     graph_artifact = {
         "view_type": "graph",
         "series": series_data,
-        "metadata": {col: "State (1=Open, 0=Closed)" for col in ui_df.columns}
+        "metadata": {col: "State (1=Open, 0=Closed)" for col in artifact_df.columns}
     }
 
     # Create Logical Groups
@@ -558,7 +594,21 @@ if __name__ == "__main__":
     print("-" * 50)
     try:
         print("\n[Testing]")
-        summary, raw_data = get_door_window_status.func(room="2.4", timeframe="now")
+        summary, raw_data = get_door_window_status.func(room="2.3", timeframe="now")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("-" * 50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_door_window_status.func(room="2.3", timeframe="24h")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("-" * 50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_door_window_status.func(room="2.3", timeframe="30d")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)

@@ -309,62 +309,97 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             "Current_State:"
         ])
         
-        # Build snapshot artifact
-        current_values = {}
+        # --- NEW NESTED ARTIFACT LOGIC ---
+        ui_aggregates = {}
+        ui_sensors = {}
         
-        # 1. Inject Online/Offline Status Colors
+        # 1. Weather Station processing
         if WEATHER_STATION_NAME:
-            if is_weather_active:
-                current_values[f"{WEATHER_STATION_NAME}_status_color"] = "green"
+            if is_weather_active and WEATHER_STATION_ID:
+                raw_w = tb_client.get_now(WEATHER_STATION_ID, ["solar_radiation"])
+                if "solar_radiation" in raw_w and raw_w["solar_radiation"]:
+                    val = float(raw_w['solar_radiation'][0]['value'])
+                    ui_sensors[WEATHER_STATION_NAME] = {
+                        "status": "good",
+                        "category": "WEATHER",
+                        "readings": {"solar_radiation": val}
+                    }
+                else:
+                    ui_sensors[WEATHER_STATION_NAME] = {
+                        "status": "error",
+                        "category": "WEATHER",
+                        "readings": None
+                    }
             else:
-                current_values[f"{WEATHER_STATION_NAME}_status_color"] = "red"
+                ui_sensors[WEATHER_STATION_NAME] = {
+                    "status": "error",
+                    "category": "WEATHER",
+                    "readings": None
+                }
 
-        for device_name in active_iaq_devices.keys():
-            current_values[f"{device_name}_status_color"] = "green"
+        # 2. Offline Sensors processing
         for device_name in offline_sensors:
             if device_name != WEATHER_STATION_NAME:
-                current_values[f"{device_name}_status_color"] = "red"
+                ui_sensors[device_name] = {
+                    "status": "error",
+                    "category": "IAQ",
+                    "readings": None
+                }
             
-        # 2. Fetch Actual Values
-        if is_weather_active and WEATHER_STATION_ID:
-            raw_w = tb_client.get_now(WEATHER_STATION_ID, ["solar_radiation"])
-            if "solar_radiation" in raw_w and raw_w["solar_radiation"]:
-                val = float(raw_w['solar_radiation'][0]['value'])
-                current_values["solar_radiation"] = val
-
+        # 3. Active Sensors processing & text output
+        light_vals = []
         for device_name, device_data in active_iaq_devices.items():
             device_id = device_data.get("id")
             raw_data = tb_client.get_now(device_id, ["light_level"])
+            
             if "light_level" in raw_data and raw_data["light_level"]:
                 val = float(raw_data["light_level"][0]["value"])
+                light_vals.append(val)
+                # Keep text intact for LLM
                 output.append(f"  {device_name}: {get_semantic_label(val)}")
-                current_values[device_name] = val
+                
+                # New Status Logic: 0-1 (good), 2-3 (warning), 4-5 (critical)
+                rounded_val = round(val)
+                if rounded_val <= 1:
+                    sensor_status = "good"
+                elif rounded_val <= 3:
+                    sensor_status = "warning"
+                else:
+                    sensor_status = "critical"
+                    
+                ui_sensors[device_name] = {
+                    "status": sensor_status,
+                    "category": "IAQ",
+                    "readings": {"light_level": val}
+                }
             else:
+                # Keep text intact for LLM
                 output.append(f"  {device_name}: No Data (Despite being marked Online)")
+                ui_sensors[device_name] = {
+                    "status": "error",
+                    "category": "IAQ",
+                    "readings": None
+                }
 
-        # 3. Room Status Color Logic (0-2: green, 3-4: orange, 5: red)
-        status_color = "gray"
-        # Ensure we don't accidentally calculate the status color using solar radiation data!
-        light_vals = [v for k, v in current_values.items() if not k.endswith("_status_color") and k != "solar_radiation"]
+        # 4. Room Status Logic
+        overall_status = "error"
         if light_vals:
             avg_val = sum(light_vals) / len(light_vals)
+            ui_aggregates["light_level"] = avg_val
+            
             rounded_val = round(avg_val)
-            if rounded_val <= 2:
-                status_color = "green"
-            elif rounded_val <= 4:
-                status_color = "orange"
+            if rounded_val <= 1:
+                overall_status = "good"
+            elif rounded_val <= 3:
+                overall_status = "warning"
             else:
-                status_color = "red"
+                overall_status = "critical"
 
         artifact = {
             "view_type": "snapshot",
-            "current_values": current_values,
-            "status_color": status_color,
-            "celestial": {
-                "sun_azimuth": solar.get("raw_azimuth"),
-                "sun_elevation": solar.get("raw_elevation"),
-                "is_day": solar.get("is_day")
-            }
+            "status": overall_status,
+            "room_aggregates": ui_aggregates,
+            "sensors": ui_sensors
         }
                 
         return "\n".join(output), artifact
@@ -424,21 +459,39 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
 
     # Pre-calculate the UI JSON graph data by stripping NaNs to prevent serialization errors
     ui_df = aligned_df.drop(columns=['Room_Aggregate'], errors='ignore').copy()
+    
+    # --- NEW: Binning & Delta (Change-Only) logic for the graph artifact ---
+    if timeframe in ["30d", "90d"]:
+        artifact_df = ui_df.resample('1D').median(numeric_only=True)
+    else:
+        # Use the default 10-minute splits for 2h, 24h, 7d
+        artifact_df = ui_df
+
     series_data = []
-    for dt, row in ui_df.iterrows():
+    # Track the last value sent to the frontend for each sensor
+    last_sent_values = {col: None for col in artifact_df.columns}
+
+    for dt, row in artifact_df.iterrows():
         point = {"timestamp": dt.isoformat()}
-        for col in ui_df.columns:
+        
+        for col in artifact_df.columns:
             val = row[col]
             if pd.notna(val):
-                point[col] = float(val)
-        series_data.append(point)
-        
+                # Only include this sensor in the payload if its value CHANGED
+                if val != last_sent_values[col]:
+                    point[col] = float(val)
+                    last_sent_values[col] = val
+                    
+        # Only append the timestamp to the array if at least ONE sensor changed state
+        if len(point) > 1:
+            series_data.append(point)
+            
     graph_artifact = {
         "view_type": "graph",
         "series": series_data,
-        "metadata": {col: "Level (0-5)" for col in ui_df.columns}
+        "metadata": {col: "Level (0-5)" for col in artifact_df.columns}
     }
-
+    
     days_map = {"2h": 1, "24h": 1, "7d": 7, "30d": 30, "90d": 90}
     days_back = days_map.get(timeframe, 1)
     solar_hist = astral_client.get_historical_solar_context(days_back)
@@ -687,11 +740,25 @@ if __name__ == "__main__":
     print("-" * 50)
     try:
         print("\n[Testing]")
-        summary, raw_data = get_ambient_lights.func(room="4.9", timeframe="now")
+        summary, raw_data = get_ambient_lights.func(room="2.3", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("-" * 50)
 
+        print("\n[Testing]")
+        summary, raw_data = get_ambient_lights.func(room="2.3", timeframe="24h")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("-" * 50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_ambient_lights.func(room="2.3", timeframe="7d")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("-" * 50)
+        
     except Exception as e:
         print(f"\nError during execution: {e}")

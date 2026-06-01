@@ -7,7 +7,7 @@ from langchain_core.runnables import RunnableConfig
 from src.smart_campus_assistant.config.settings import settings
 
 # ==========================================
-# 1. IMPORT ALL RAW TOOLS DIRECTLY (Removed visual_sync)
+# 1. IMPORT ALL RAW TOOLS DIRECTLY
 # ==========================================
 from src.smart_campus_assistant.tools.topology import search_topology
 from src.smart_campus_assistant.tools.schedule import (

@@ -310,92 +310,127 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             "Current_State_With_Diffs (vs Baseline & Limits):"
         ])
         
-        ui_current_values = {}
+        # --- NEW NESTED ARTIFACT LOGIC ---
+        ui_aggregates = {}
+        ui_sensors = {}
         
-        # 1. Inject Online/Offline Status Colors
+        # 1. Weather Station processing
         if WEATHER_STATION_NAME:
             if is_weather_active:
-                ui_current_values[f"{WEATHER_STATION_NAME}_status_color"] = "green"
-            else:
-                ui_current_values[f"{WEATHER_STATION_NAME}_status_color"] = "red"
+                w_curr = extract_current_values(tb_client.get_now(WEATHER_STATION_ID, WEATHER_KEYS), WEATHER_KEYS)
                 
-        for device_name in active_iaq_devices.keys():
-            ui_current_values[f"{device_name}_status_color"] = "green"
-        for device_name in offline_sensors:
-            if device_name != WEATHER_STATION_NAME:
-                ui_current_values[f"{device_name}_status_color"] = "red"
-        
-        # 2. Fetch Actual Values
-        if is_weather_active and WEATHER_STATION_ID:
-            w_curr = extract_current_values(tb_client.get_now(WEATHER_STATION_ID, WEATHER_KEYS), WEATHER_KEYS)
-            w_parts = [format_val(k, w_curr.get(k), ctx_w_base.get(k), room) for k in ['air_temperature', 'relative_humidity', 'solar_radiation', 'precipitation', 'wind_speed'] if w_curr.get(k) is not None]
-            output.append(f"  Weather: {' | '.join(w_parts) if w_parts else 'Offline / No Data'}")
-            for k, v in w_curr.items():
-                if v is not None:
-                    ui_current_values[k] = v
+                ui_w_curr = {k: v for k, v in w_curr.items() if k in ["air_temperature", "relative_humidity", "atmospheric_pressure"]}
+                
+                ui_sensors[WEATHER_STATION_NAME] = {
+                    "status": "good",
+                    "category": "WEATHER",
+                    "readings": ui_w_curr
+                }
+                # Keep text generation exactly the same for the LLM
+                w_parts = [format_val(k, w_curr.get(k), ctx_w_base.get(k), room) for k in ['air_temperature', 'relative_humidity', 'solar_radiation', 'precipitation', 'wind_speed'] if w_curr.get(k) is not None]
+                output.append(f"  Weather: {' | '.join(w_parts) if w_parts else 'Offline / No Data'}")
+            else:
+                ui_sensors[WEATHER_STATION_NAME] = {
+                    "status": "error",
+                    "category": "WEATHER",
+                    "readings": None
+                }
+                output.append("  Weather: Offline / No Data")
         else:
             output.append("  Weather: Offline / Not Configured")
+            
+        # 2. Offline Sensors processing
+        for device_name in offline_sensors:
+            if device_name != WEATHER_STATION_NAME:
+                ui_sensors[device_name] = {
+                    "status": "error",
+                    "category": "IAQ",
+                    "readings": None
+                }
         
         output.append("  Indoor (Room Sensors):")
+        
+        # 3. Active Sensors processing & actual values
         i_curr_list = []
         for name, data in active_iaq_devices.items():
             d_id = data.get("id") if isinstance(data, dict) else data
             i_curr = extract_current_values(tb_client.get_now(d_id, IAQ_KEYS), IAQ_KEYS)
             i_curr_list.append(i_curr)
             
-            # Inject explicit individual sensor readings (e.g. F2_2.4-IAQ-1_temperature = 22.4)
-            for k, v in i_curr.items():
-                if v is not None:
-                    ui_current_values[f"{name}_{k}"] = v
+            has_valid_data = any(v is not None for v in i_curr.values())
+            sensor_status = "error"
             
+            if has_valid_data:
+                sensor_status = "good"
+                for k, v in i_curr.items():
+                    if v is None: continue
+                    lim = get_limit(k, room)
+                    if lim:
+                        span = lim["max"] - lim["min"]
+                        margin = span * 0.1 # 10% tolerance for warning
+                        if v < lim["min"] or v > lim["max"]:
+                            sensor_status = "critical"
+                            break
+                        elif v < (lim["min"] + margin) or v > (lim["max"] - margin):
+                            sensor_status = "warning"
+                    
+                    base = ctx_i_base.get(k)
+                    thresh = THRESHOLDS.get(k)
+                    if base is not None and thresh:
+                        diff = abs(v - base)
+                        if diff >= thresh:
+                            sensor_status = "critical"
+                            break
+                        elif diff >= thresh * 0.8:
+                            if sensor_status == "good": sensor_status = "warning"
+                            
+            ui_sensors[name] = {
+                "status": sensor_status,
+                "category": "IAQ",
+                "readings": i_curr if has_valid_data else None
+            }
+            
+            # Keep text intact
             i_parts = [format_val(k, i_curr.get(k), ctx_i_base.get(k), room) for k in IAQ_KEYS if i_curr.get(k) is not None]
             output.append(f"    - {name}: {' | '.join(i_parts) if i_parts else 'Offline / No Data'}")
             
-        # Aggregate IAQ for UI Snapshot (Average across room sensors)
+        # 4. Aggregate IAQ for Room Level
         for k in IAQ_KEYS:
             vals = [i_curr.get(k) for i_curr in i_curr_list if i_curr.get(k) is not None]
             if vals:
-                ui_current_values[k] = sum(vals) / len(vals)
+                ui_aggregates[k] = sum(vals) / len(vals)
                 
-        # 3. Determine Overall Status Color (Threshold / Absolute Limits Logic)
-        has_orange = False
-        has_red = False
-        
-        for k in IAQ_KEYS + WEATHER_KEYS:
-            if k in ui_current_values:
-                v = ui_current_values[k]
-                
-                # Check Absolute Limits (Red Flag - Highest Priority)
-                lim = get_limit(k, room)
-                if lim and (v < lim["min"] or v > lim["max"]):
-                    has_red = True
-                    break # Stop checking if we already hit maximum severity
-                    
-                # Check Thresholds relative to Baseline (Orange Flag)
-                base = ctx_i_base.get(k) if k in IAQ_KEYS else ctx_w_base.get(k)
-                if base is not None:
-                    diff = abs(v - base)
-                    if diff >= THRESHOLDS.get(k, 9999):
-                        has_orange = True
-                        
-        if has_red:
-            status_color = "red"
-        elif has_orange:
-            status_color = "orange"
+        # 5. Determine Overall Room Status
+        if not ui_aggregates:
+            overall_status = "error"
         else:
-            status_color = "green"
-            
+            overall_status = "good"
+            for k, v in ui_aggregates.items():
+                lim = get_limit(k, room)
+                if lim:
+                    span = lim["max"] - lim["min"]
+                    margin = span * 0.1
+                    if v < lim["min"] or v > lim["max"]:
+                        overall_status = "critical"
+                        break
+                    elif v < (lim["min"] + margin) or v > (lim["max"] - margin):
+                        overall_status = "warning"
+                        
+                base = ctx_i_base.get(k)
+                thresh = THRESHOLDS.get(k)
+                if base is not None and thresh:
+                    diff = abs(v - base)
+                    if diff >= thresh:
+                        overall_status = "critical"
+                        break
+                    elif diff >= thresh * 0.8:
+                        if overall_status == "good": overall_status = "warning"
+
         artifact = {
             "view_type": "snapshot",
-            "current_values": ui_current_values,
-            "status_color": status_color
-        }
-
-        # 4. Inject Celestial Positioning for Frontend Map Sun tracking
-        artifact["celestial"] = {
-            "sun_azimuth": solar.get("raw_azimuth"),
-            "sun_elevation": solar.get("raw_elevation"),
-            "is_day": solar.get("is_day")
+            "status": overall_status,
+            "room_aggregates": ui_aggregates,
+            "sensors": ui_sensors
         }
             
         return "\n".join(output), artifact
@@ -422,20 +457,28 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     master_df = indoor_df.join(weather_df, how='outer') if not weather_df.empty else indoor_df
     
     # --- BUILD THE GRAPH ARTIFACT ---
+    if timeframe in ["30d", "90d"]:
+        artifact_df = master_df.resample('1D').median(numeric_only=True)
+    else:
+        artifact_df = master_df
+        
+    allowed_ui_cols = IAQ_KEYS + ["air_temperature", "relative_humidity", "atmospheric_pressure"]
+    ui_df = artifact_df[[c for c in artifact_df.columns if c in allowed_ui_cols]]
+        
     series_data = []
-    for dt, row in master_df.iterrows():
+    for dt, row in ui_df.iterrows():
         point = {"timestamp": dt.isoformat()}
-        for col in master_df.columns:
+        for col in ui_df.columns:
             val = row[col]
             if pd.notna(val):
                 point[col] = float(val)
-        if len(point) > 1: # Only append if it has values other than timestamp
+        if len(point) > 1:
             series_data.append(point)
             
     graph_artifact = {
         "view_type": "graph",
         "series": series_data,
-        "metadata": {col: UNITS.get(col, "") for col in master_df.columns}
+        "metadata": {col: UNITS.get(col, "") for col in ui_df.columns}
     }
     
     days_map = {"2h": 1, "24h": 1, "7d": 7, "30d": 30, "90d": 90}
@@ -828,7 +871,21 @@ if __name__ == "__main__":
     
     try:
         print("\n[Testing]")
-        summary, raw_data = get_temp_humidity.func(room="3.7", timeframe="now")
+        summary, raw_data = get_temp_humidity.func(room="2.3", timeframe="now")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("\n" + "="*50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_temp_humidity.func(room="2.3", timeframe="24h")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("\n" + "="*50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_temp_humidity.func(room="2.3", timeframe="30d")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)

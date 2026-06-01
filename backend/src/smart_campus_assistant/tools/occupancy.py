@@ -23,12 +23,16 @@ logger = logging.getLogger(__name__)
 
 # Full-room capacities for threshold calculations
 CAPACITIES = {
-    'building': 600,
-    'restaurant': 30,
+    'building': 500,
+    'restaurant': 40,
+    'entrance': 1,
     '1.2': 120,
-    '2.3': 40,
+    '2.2': 4,
+    '2.3': 53,
     '2.4': 32,
-    '3.9': 50
+    '3.9': 38,
+    '4.9': 32,
+    '5.7': 13
 }
 
 # Config mapping for API calls and pandas resampling
@@ -462,10 +466,21 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         has_data = False
         group_counts = {z: 0 for z in desk_zones_active.keys()}
         
-        ui_current_values = {}
+        ui_aggregates = {}
+        ui_sensors = {}
+        
         for off_s in offline_sensors:
-            ui_current_values[f"{off_s}_status_color"] = "red"
-            ui_current_values[off_s] = None
+            cat = "SENSOR"
+            if off_s in iaq_devices: cat = "IAQ"
+            elif off_s in pc_devices: cat = "PC"
+            elif off_s in desk_devices: cat = "DESK"
+            elif off_s in wo_devices: cat = "WO"
+            
+            ui_sensors[off_s] = {
+                "status": "error",
+                "category": cat,
+                "readings": None
+            }
         
         # Primary Data Collection
         if active_primary_devs and sensor_category == "pc":
@@ -474,46 +489,47 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
                 has_data = True
                 primary_val = recent_series.iloc[-1]
                 for name in active_primary_devs:
-                    ui_current_values[name] = primary_val
-                    ui_current_values[f"{name}_status_color"] = "green"
+                    ui_sensors[name] = {
+                        "status": "good", # Placeholder, properly set using capacity rules globally later
+                        "category": "PC",
+                        "readings": {"occupancy": primary_val}
+                    }
         else:
             for name, data in active_primary_devs.items():
                 device_id = data.get("id") if isinstance(data, dict) else data
                 raw = tb_client.get_now(device_id, primary_keys)
                 key = primary_keys[0]
+                
+                cat = "SENSOR"
+                if sensor_category == "desk": cat = "DESK"
+                elif sensor_category == "wo": cat = "WO"
+                elif sensor_category == "motion": cat = "IAQ"
+                elif sensor_category == "pc": cat = "PC"
+                
                 if key in raw and raw[key]:
                     has_data = True
                     val = float(raw[key][0]["value"])
                     
                     if sensor_category == "wo":
-                        ui_current_values[f"{name}_status_color"] = "green"
+                        ui_sensors[name] = {"status": "good", "category": cat, "readings": {key: val}}
+                        primary_val += val
                     elif sensor_category == "desk":
-                        if room_key == "entrance":
-                            ui_current_values[f"{name}_status_color"] = "green" if val > 0 else "orange"
-                        else:
-                            ui_current_values[f"{name}_status_color"] = "orange" if val > 0 else "green"
-                    elif sensor_category == "motion":
-                        if room_key == "entrance":
-                            ui_current_values[f"{name}_status_color"] = "green" if val > 0 else "orange"
-                        else:
-                            ui_current_values[f"{name}_status_color"] = "orange" if val > 0 else "green"
-                    
-                    if desk_devices:
-                        ui_current_values[name] = "Occupied" if val > 0 else "Empty"
+                        s_color = "warning" if val > 0 else "good"
+                        ui_sensors[name] = {"status": s_color, "category": cat, "readings": {"occupancy": "Occupied" if val > 0 else "Empty"}}
                         if val > 0: 
                             primary_val += 1
                             z = desk_device_to_zone.get(name, "Unspecified")
                             if z in group_counts:
                                 group_counts[z] += 1
                     elif sensor_category == "motion":
-                        ui_current_values[name] = "Active" if val > 0 else "Idle"
+                        s_color = "warning" if val > 0 else "good"
+                        ui_sensors[name] = {"status": s_color, "category": cat, "readings": {"pir": "Active" if val > 0 else "Idle"}}
                         if val > 0: primary_val = 1
                     else:
-                        ui_current_values[name] = val
+                        ui_sensors[name] = {"status": "good", "category": cat, "readings": {key: val}}
                         primary_val += val
                 else:
-                    ui_current_values[f"{name}_status_color"] = "red"
-                    ui_current_values[name] = None
+                    ui_sensors[name] = {"status": "error", "category": cat, "readings": None}
                 
         if has_data:
             if sensor_category == "desk":
@@ -532,6 +548,7 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             output.append("  Primary_Status: Offline / No Data")
 
         # Secondary Sensors Evaluation
+        motion_active_count = 0
         if sensor_category != "motion":
             output.append("  Motion_Status:")
             if not active_iaq_devices:
@@ -544,15 +561,20 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
                         val = float(raw["pir"][0]["value"])
                         state_str = "Active" if val > 0 else "Idle"
                         output.append(f"    - {name}: {state_str}")
-                        ui_current_values[name] = state_str
-                        if room_key == "entrance":
-                            ui_current_values[f"{name}_status_color"] = "green" if val > 0 else "orange"
-                        else:
-                            ui_current_values[f"{name}_status_color"] = "orange" if val > 0 else "green"
+                        if val > 0: motion_active_count += 1
+                        
+                        ui_sensors[name] = {
+                            "status": "warning" if val > 0 else "good",
+                            "category": "IAQ",
+                            "readings": {"pir": state_str}
+                        }
                     else:
                         output.append(f"    - {name}: Offline / No Data")
-                        ui_current_values[name] = None
-                        ui_current_values[f"{name}_status_color"] = "red"
+                        ui_sensors[name] = {
+                            "status": "error",
+                            "category": "IAQ",
+                            "readings": None
+                        }
                         
         if active_secondary_desk_devices:
             output.append("  Secondary_Desk_Status:")
@@ -562,33 +584,53 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
                 raw = tb_client.get_now(device_id, ["occupancy"])
                 if "occupancy" in raw and raw["occupancy"]:
                     val = float(raw["occupancy"][0]["value"])
-                    ui_current_values[name] = "Occupied" if val > 0 else "Empty"
-                    ui_current_values[f"{name}_status_color"] = "orange" if val > 0 else "green"
                     if val > 0: desk_occ += 1
+                    ui_sensors[name] = {
+                        "status": "warning" if val > 0 else "good",
+                        "category": "DESK",
+                        "readings": {"occupancy": "Occupied" if val > 0 else "Empty"}
+                    }
                 else:
-                    ui_current_values[name] = None
-                    ui_current_values[f"{name}_status_color"] = "red"
+                    ui_sensors[name] = {
+                        "status": "error",
+                        "category": "DESK",
+                        "readings": None
+                    }
             output.append(f"    {desk_occ}/{len(active_secondary_desk_devices)} Desks Occupied")
             
         # Determine Overall Room Status Color based on Capacity
-        status_color = "green"
-        if room_key == "entrance":
-            if primary_val == 0:
-                status_color = "orange"
+        status_color = "good"
+        capacity = CAPACITIES.get(room_key) if sensor_category != "desk" else total_primary_sensors
+        
+        if sensor_category == "motion":
+            if primary_val > 0:
+                status_color = "warning"
+            ui_aggregates["motion_status"] = "Active" if primary_val > 0 else "Idle"
         else:
-            capacity = CAPACITIES.get(room_key) if sensor_category != "desk" else total_primary_sensors
             if capacity and capacity > 0:
                 ratio = primary_val / capacity
                 if ratio > 0.85:
-                    status_color = "red"
+                    status_color = "critical"
                 elif ratio > 0.60:
-                    status_color = "orange"
+                    status_color = "warning"
+                else:
+                    status_color = "good"
+                    
+            ui_aggregates["occupancy"] = int(primary_val)
+            if capacity:
+                ui_aggregates["capacity"] = capacity
+                
+            if active_iaq_devices:
+                ui_aggregates["motion_status"] = "Active" if motion_active_count > 0 else "Idle"
                     
         artifact = {
             "view_type": "snapshot",
-            "current_values": ui_current_values,
-            "status_color": status_color
+            "status": status_color,
+            "room_aggregates": ui_aggregates
         }
+        
+        if room_key != "building":
+            artifact["sensors"] = ui_sensors
         
         return "\n".join(output), artifact
 
@@ -614,24 +656,64 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
 
     df.fillna(0, inplace=True)
     
-    # --- BUILD THE GRAPH ARTIFACT ---
+    # --- BUILD THE GRAPH ARTIFACT (WITH DELTA-ONLY LOGIC) ---
     series_data = []
+    last_sent_values = {"Occupancy": None, "Motion": None}
+    
     for dt, row in df.iterrows():
         point = {"timestamp": dt.isoformat()}
-        if pd.notna(row.get('primary')):
-            point['Occupancy'] = float(row['primary'])
-        if pd.notna(row.get('motion')):
-            point['Motion'] = 1 if row['motion'] > 0 else 0
-        if 'Occupancy' in point or 'Motion' in point:
+        changed = False
+        
+        # 1. Evaluate Occupancy
+        occ_val = None
+        if sensor_category != "motion" and pd.notna(row.get('primary')):
+            occ_val = round(float(row['primary']), 1)
+            if last_sent_values["Occupancy"] is None or occ_val != last_sent_values["Occupancy"]:
+                changed = True
+                
+        # 2. Evaluate Motion
+        mot_val = None
+        if sensor_category == "motion" and pd.notna(row.get('primary')):
+            mot_val = 1 if row['primary'] > 0 else 0
+        elif pd.notna(row.get('motion')) and has_active_motion:
+            mot_val = 1 if row['motion'] > 0 else 0
+            
+        if mot_val is not None:
+            if last_sent_values["Motion"] is None or mot_val != last_sent_values["Motion"]:
+                changed = True
+
+        if changed:
+            if occ_val is not None:
+                point['Occupancy'] = occ_val
+                last_sent_values["Occupancy"] = occ_val
+            elif last_sent_values["Occupancy"] is not None:
+                point['Occupancy'] = last_sent_values["Occupancy"]
+                
+            if mot_val is not None:
+                point['Motion'] = mot_val
+                last_sent_values["Motion"] = mot_val
+            elif last_sent_values["Motion"] is not None:
+                point['Motion'] = last_sent_values["Motion"]
+                
             series_data.append(point)
+            
+    # Inject capacity into the artifact graph metadata for frontend
+    capacity = CAPACITIES.get(room_key) if sensor_category != "desk" else total_primary_sensors
+    
+    metadata = {}
+    if sensor_category != "motion":
+        metadata["Occupancy"] = "Count"
+    
+    if sensor_category == "motion" or has_active_motion:
+        metadata["Motion"] = "Active (1/0)"
+        
+    if capacity:
+        metadata["capacity"] = capacity
             
     graph_artifact = {
         "view_type": "graph",
         "series": series_data,
-        "metadata": {
-            "Occupancy": "Count" if sensor_category != "motion" else "Active (1/0)",
-            "Motion": "Active (1/0)"
-        }
+        "metadata": metadata
     }
 
     # Extract grouped DataFrames for Desks
@@ -934,7 +1016,21 @@ if __name__ == "__main__":
     print("-" * 50)
     try:
         print("\n[Testing]")
-        summary, raw_data = get_occupancy.func(room="1.2", timeframe="30d")
+        summary, raw_data = get_occupancy.func(room="2.3", timeframe="now")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("-" * 50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_occupancy.func(room="2.3", timeframe="24h")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("-" * 50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_occupancy.func(room="building", timeframe="30d")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)

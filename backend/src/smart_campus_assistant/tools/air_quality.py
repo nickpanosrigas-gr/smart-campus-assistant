@@ -349,26 +349,28 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             "  Indoor_Current (Room Sensors):"
         ])
         
-        ui_current_values = {}
+        # --- NEW NESTED ARTIFACT LOGIC ---
+        ui_aggregates = {}
+        ui_sensors = {}
         
-        # 1. Inject Online/Offline Status Colors
+        # 1. Outdoor Sensor processing
         if OUTDOOR_PM_NAME:
-            ui_current_values[f"{OUTDOOR_PM_NAME}_status_color"] = "green" if is_outdoor_active else "red"
+            ui_sensors[OUTDOOR_PM_NAME] = {
+                "status": "good" if is_outdoor_active else "error",
+                "category": "OUTDOOR",
+                "readings": outdoor_curr if (is_outdoor_active and outdoor_curr) else None
+            }
             
-        for device_name in active_iaq_devices.keys():
-            ui_current_values[f"{device_name}_status_color"] = "green"
-            
+        # 2. Offline Sensors processing
         for device_name in offline_sensors:
             if device_name != OUTDOOR_PM_NAME:
-                ui_current_values[f"{device_name}_status_color"] = "red"
+                ui_sensors[device_name] = {
+                    "status": "error",
+                    "category": "IAQ",
+                    "readings": None
+                }
                 
-        # Inject outdoor values into UI payload
-        if outdoor_curr:
-            for k, v in outdoor_curr.items():
-                if v is not None:
-                    ui_current_values[k] = v
-        
-        # 2. Fetch Actual Values
+        # 3. Active Sensors processing & actual values
         i_curr_list = []
         for name, data in active_iaq_devices.items():
             d_id = data.get("id") if isinstance(data, dict) else data
@@ -377,40 +379,57 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             i_curr = extract_current_values(tb_client.get_now(d_id, IAQ_KEYS), IAQ_KEYS, is_iaq=True)
             i_curr_list.append(i_curr)
             
-            # Inject explicit individual sensor readings
-            for k, v in i_curr.items():
-                if v is not None:
-                    ui_current_values[f"{name}_{k}"] = v
+            # Check if reading is valid (e.g. not 65535 nan error)
+            has_valid_data = any(v is not None for v in i_curr.values())
+            sensor_status = "error"
             
+            if has_valid_data:
+                sensor_status = "good"
+                for k, v in i_curr.items():
+                    if v is None: continue
+                    limit = ABSOLUTE_LIMITS.get(k)
+                    if limit:
+                        if v > limit:
+                            sensor_status = "critical"
+                            break  # Highest severity met
+                        elif v > limit * 0.8:
+                            sensor_status = "warning"
+                            
+            ui_sensors[name] = {
+                "status": sensor_status,
+                "category": "IAQ",
+                "readings": i_curr if has_valid_data else None
+            }
+            
+            # Keep LLM text output intact
             i_parts = [format_val(k, i_curr.get(k), ctx_i_base.get(k)) for k in IAQ_KEYS if i_curr.get(k) is not None]
             output.append(f"    - {name} (Zone: {zone}): {' | '.join(i_parts) if i_parts else 'Offline / No Data'}")
             
-        # Aggregate IAQ for UI Snapshot (Average across room sensors)
+        # 4. Aggregate IAQ for Room Level
         for k in IAQ_KEYS:
             vals = [i_curr.get(k) for i_curr in i_curr_list if i_curr.get(k) is not None]
             if vals:
-                ui_current_values[k] = sum(vals) / len(vals)
+                ui_aggregates[k] = sum(vals) / len(vals)
                 
-        # 3. Determine Overall Status Color
-        exceeded_count = 0
-        for k in IAQ_KEYS + OUTDOOR_KEYS:
-            if k in ui_current_values:
-                val = ui_current_values[k]
-                limit = ABSOLUTE_LIMITS.get(k)
-                if limit and val > limit:
-                    exceeded_count += 1
-                    
-        if exceeded_count >= 2:
-            status_color = "red"
-        elif exceeded_count == 1:
-            status_color = "orange"
+        # 5. Determine Overall Room Status
+        if not ui_aggregates:
+            overall_status = "error"
         else:
-            status_color = "green"
+            overall_status = "good"
+            for k, v in ui_aggregates.items():
+                limit = ABSOLUTE_LIMITS.get(k)
+                if limit:
+                    if v > limit:
+                        overall_status = "critical"
+                        break
+                    elif v > limit * 0.8:
+                        overall_status = "warning"
 
         artifact = {
             "view_type": "snapshot",
-            "current_values": ui_current_values,
-            "status_color": status_color
+            "status": overall_status,
+            "room_aggregates": ui_aggregates,
+            "sensors": ui_sensors
         }
             
         return "\n".join(output), artifact
@@ -444,19 +463,23 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     master_df = indoor_df.join(outdoor_df, how='outer') if not outdoor_df.empty else indoor_df
     
     # --- BUILD THE GRAPH ARTIFACT ---
+    if timeframe in ["30d", "90d"]:
+        artifact_df = master_df.resample('1D').median(numeric_only=True)
+    else:
+        artifact_df = master_df
+        
     series_data = []
-    for dt, row in master_df.iterrows():
+    for dt, row in artifact_df.iterrows():
         point = {"timestamp": dt.isoformat()}
-        for col in master_df.columns:
+        for col in artifact_df.columns:
             val = row[col]
             if pd.notna(val):
                 point[col] = float(val)
         if len(point) > 1:
             series_data.append(point)
             
-    # Resolve metadata units, mapping "outdoor_X" back to its unit
     metadata = {}
-    for col in master_df.columns:
+    for col in artifact_df.columns:
         base_key = col.replace("outdoor_", "")
         metadata[col] = UNITS.get(base_key, "")
             
@@ -685,7 +708,21 @@ if __name__ == "__main__":
     
     try:
         print("\n[Testing]")
-        summary, raw_data = get_air_quality.func(room="2.4", timeframe="90d")
+        summary, raw_data = get_air_quality.func(room="2.3", timeframe="now")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("\n" + "="*50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_air_quality.func(room="2.3", timeframe="24h")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("\n" + "="*50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_air_quality.func(room="2.3", timeframe="30d")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
