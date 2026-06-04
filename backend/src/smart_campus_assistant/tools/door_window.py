@@ -86,11 +86,22 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
     Tracks physical access points (Doors/Windows) using Magnetic Contact (MC) sensors.
     Reports Open/Closed states, timelines of physical entry, and long-term anomalies.
     """
+    floor_val = str(room)[0] if str(room)[0].isdigit() else "0"
+
     all_mc_devices = registry.get_devices_by_room_and_type(room, "MC")
     
     if not all_mc_devices:
         error_msg = f"Query_Context:\n  Room: {room}\nError: No MC (Door/Window) sensors found in this room."
-        return error_msg, {"view_type": "error", "message": "No MC sensors found"}
+        return error_msg, {
+            "type": "map_update",
+            "artifact": {
+                "view_type": "error",
+                "domain": "Doors/Windows",
+                "floor": floor_val,
+                "room_id": str(room),
+                "message": "No MC sensors found"
+            }
+        }
 
     active_mc_devices = {}
     offline_sensors = []
@@ -115,7 +126,16 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
 
     if not active_mc_devices:
         error_msg = f"Query_Context:\n  Room: {room}\nError: Found {len(all_mc_devices)} MC sensors, but all are offline."
-        return error_msg, {"view_type": "error", "message": "All sensors offline"}
+        return error_msg, {
+            "type": "map_update",
+            "artifact": {
+                "view_type": "error",
+                "domain": "Doors/Windows",
+                "floor": floor_val,
+                "room_id": str(room),
+                "message": "All sensors offline"
+            }
+        }
 
     total_count = len(all_mc_devices)
     active_count = len(active_mc_devices)
@@ -228,12 +248,12 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
                 # Keep text intact for LLM
                 output.append(f"  {device_name} ({tag}): {get_state_label(is_open)}")
                 
-                # Update counters and status
+                # Update counters and status (Open = good, Closed = critical)
                 if is_open:
                     open_count += 1
-                    sensor_status = "warning"
-                else:
                     sensor_status = "good"
+                else:
+                    sensor_status = "critical"
                     
                 ui_sensors[device_name] = {
                     "status": sensor_status,
@@ -251,22 +271,27 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
                 
         ui_aggregates["open_count"] = open_count
                 
-        # 3. Overall Room Status Logic
+        # 3. Overall Room Status Logic 
         if total_count > 0:
-            if open_count == total_count:
-                overall_status = "critical"
-            elif open_count > (total_count / 2):
-                overall_status = "warning"
-            else:
+            closed_count = total_count - open_count
+            if open_count >= closed_count:
                 overall_status = "good"
+            else:
+                overall_status = "critical"
         else:
-            overall_status = "error" # Gray/Unknown fallback becomes error if no sensors
+            overall_status = "error" 
 
         artifact = {
-            "view_type": "snapshot",
-            "status": overall_status,
-            "room_aggregates": ui_aggregates,
-            "sensors": ui_sensors
+            "type": "map_update",
+            "artifact": {
+                "view_type": "snapshot",
+                "domain": "Doors/Windows",
+                "floor": floor_val,
+                "room_id": str(room),
+                "status": overall_status,
+                "room_aggregates": ui_aggregates,
+                "sensors": ui_sensors
+            }
         }
                 
         return "\n".join(output), artifact
@@ -322,7 +347,20 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
 
     if not all_dfs:
         error_msg = "\n".join(header_lines) + f"\n\nError: No historical data found for {timeframe}."
-        return error_msg, {"view_type": "graph", "series": [], "metadata": {}}
+        return error_msg, {
+            "type": "map_update",
+            "artifact": {
+                "view_type": "graph",
+                "domain": "Doors/Windows",
+                "floor": floor_val,
+                "room_id": str(room),
+                "timeframe": timeframe,
+                "online_sensors": list(active_mc_devices.keys()),
+                "offline_sensors": offline_sensors,
+                "series": [],
+                "metadata": {}
+            }
+        }
 
     # Merge all sensors
     combined_df = pd.concat(all_dfs, axis=1, sort=True)
@@ -363,9 +401,18 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
             series_data.append(point)
             
     graph_artifact = {
-        "view_type": "graph",
-        "series": series_data,
-        "metadata": {col: "State (1=Open, 0=Closed)" for col in artifact_df.columns}
+        "type": "map_update",
+        "artifact": {
+            "view_type": "graph",
+            "domain": "Doors/Windows",
+            "floor": floor_val,
+            "room_id": str(room),
+            "timeframe": timeframe,
+            "online_sensors": list(active_mc_devices.keys()),
+            "offline_sensors": offline_sensors,
+            "series": series_data,
+            "metadata": {col: "State (1=Open, 0=Closed)" for col in artifact_df.columns}
+        }
     }
 
     # Create Logical Groups

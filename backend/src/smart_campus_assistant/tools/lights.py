@@ -140,12 +140,23 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     Tracks indoor illumination using a discrete 0-5 scale.
     Uses state-transition logic to prevent mathematical hallucinations and maps integers to semantic labels.
     """
+    floor_val = str(room)[0] if str(room)[0].isdigit() else "0"
+    
     # 1. Resolve All Devices in Room
     all_iaq_devices = registry.get_devices_by_room_and_type(room, "IAQ")
     
     if not all_iaq_devices:
         error_msg = f"Query_Context:\n  Room: {room}\nError: No IAQ (Light) sensors found in this room."
-        return error_msg, {"view_type": "error", "message": "No IAQ sensors found"}
+        return error_msg, {
+            "type": "map_update",
+            "artifact": {
+                "view_type": "error",
+                "domain": "Lights",
+                "floor": floor_val,
+                "room_id": str(room),
+                "message": "No IAQ sensors found"
+            }
+        }
 
     # 2. Check Active Status via Server Attributes
     active_iaq_devices = {}
@@ -191,7 +202,16 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
 
     if not active_iaq_devices:
         error_msg = f"Query_Context:\n  Room: {room}\nError: Found {len(all_iaq_devices)} IAQ sensors, but all are currently offline."
-        return error_msg, {"view_type": "error", "message": "All sensors offline"}
+        return error_msg, {
+            "type": "map_update",
+            "artifact": {
+                "view_type": "error",
+                "domain": "Lights",
+                "floor": floor_val,
+                "room_id": str(room),
+                "message": "All sensors offline"
+            }
+        }
 
     # 3. Build the Active_Sensors reporting lines
     total_count = len(all_iaq_devices)
@@ -396,10 +416,16 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
                 overall_status = "critical"
 
         artifact = {
-            "view_type": "snapshot",
-            "status": overall_status,
-            "room_aggregates": ui_aggregates,
-            "sensors": ui_sensors
+            "type": "map_update",
+            "artifact": {
+                "view_type": "snapshot",
+                "domain": "Lights",
+                "floor": floor_val,
+                "room_id": str(room),
+                "status": overall_status,
+                "room_aggregates": ui_aggregates,
+                "sensors": ui_sensors
+            }
         }
                 
         return "\n".join(output), artifact
@@ -442,9 +468,26 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         except Exception as e:
             logger.warning(f"Failed to fetch historical light data for {device_name}: {e}")
 
+    online_sensor_names = list(active_iaq_devices.keys())
+    if is_weather_active and WEATHER_STATION_NAME:
+        online_sensor_names.append(WEATHER_STATION_NAME)
+
     if not all_dataframes:
         error_msg = f"Query_Context:\n  Room: {room}\nError: No historical light data found for timeframe {timeframe}."
-        return error_msg, {"view_type": "graph", "series": [], "metadata": {}}
+        return error_msg, {
+            "type": "map_update",
+            "artifact": {
+                "view_type": "graph",
+                "domain": "Lights",
+                "floor": floor_val,
+                "room_id": str(room),
+                "timeframe": timeframe,
+                "online_sensors": online_sensor_names,
+                "offline_sensors": offline_sensors,
+                "series": [],
+                "metadata": {}
+            }
+        }
 
     combined_df = pd.concat(all_dataframes, axis=1, sort=True)
     
@@ -455,7 +498,20 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
 
     if raw_series.empty:
         error_msg = f"Query_Context:\n  Room: {room}\nError: Historical data was fetched but contained only invalid values."
-        return error_msg, {"view_type": "graph", "series": [], "metadata": {}}
+        return error_msg, {
+            "type": "map_update",
+            "artifact": {
+                "view_type": "graph",
+                "domain": "Lights",
+                "floor": floor_val,
+                "room_id": str(room),
+                "timeframe": timeframe,
+                "online_sensors": online_sensor_names,
+                "offline_sensors": offline_sensors,
+                "series": [],
+                "metadata": {}
+            }
+        }
 
     # Pre-calculate the UI JSON graph data by stripping NaNs to prevent serialization errors
     ui_df = aligned_df.drop(columns=['Room_Aggregate'], errors='ignore').copy()
@@ -487,9 +543,18 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             series_data.append(point)
             
     graph_artifact = {
-        "view_type": "graph",
-        "series": series_data,
-        "metadata": {col: "Level (0-5)" for col in artifact_df.columns}
+        "type": "map_update",
+        "artifact": {
+            "view_type": "graph",
+            "domain": "Lights",
+            "floor": floor_val,
+            "room_id": str(room),
+            "timeframe": timeframe,
+            "online_sensors": online_sensor_names,
+            "offline_sensors": offline_sensors,
+            "series": series_data,
+            "metadata": {col: "Level (0-5)" for col in artifact_df.columns}
+        }
     }
     
     days_map = {"2h": 1, "24h": 1, "7d": 7, "30d": 30, "90d": 90}

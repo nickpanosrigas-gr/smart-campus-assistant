@@ -217,10 +217,21 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     Tracks indoor Air Quality (CO2, PM2.5, PM10, TVOC).
     Focuses on absolute health limits and deviations from period averages.
     """
+    floor_val = str(room)[0] if str(room)[0].isdigit() else "0"
+    
     all_iaq_devices = registry.get_devices_by_room_and_type(room, "IAQ")
     if not all_iaq_devices:
         error_msg = f"Query_Context:\n  Room: {room}\nError: No IAQ sensors found in this room."
-        return error_msg, {"view_type": "error", "message": "No IAQ sensors found"}
+        return error_msg, {
+            "type": "map_update",
+            "artifact": {
+                "view_type": "error",
+                "domain": "Air Quality",
+                "floor": floor_val,
+                "room_id": str(room),
+                "message": "No IAQ sensors found"
+            }
+        }
 
     # ==========================================
     # SERVER ATTRIBUTE ACTIVE/OFFLINE CHECK
@@ -259,7 +270,16 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
 
     if not active_iaq_devices:
         error_msg = f"Query_Context:\n  Room: {room}\nError: Found {len(all_iaq_devices)} IAQ sensors, but all are currently offline."
-        return error_msg, {"view_type": "error", "message": "All sensors offline"}
+        return error_msg, {
+            "type": "map_update",
+            "artifact": {
+                "view_type": "error",
+                "domain": "Air Quality",
+                "floor": floor_val,
+                "room_id": str(room),
+                "message": "All sensors offline"
+            }
+        }
 
     # Build Active Sensors Block
     total_relevant = len(all_iaq_devices) + (1 if OUTDOOR_PM_ID else 0)
@@ -426,10 +446,16 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
                         overall_status = "warning"
 
         artifact = {
-            "view_type": "snapshot",
-            "status": overall_status,
-            "room_aggregates": ui_aggregates,
-            "sensors": ui_sensors
+            "type": "map_update",
+            "artifact": {
+                "view_type": "snapshot",
+                "domain": "Air Quality",
+                "floor": floor_val,
+                "room_id": str(room),
+                "status": overall_status,
+                "room_aggregates": ui_aggregates,
+                "sensors": ui_sensors
+            }
         }
             
         return "\n".join(output), artifact
@@ -457,7 +483,20 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         
     if not indoor_dfs:
         error_msg = f"Query_Context:\n  Room: {room}\nError: No historical IAQ data found for timeframe {timeframe}."
-        return error_msg, {"view_type": "graph", "series": [], "metadata": {}}
+        return error_msg, {
+            "type": "map_update",
+            "artifact": {
+                "view_type": "graph",
+                "domain": "Air Quality",
+                "floor": floor_val,
+                "room_id": str(room),
+                "timeframe": timeframe,
+                "online_sensors": list(active_iaq_devices.keys()) + ([OUTDOOR_PM_NAME] if is_outdoor_active and OUTDOOR_PM_NAME else []),
+                "offline_sensors": offline_sensors,
+                "series": [],
+                "metadata": {}
+            }
+        }
         
     indoor_df = pd.concat(indoor_dfs).groupby(level=0).median()
     master_df = indoor_df.join(outdoor_df, how='outer') if not outdoor_df.empty else indoor_df
@@ -483,10 +522,23 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         base_key = col.replace("outdoor_", "")
         metadata[col] = UNITS.get(base_key, "")
             
+    online_sensor_names = list(active_iaq_devices.keys())
+    if is_outdoor_active and OUTDOOR_PM_NAME:
+        online_sensor_names.append(OUTDOOR_PM_NAME)
+
     graph_artifact = {
-        "view_type": "graph",
-        "series": series_data,
-        "metadata": metadata
+        "type": "map_update",
+        "artifact": {
+            "view_type": "graph",
+            "domain": "Air Quality",
+            "floor": floor_val,
+            "room_id": str(room),
+            "timeframe": timeframe,
+            "online_sensors": online_sensor_names,
+            "offline_sensors": offline_sensors,
+            "series": series_data,
+            "metadata": metadata
+        }
     }
     
     overall_outdoor_mean = {}

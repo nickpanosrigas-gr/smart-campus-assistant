@@ -287,8 +287,12 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
     Unified Diagnostic System. Checks Connectivity (Offline), Power (Battery Drain/Levels), and Hardware Health.
     """
     if target == 'building':
+        floor_val = "B"
+        room_id = "building"
         target_rooms = registry.get_available_rooms()
     else:
+        floor_val = str(target)[0] if str(target)[0].isdigit() else "0"
+        room_id = str(target)
         target_rooms = [target]
 
     tasks = []
@@ -300,7 +304,16 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
 
     if not tasks:
         error_msg = f"Error: No devices found for target '{target}'."
-        return error_msg, {"view_type": "error", "message": error_msg}
+        return error_msg, {
+            "type": "map_update",
+            "artifact": {
+                "view_type": "error",
+                "domain": "Diagnostics",
+                "floor": floor_val,
+                "room_id": room_id,
+                "message": error_msg
+            }
+        }
 
     current_time_str = datetime.now().strftime("%A, %b %d, %Y at %I:%M:%S %p EEST")
     total_scanned = len(tasks)
@@ -484,19 +497,25 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
         output.extend(battery_estimates_lines)
 
         artifact = {
-            "view_type": "snapshot",
-            "status": overall_status,
-            "room_aggregates": {
-                "total": total_scanned,
-                "good": room_status_counts["good"],
-                "warning": room_status_counts["warning"],
-                "critical": room_status_counts["critical"],
-                "error": room_status_counts["error"]
+            "type": "map_update",
+            "artifact": {
+                "view_type": "snapshot",
+                "domain": "Diagnostics",
+                "floor": floor_val,
+                "room_id": room_id,
+                "status": overall_status,
+                "room_aggregates": {
+                    "total": total_scanned,
+                    "good": room_status_counts["good"],
+                    "warning": room_status_counts["warning"],
+                    "critical": room_status_counts["critical"],
+                    "error": room_status_counts["error"]
+                }
             }
         }
         
         if target != 'building':
-            artifact["sensors"] = ui_sensors
+            artifact["artifact"]["sensors"] = ui_sensors
 
         return "\n".join(output), artifact
 
@@ -524,9 +543,32 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
             except Exception:
                 pass
 
+    online_sensors_list = []
+    offline_sensors_list = []
+    for name in all_sensor_names:
+        ctx = historical_contexts.get(name, {})
+        audit = ctx.get("audit", {})
+        if audit.get("is_online", True):
+            online_sensors_list.append(name)
+        else:
+            offline_sensors_list.append(name)
+
     if not all_dfs:
         error_msg = f"Query_Context:\n  Target: {target}\nError: No historical diagnostic data found for timeframe {timeframe}."
-        return error_msg, {"view_type": "graph", "series": [], "metadata": {}}
+        return error_msg, {
+            "type": "map_update",
+            "artifact": {
+                "view_type": "graph",
+                "domain": "Diagnostics",
+                "floor": floor_val,
+                "room_id": room_id,
+                "timeframe": timeframe,
+                "online_sensors": online_sensors_list,
+                "offline_sensors": offline_sensors_list,
+                "series": [],
+                "metadata": {}
+            }
+        }
 
     combined_df = pd.concat(all_dfs, axis=1, sort=True)
     combined_df = combined_df.reindex(sorted(combined_df.columns), axis=1)
@@ -539,6 +581,8 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
         last_agg = None
         for dt, row in combined_df.iterrows():
             counts = {"good": 0, "warning": 0, "critical": 0, "error": 0}
+            bat_sum = 0.0
+            bat_count = 0
             
             for name in all_sensor_names:
                 ctx = historical_contexts.get(name, {})
@@ -554,6 +598,20 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
 
                 has_major_fault = any("HARDWARE_FAULT" in a or "FLATLINE" in a for a in audit.get("anomalies", []))
                 has_signal_issue = any("WEAK_SIGNAL" in a or "POOR_SNR" in a for a in audit.get("anomalies", []))
+
+                # Battery logic for building average
+                if not is_plugged:
+                    if not is_online_now:
+                        bat_sum += 0.0
+                        bat_count += 1
+                    else:
+                        val = row.get(name) if name in combined_df.columns else audit.get("battery")
+                        if pd.notna(val) and val is not None:
+                            bat_pct = float(val)
+                            if is_weather:
+                                bat_pct = max(0, min(100, (bat_pct - 2.4) / (3.0 - 2.4) * 100))
+                            bat_sum += bat_pct
+                            bat_count += 1
 
                 if not is_online_now or audit.get("tamper", False) or has_major_fault:
                     counts["error"] += 1
@@ -577,21 +635,26 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
                             
                             if has_signal_issue and status == "good":
                                 status = "warning"
-                                
+                            
                     counts[status] += 1
 
-            current_agg = (counts["good"], counts["warning"], counts["critical"], counts["error"])
+            avg_bat = round(bat_sum / bat_count, 1) if bat_count > 0 else 0.0
+            current_agg = (counts["good"], counts["warning"], counts["critical"], counts["error"], avg_bat)
+            
             if last_agg is None or current_agg != last_agg:
                 point = {"timestamp": dt.isoformat()}
                 if last_agg is None:
                     point["total"] = total_scanned
                 point.update(counts)
+                point["average_battery"] = avg_bat
                 series_data.append(point)
                 last_agg = current_agg
                 
         # Inject exact current snapshot at "now" using manual recalculation of status to match current time
         now_dt = pd.Timestamp.now(tz=settings.TIMEZONE)
         now_counts = {"good": 0, "warning": 0, "critical": 0, "error": 0}
+        now_bat_sum = 0.0
+        now_bat_count = 0
         
         for name in all_sensor_names:
             ctx = historical_contexts.get(name, {})
@@ -602,7 +665,22 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
             has_major_fault = any("HARDWARE_FAULT" in a or "FLATLINE" in a for a in audit.get("anomalies", []))
             has_signal_issue = any("WEAK_SIGNAL" in a or "POOR_SNR" in a for a in audit.get("anomalies", []))
 
-            if not audit.get("is_online", True) or audit.get("tamper", False) or has_major_fault:
+            is_online_now = audit.get("is_online", True)
+            
+            if not is_plugged:
+                if not is_online_now:
+                    now_bat_sum += 0.0
+                    now_bat_count += 1
+                else:
+                    bat_val = audit.get("battery")
+                    if bat_val is not None:
+                        bat_pct = float(bat_val)
+                        if is_weather:
+                            bat_pct = max(0, min(100, (bat_pct - 2.4) / (3.0 - 2.4) * 100))
+                        now_bat_sum += bat_pct
+                        now_bat_count += 1
+
+            if not is_online_now or audit.get("tamper", False) or has_major_fault:
                 now_counts["error"] += 1
             else:
                 status = "error"
@@ -627,22 +705,35 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
                             
                 now_counts[status] += 1
                         
-        current_agg = (now_counts["good"], now_counts["warning"], now_counts["critical"], now_counts["error"])
+        avg_bat = round(now_bat_sum / now_bat_count, 1) if now_bat_count > 0 else 0.0
+        current_agg = (now_counts["good"], now_counts["warning"], now_counts["critical"], now_counts["error"], avg_bat)
+        
         if last_agg is None or current_agg != last_agg:
             point = {"timestamp": now_dt.isoformat()}
             if last_agg is None:
                 point["total"] = total_scanned
             point.update(now_counts)
+            point["average_battery"] = avg_bat
             series_data.append(point)
 
         graph_artifact = {
-            "view_type": "graph",
-            "series": series_data,
-            "metadata": {
-                "good": "Healthy (Good)",
-                "warning": "Warning State",
-                "critical": "Critical State",
-                "error": "Error / Offline"
+            "type": "map_update",
+            "artifact": {
+                "view_type": "graph",
+                "domain": "Diagnostics",
+                "floor": floor_val,
+                "room_id": room_id,
+                "timeframe": timeframe,
+                "online_sensors": online_sensors_list,
+                "offline_sensors": offline_sensors_list,
+                "series": series_data,
+                "metadata": {
+                    "good": "Healthy",
+                    "warning": "Warning",
+                    "critical": "Critical",
+                    "error": "Offline / Error",
+                    "average_battery": "Avg Battery %"
+                }
             }
         }
     else:
@@ -670,9 +761,18 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
                 series_data.append(point)
 
         graph_artifact = {
-            "view_type": "graph",
-            "series": series_data,
-            "metadata": {col: "Battery (V)" if "WEATHER" in col.upper() else "Battery %" for col in combined_df.columns}
+            "type": "map_update",
+            "artifact": {
+                "view_type": "graph",
+                "domain": "Diagnostics",
+                "floor": floor_val,
+                "room_id": room_id,
+                "timeframe": timeframe,
+                "online_sensors": online_sensors_list,
+                "offline_sensors": offline_sensors_list,
+                "series": series_data,
+                "metadata": {col: "Battery (V)" if "WEATHER" in col.upper() else "Battery %" for col in combined_df.columns}
+            }
         }
 
     # Build Text Output for LLM
@@ -792,20 +892,28 @@ if __name__ == "__main__":
         print("\n[Artifact Payload]")
         print(raw_data)
         print("\n" + "-"*50)
-
+        
         print("\n[Testing]")
-        summary, raw_data = get_diagnostics.func(target="2.4", timeframe="90d")
+        summary, raw_data = get_diagnostics.func(target="2.4", timeframe="24h")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("\n" + "-"*50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_diagnostics.func(target="building", timeframe="now")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("\n" + "-"*50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_diagnostics.func(target="building", timeframe="24h")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("\n" + "-"*50)
 
-        print("\n[Testing]")
-        summary, raw_data = get_diagnostics.func(target="building", timeframe="30d")
-        print(summary)
-        print("\n[Artifact Payload]")
-        print(raw_data)
-        print("\n" + "-"*50)
 
     except Exception as e:
 

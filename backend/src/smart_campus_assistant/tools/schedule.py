@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from enum import Enum
-from typing import List, Dict, Literal, Tuple
+from typing import List, Dict, Literal, Tuple, Any
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from src.smart_campus_assistant.utils.schedule_registry import ScheduleRegistry
@@ -47,7 +47,7 @@ class SemesterScheduleInput(BaseModel):
 
 # --- FORMATTER ---
 
-def _format_yaml_response(domain: str, tool_name: str, filters: str, results: List[Dict], timeframe: str) -> Tuple[str, dict]:
+def _format_yaml_response(domain: str, tool_name: str, filters: str, results: List[Dict], timeframe: str) -> Tuple[str, Any]:
     # Capture and format the current time
     current_time_str = datetime.now().strftime("%A, %b %d, %Y at %I:%M %p")
     
@@ -60,22 +60,47 @@ def _format_yaml_response(domain: str, tool_name: str, filters: str, results: Li
     lines.append(f"  Total_Results: {len(results)}")
     lines.append("")
     
-    artifact_results = []
-    
     if not results:
         lines.append("Active_Schedule: []")
-        return "\n".join(lines), {
-            "view_type": "schedule_now" if timeframe.lower() == "now" else "schedule_list",
-            "timeframe": timeframe,
-            "results": []
+        
+        # Try to infer room_id if it was a room query
+        r_id = "unknown"
+        if "Room:" in filters:
+            r_id = filters.split("Room: ")[1].strip()
+            
+        floor_val = str(r_id)[0] if str(r_id)[0].isdigit() else "0"
+        
+        empty_artifact = {
+            "type": "map_update",
+            "artifact": {
+                "view_type": "schedule",
+                "domain": "Schedule",
+                "floor": floor_val,
+                "room_id": r_id,
+                "timeframe": timeframe,
+                "results": []
+            }
         }
+        return "\n".join(lines), empty_artifact
+
+    # --- Sort results chronologically by start_time ---
+    results = sorted(results, key=lambda x: x.get('start_time', '23:59'))
 
     lines.append("Active_Schedule:")
+    
+    room_to_results = {}
+    
     for entry in results:
         # Prepare the clean dictionary for the UI Artifact
         entry_artifact = dict(entry)
         
-        rooms_formatted = " or ".join(entry.get("room_ids", []))
+        # Handle key mapping exactly as requested ("room_ids" to "rooms_id")
+        r_ids = entry.get("room_ids", [])
+        entry_artifact["rooms_id"] = r_ids
+        if "room_ids" in entry_artifact:
+            del entry_artifact["room_ids"]
+        
+        rooms_formatted = " or ".join(r_ids)
         course_formatted = f"{entry.get('course_name')} (Sem {entry.get('semester')})"
         
         # Check for holidays based on the specific entry's day
@@ -106,20 +131,37 @@ def _format_yaml_response(domain: str, tool_name: str, filters: str, results: Li
             lines.append(f"    Instructor: {entry.get('instructor_name')}")
             lines.append(f"    Type: {entry.get('course_type')}")
             
-        artifact_results.append(entry_artifact)
-        
-    artifact = {
-        "view_type": "schedule_now" if timeframe.lower() == "now" else "schedule_list",
-        "timeframe": timeframe,
-        "results": artifact_results
-    }
+        # Group the result strictly by room to split the artifacts
+        for r_id in r_ids:
+            if r_id not in room_to_results:
+                room_to_results[r_id] = []
+            room_to_results[r_id].append(entry_artifact)
             
-    return "\n".join(lines), artifact
+    artifacts = []
+    for r_id, r_results in room_to_results.items():
+        floor_val = str(r_id)[0] if str(r_id)[0].isdigit() else "0"
+        artifact = {
+            "type": "map_update",
+            "artifact": {
+                "view_type": "schedule",
+                "domain": "Schedule",
+                "floor": floor_val,
+                "room_id": str(r_id),
+                "timeframe": timeframe,
+                "results": r_results
+            }
+        }
+        artifacts.append(artifact)
+        
+    # Return a single dict if only 1 room is involved, else return the list of map updates
+    final_artifact = artifacts[0] if len(artifacts) == 1 else artifacts
+            
+    return "\n".join(lines), final_artifact
 
 # --- TOOLS ---
 
 @tool("get_room_schedule", args_schema=RoomScheduleInput, response_format="content_and_artifact")
-def get_room_schedule(room: RoomEnum, timeframe: str) -> Tuple[str, dict]:   # type: ignore
+def get_room_schedule(room: RoomEnum, timeframe: str) -> Tuple[str, Any]:   # type: ignore
     """Get the academic schedule for a specific room."""
     # Safely handle both Enum objects (from LLM) and raw strings (from local testing)
     room_val = room.value if hasattr(room, "value") else str(room)
@@ -127,21 +169,21 @@ def get_room_schedule(room: RoomEnum, timeframe: str) -> Tuple[str, dict]:   # t
     return _format_yaml_response("Campus_Schedule", "get_room_schedule", f"Room: {room_val}", results, timeframe)
 
 @tool("get_course_schedule", args_schema=CourseScheduleInput, response_format="content_and_artifact")
-def get_course_schedule(course_name: CourseEnum, timeframe: str) -> Tuple[str, dict]:    # type: ignore
+def get_course_schedule(course_name: CourseEnum, timeframe: str) -> Tuple[str, Any]:    # type: ignore
     """Get the scheduled times and locations for a specific course."""
     course_val = course_name.value if hasattr(course_name, "value") else str(course_name)
     results = registry.get_by_course(course_val, timeframe)
     return _format_yaml_response("Campus_Schedule", "get_course_schedule", f"Course: {course_val}", results, timeframe)
 
 @tool("get_instructor_schedule", args_schema=InstructorScheduleInput, response_format="content_and_artifact")
-def get_instructor_schedule(instructor_name: InstructorEnum, timeframe: str) -> Tuple[str, dict]:    # type: ignore
+def get_instructor_schedule(instructor_name: InstructorEnum, timeframe: str) -> Tuple[str, Any]:    # type: ignore
     """Get the teaching schedule and locations for a specific instructor."""
     instructor_val = instructor_name.value if hasattr(instructor_name, "value") else str(instructor_name)
     results = registry.get_by_instructor(instructor_val, timeframe)
     return _format_yaml_response("Campus_Schedule", "get_instructor_schedule", f"Instructor: {instructor_val}", results, timeframe)
 
 @tool("get_semester_schedule", args_schema=SemesterScheduleInput, response_format="content_and_artifact")
-def get_semester_schedule(semester: SemesterEnum, timeframe: str) -> Tuple[str, dict]:   # type: ignore
+def get_semester_schedule(semester: SemesterEnum, timeframe: str) -> Tuple[str, Any]:   # type: ignore
     """Get the overall class schedule for an entire semester block."""
     semester_val = semester.value if hasattr(semester, "value") else str(semester)
     results = registry.get_by_semester(semester_val, timeframe)

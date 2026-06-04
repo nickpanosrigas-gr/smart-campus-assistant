@@ -183,10 +183,21 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     Splits baselines via a schedule matrix and strictly enforces absolute safety limits.
     Groups consecutive anomalous intervals into blocks to preserve LLM token context.
     """
+    floor_val = str(room)[0] if str(room)[0].isdigit() else "0"
+    
     all_iaq_devices = registry.get_devices_by_room_and_type(room, "IAQ")
     if not all_iaq_devices:
         error_msg = f"Query_Context:\n  Room: {room}\nError: No IAQ sensors found in this room."
-        return error_msg, {"view_type": "error", "message": "No IAQ sensors found"}
+        return error_msg, {
+            "type": "map_update", 
+            "artifact": {
+                "view_type": "error", 
+                "domain": "Climate",
+                "floor": floor_val,
+                "room_id": str(room),
+                "message": "No IAQ sensors found"
+            }
+        }
 
     # ==========================================
     # SERVER ATTRIBUTE ACTIVE/OFFLINE CHECK
@@ -224,7 +235,16 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
 
     if not active_iaq_devices:
         error_msg = f"Query_Context:\n  Room: {room}\nError: Found {len(all_iaq_devices)} IAQ sensors, but all are currently offline."
-        return error_msg, {"view_type": "error", "message": "All sensors offline"}
+        return error_msg, {
+            "type": "map_update", 
+            "artifact": {
+                "view_type": "error", 
+                "domain": "Climate",
+                "floor": floor_val,
+                "room_id": str(room),
+                "message": "All sensors offline"
+            }
+        }
 
     # Build Active Sensors Block
     total_relevant = len(all_iaq_devices) + (1 if WEATHER_STATION_ID else 0)
@@ -427,10 +447,16 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
                         if overall_status == "good": overall_status = "warning"
 
         artifact = {
-            "view_type": "snapshot",
-            "status": overall_status,
-            "room_aggregates": ui_aggregates,
-            "sensors": ui_sensors
+            "type": "map_update",
+            "artifact": {
+                "view_type": "snapshot",
+                "domain": "Climate",
+                "floor": floor_val,
+                "room_id": str(room),
+                "status": overall_status,
+                "room_aggregates": ui_aggregates,
+                "sensors": ui_sensors
+            }
         }
             
         return "\n".join(output), artifact
@@ -451,7 +477,20 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         
     if not indoor_dfs:
         error_msg = f"Query_Context:\n  Room: {room}\nError: No historical IAQ data found for timeframe {timeframe}."
-        return error_msg, {"view_type": "graph", "series": [], "metadata": {}}
+        return error_msg, {
+            "type": "map_update",
+            "artifact": {
+                "view_type": "graph",
+                "domain": "Climate",
+                "floor": floor_val,
+                "room_id": str(room),
+                "timeframe": timeframe,
+                "online_sensors": list(active_iaq_devices.keys()) + ([WEATHER_STATION_NAME] if is_weather_active and WEATHER_STATION_NAME else []),
+                "offline_sensors": offline_sensors,
+                "series": [],
+                "metadata": {}
+            }
+        }
         
     indoor_df = pd.concat(indoor_dfs).groupby(level=0).median()
     master_df = indoor_df.join(weather_df, how='outer') if not weather_df.empty else indoor_df
@@ -475,10 +514,23 @@ def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         if len(point) > 1:
             series_data.append(point)
             
+    online_sensor_names = list(active_iaq_devices.keys())
+    if is_weather_active and WEATHER_STATION_NAME:
+        online_sensor_names.append(WEATHER_STATION_NAME)
+
     graph_artifact = {
-        "view_type": "graph",
-        "series": series_data,
-        "metadata": {col: UNITS.get(col, "") for col in ui_df.columns}
+        "type": "map_update",
+        "artifact": {
+            "view_type": "graph",
+            "domain": "Climate",
+            "floor": floor_val,
+            "room_id": str(room),
+            "timeframe": timeframe,
+            "online_sensors": online_sensor_names,
+            "offline_sensors": offline_sensors,
+            "series": series_data,
+            "metadata": {col: UNITS.get(col, "") for col in ui_df.columns}
+        }
     }
     
     days_map = {"2h": 1, "24h": 1, "7d": 7, "30d": 30, "90d": 90}

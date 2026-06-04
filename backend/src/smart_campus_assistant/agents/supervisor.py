@@ -19,7 +19,7 @@ from src.smart_campus_assistant.tools.occupancy import get_occupancy
 from src.smart_campus_assistant.tools.door_window import get_door_window_status
 from src.smart_campus_assistant.tools.lights import get_ambient_lights
 from src.smart_campus_assistant.tools.energy import get_energy_infrastructure
-from src.smart_campus_assistant.tools.diagnostics import get_campus_diagnostics
+from src.smart_campus_assistant.tools.diagnostics import get_diagnostics
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ CRITICAL INSTRUCTIONS & TOOL SELECTION RULES:
    - Brightness/Illumination -> get_ambient_lights
 4. FACILITIES:
    - Power/kWh -> get_energy_infrastructure
-   - Broken sensors/offline -> get_campus_diagnostics
+   - Broken sensors/offline -> get_diagnostics
 5. MISSING SENSORS: If a tool returns "Error: No sensors found", DO NOT RETRY. Just tell the user there are no sensors in that room.
 6. NO SUMMARIZATION OF ERRORS: If a tool fails, read the error to understand what arguments you got wrong, and try ONE more time.
 7. SYNTHESIS (CRITICAL): Once a tool successfully returns data, you MUST write a clear, conversational response to the user summarizing the answer. NEVER return an empty response.
@@ -66,7 +66,7 @@ all_campus_tools = [
     search_topology,
     get_room_schedule, get_course_schedule, get_instructor_schedule, get_semester_schedule,
     get_temp_humidity, get_air_quality, get_occupancy, get_door_window_status, get_ambient_lights,
-    get_energy_infrastructure, get_campus_diagnostics
+    get_energy_infrastructure, get_diagnostics
 ]
 
 supervisor_llm = llm.bind_tools(all_campus_tools)

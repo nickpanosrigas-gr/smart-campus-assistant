@@ -6,6 +6,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
+import random
 
 from transformers import AutoTokenizer
 
@@ -16,10 +17,59 @@ logger = logging.getLogger(__name__)
 
 # Pre-load Qwen Tokenizer for Exact Context Math
 try:
-    qwen_tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen1.5-4B-Chat")
+    qwen_tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3.5-4B-Chat")
 except Exception as e:
     logger.warning(f"Could not load Qwen tokenizer, falling back to tiktoken: {e}")
     qwen_tokenizer = None
+
+# ==========================================
+# STATUS PHRASE DICTIONARIES
+# ==========================================
+INITIAL_THINKING_PHRASES = [
+    "Interpreting your request...",
+    "Checking data availability...",
+    "Identifying necessary insights...",
+    "Defining search parameters..."
+]
+
+PROCESSING_PHRASES = [
+    "Interpreting sensor feedback...",
+    "Correlating data trends...",
+    "Validating threshold status...",
+    "Drafting final summary..."
+]
+
+TOOL_PHRASES = {
+    "get_air_quality": [
+        "Checking air quality in {room} for {timeframe}...",
+        "Synthesizing {timeframe} air quality report for {room}..."
+    ],
+    "get_campus_diagnostics": [
+        "Running health audit on {room} devices ({timeframe})...",
+        "Analyzing hardware connectivity for {room} ({timeframe})..."
+    ],
+    "get_door_window_status": [
+        "Scanning access states for {room} ({timeframe})...",
+        "Reviewing {timeframe} entry logs for {room}..."
+    ],
+    "get_ambient_lights": [
+        "Measuring ambient light in {room} for {timeframe}...",
+        "Processing {timeframe} illumination trends in {room}..."
+    ],
+    "get_occupancy": [
+        "Calculating occupancy density for {room} ({timeframe})...",
+        "Evaluating {timeframe} usage patterns in {room}..."
+    ],
+    # Map all schedule tools to the schedule phrases
+    "get_room_schedule": [
+        "Loading {timeframe} schedule data for {room}...",
+        "Verifying course occupancy for {room} ({timeframe})..."
+    ],
+    "get_temp_humidity": [
+        "Checking climate stats for {room} ({timeframe})...",
+        "Analyzing {timeframe} climate stability in {room}..."
+    ]
+}
 
 # ==========================================
 # CONSTANTS & MAPPINGS
@@ -109,8 +159,7 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
     
     ui_sync_data = {"tools": set(), "rooms": set()}
     accumulated_text = ""
-    
-    color_to_health = {"green": "Good", "orange": "Warning", "red": "Error"}
+    has_called_tools = False # NEW: Tracks if we are in the 'Initial' or 'Processing' phase
     
     try:
         async for event in app.astream_events(
@@ -120,40 +169,47 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
         ):
             kind = event["event"]
             
-            # A. Catch Tool Starts
-            if kind == "on_tool_start":
+            # A. Catch LLM Start (Initial Thinking vs. Data Processing)
+            if kind == "on_chat_model_start":
+                # If tools were already used, the LLM is now generating the final answer
+                status_msg = random.choice(PROCESSING_PHRASES) if has_called_tools else random.choice(INITIAL_THINKING_PHRASES)
+                
+                await websocket.send_json({
+                    "type": "llm_status",
+                    "state": "thinking",
+                    "message": status_msg
+                })
+
+            # B. Catch Tool Starts (Dynamic Tool Phrases)
+            elif kind == "on_tool_start":
                 tool_name = event["name"]
                 if tool_name != "tools":
+                    has_called_tools = True # Flag that we have entered the tool phase
+                    
                     args = event["data"].get("input", {})
-                    room_id = args.get("room_id") or args.get("room", "N/A")
+                    room_id = args.get("room_id") or args.get("room") or "selected area"
+                    timeframe = args.get("timeframe") or "now"
                     
                     logger.info(f"[AGENT TOOL] Executing: {tool_name} | Target: {room_id} | Args: {args}")
                     
-                    # Map the raw python name to the clean UI name using the global constant
-                    ui_tool_name = BACKEND_TO_UI_TOOLS.get(tool_name)
-                    if ui_tool_name:
-                        ui_sync_data["tools"].add(ui_tool_name)
-                    
-                    args = event["data"].get("input", {})
-                    room_id = args.get("room_id") or args.get("room")
-                    if room_id:
+                    ui_tool_name = BACKEND_TO_UI_TOOLS.get(tool_name, tool_name)
+                    ui_sync_data["tools"].add(ui_tool_name)
+                    if room_id != "selected area":
                         ui_sync_data["rooms"].add(room_id)
                     
-                    await websocket.send_json({
-                        "type": "tool_start",
-                        "tools_used": list(ui_sync_data["tools"])
-                    })
+                    # Fetch dynamic phrase or fallback to generic
+                    phrases = TOOL_PHRASES.get(tool_name, [f"Running {ui_tool_name} for {{room}}..."])
+                    status_msg = random.choice(phrases).format(room=room_id, timeframe=timeframe)
                     
-                    # Send status for the clickable accordion text
-                    clean_tool_name = tool_name.replace("get_", "").replace("_", " ").title()
-                    status_msg = f"Checking {clean_tool_name} for {room_id}..." if room_id else f"Running {clean_tool_name}..."
-                    
+                    # Send unified llm_status payload
                     await websocket.send_json({
-                        "type": "status",
+                        "type": "llm_status",
+                        "state": "tool_use",
+                        "tool_name": ui_tool_name,
                         "message": status_msg
                     })
             
-            # B. Catch Tool Ends
+            # C. Catch Tool Ends (Artifact Routing)
             elif kind == "on_tool_end":
                 tool_name = event["name"]
                 if tool_name != "tools":
@@ -164,20 +220,23 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
                         raw_data = output.artifact
                     elif isinstance(output, tuple) and len(output) > 1:
                         raw_data = output[1]
+                    elif isinstance(output, dict):
+                        raw_data = output
                         
-                    if isinstance(raw_data, dict) and "status_color" in raw_data:
-                        args = event["data"].get("input", {})
-                        room = args.get("room") or args.get("room_id")
-                        
-                        if room:
-                            health_status = color_to_health.get(raw_data["status_color"], "Good")
+                    if raw_data:
+                        if isinstance(raw_data, list):
+                            for artifact in raw_data:
+                                await websocket.send_json({
+                                    "type": "map_update",
+                                    "artifact": artifact
+                                })
+                        elif isinstance(raw_data, dict) and "view_type" in raw_data:
                             await websocket.send_json({
                                 "type": "map_update",
-                                "target_rooms": list(ui_sync_data["rooms"]),
-                                "room_data": {room: health_status}
+                                "artifact": raw_data
                             })
             
-            # C. Catch Chat Stream
+            # D. Catch Chat Stream
             elif kind == "on_chat_model_stream":
                 chunk = event["data"]["chunk"].content
                 
@@ -192,7 +251,7 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
         err_msg = str(e).lower()
         if "close message has been sent" in err_msg or "closed" in err_msg or "disconnect" in err_msg:
             logger.warning(f"[STREAM] Frontend dropped connection. Halting LLM stream gracefully.")
-            return  # Safely exit without crashing
+            return
             
         logger.error(f"[GRAPH ERROR] {e}")
         try:
@@ -288,14 +347,8 @@ async def handle_map_interaction(rooms: list, floor: str, domain: str, thread_id
     logger.info(f"[USER TOOL] Map Clicked: {tool_name} | Floor: {floor} | Target Rooms: {len(target_rooms)} rooms")
 
     combined_logs = []
-    room_health_updates = {}
     
-    color_to_health = {
-        "green": "Good",
-        "orange": "Warning",
-        "red": "Error"
-    }
-
+    # Execute tools sequentially and stream artifacts directly to frontend
     for room in target_rooms:
         try:
             result = await target_tool.ainvoke({"room": room, "timeframe": "now"})
@@ -305,20 +358,22 @@ async def handle_map_interaction(rooms: list, floor: str, domain: str, thread_id
 
             combined_logs.append(f"--- Room {room} ---\n{yaml_summary}")
             
-            if isinstance(raw_data, dict) and "status_color" in raw_data:
-                color = raw_data["status_color"]
-                room_health_updates[room] = color_to_health.get(color, "Good")
+            # Broadcast the artifacts exactly the same way the LLM loop does
+            if isinstance(raw_data, list):
+                for artifact in raw_data:
+                    await websocket.send_json({
+                        "type": "map_update",
+                        "artifact": artifact
+                    })
+            elif isinstance(raw_data, dict) and "view_type" in raw_data:
+                await websocket.send_json({
+                    "type": "map_update",
+                    "artifact": raw_data
+                })
 
         except Exception as e:
             logger.error(f"Direct tool execution failed for {domain} in {room}: {e}")
 
-    if room_health_updates:
-        await websocket.send_json({
-            "type": "map_update",
-            "target_rooms": target_rooms,
-            "room_data": room_health_updates
-        })
-        
     if combined_logs:
         config = {"configurable": {"thread_id": thread_id}}
         full_log = "\n".join(combined_logs)

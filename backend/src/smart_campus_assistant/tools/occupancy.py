@@ -191,6 +191,7 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     Desk Sensors, People Counters (PC), Area Wait Counters (WO), or Motion Sensors (IAQ).
     """
     room_key = str(room).strip().lower()
+    floor_val = "B" if room_key == "building" else (str(room)[0] if str(room)[0].isdigit() else "0")
     
     # ==========================================
     # SENSOR TARGETING LOGIC
@@ -205,12 +206,30 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         
         if not pc_devices and not iaq_devices:
             error_msg = f"Query_Context:\n  Room: {room}\nError: No building-level sensors found."
-            return error_msg, {"view_type": "error", "message": "No sensors found"}
+            return error_msg, {
+                "type": "map_update",
+                "artifact": {
+                    "view_type": "error",
+                    "domain": "Occupancy",
+                    "floor": floor_val,
+                    "room_id": str(room),
+                    "message": "No building-level sensors found"
+                }
+            }
     else:
         devices = registry.get_all_devices_in_room(room_key)
         if not devices:
             error_msg = f"Query_Context:\n  Room: {room}\nError: Room not found or has no devices."
-            return error_msg, {"view_type": "error", "message": "Room empty"}
+            return error_msg, {
+                "type": "map_update",
+                "artifact": {
+                    "view_type": "error",
+                    "domain": "Occupancy",
+                    "floor": floor_val,
+                    "room_id": str(room),
+                    "message": "Room not found or has no devices"
+                }
+            }
 
         pc_devices = {k: v for k, v in devices.items() if "-PC" in k.upper()}
         wo_devices = {k: v for k, v in devices.items() if "-WO" in k.upper()}
@@ -244,7 +263,16 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         sensor_category = "motion"
     else:
         error_msg = f"Query_Context:\n  Room: {room}\nError: No occupancy or motion sensors found."
-        return error_msg, {"view_type": "error", "message": "No valid sensors"}
+        return error_msg, {
+            "type": "map_update",
+            "artifact": {
+                "view_type": "error",
+                "domain": "Occupancy",
+                "floor": floor_val,
+                "room_id": str(room),
+                "message": "No occupancy or motion sensors found"
+            }
+        }
 
     total_primary_sensors = len(primary_devs)
     
@@ -487,12 +515,12 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             recent_series, _ = fetch_and_resample(active_primary_devs, primary_keys, tb_client.get_24h, "10min", "pc", "24h")
             if not recent_series.empty:
                 has_data = True
-                primary_val = recent_series.iloc[-1]
+                primary_val = float(recent_series.iloc[-1]) 
                 for name in active_primary_devs:
                     ui_sensors[name] = {
-                        "status": "good", # Placeholder, properly set using capacity rules globally later
+                        "status": "good", 
                         "category": "PC",
-                        "readings": {"occupancy": primary_val}
+                        "readings": {"occupancy": int(primary_val)} # Clean integer for the UI
                     }
         else:
             for name, data in active_primary_devs.items():
@@ -622,15 +650,21 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
                 
             if active_iaq_devices:
                 ui_aggregates["motion_status"] = "Active" if motion_active_count > 0 else "Idle"
-                    
+
         artifact = {
-            "view_type": "snapshot",
-            "status": status_color,
-            "room_aggregates": ui_aggregates
+            "type": "map_update",
+            "artifact": {
+                "view_type": "snapshot",
+                "domain": "Occupancy",
+                "floor": floor_val,
+                "room_id": str(room),
+                "status": status_color,
+                "room_aggregates": ui_aggregates
+            }
         }
         
         if room_key != "building":
-            artifact["sensors"] = ui_sensors
+            artifact["artifact"]["sensors"] = ui_sensors
         
         return "\n".join(output), artifact
 
@@ -646,7 +680,20 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
 
     if primary_series.empty:
         error_msg = f"Query_Context:\n  Room: {room}\nError: No historical data found for timeframe {timeframe}. Check if sensor is actively transmitting."
-        return error_msg, {"view_type": "graph", "series": [], "metadata": {}}
+        return error_msg, {
+            "type": "map_update",
+            "artifact": {
+                "view_type": "graph",
+                "domain": "Occupancy",
+                "floor": floor_val,
+                "room_id": str(room),
+                "timeframe": timeframe,
+                "online_sensors": list(active_devices.keys()) if room_key != "building" else [],
+                "offline_sensors": offline_sensors if room_key != "building" else [],
+                "series": [],
+                "metadata": {}
+            }
+        }
 
     df = pd.DataFrame({"primary": primary_series})
     if not motion_series.empty and sensor_category != "motion":
@@ -710,10 +757,22 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     if capacity:
         metadata["capacity"] = capacity
             
+    online_s = list(active_devices.keys()) if room_key != "building" else []
+    offline_s = offline_sensors if room_key != "building" else []
+
     graph_artifact = {
-        "view_type": "graph",
-        "series": series_data,
-        "metadata": metadata
+        "type": "map_update",
+        "artifact": {
+            "view_type": "graph",
+            "domain": "Occupancy",
+            "floor": floor_val,
+            "room_id": str(room),
+            "timeframe": timeframe,
+            "online_sensors": online_s,
+            "offline_sensors": offline_s,
+            "series": series_data,
+            "metadata": metadata
+        }
     }
 
     # Extract grouped DataFrames for Desks
@@ -1016,21 +1075,28 @@ if __name__ == "__main__":
     print("-" * 50)
     try:
         print("\n[Testing]")
-        summary, raw_data = get_occupancy.func(room="2.3", timeframe="now")
+        summary, raw_data = get_occupancy.func(room="1.2", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("-" * 50)
         
         print("\n[Testing]")
-        summary, raw_data = get_occupancy.func(room="2.3", timeframe="24h")
+        summary, raw_data = get_occupancy.func(room="1.2", timeframe="24h")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("-" * 50)
         
         print("\n[Testing]")
-        summary, raw_data = get_occupancy.func(room="building", timeframe="30d")
+        summary, raw_data = get_occupancy.func(room="restaurant", timeframe="now")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("-" * 50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_occupancy.func(room="restaurant", timeframe="24h")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
