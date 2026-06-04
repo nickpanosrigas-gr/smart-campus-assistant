@@ -44,7 +44,7 @@ TOOL_PHRASES = {
         "Checking air quality in {room} for {timeframe}...",
         "Synthesizing {timeframe} air quality report for {room}..."
     ],
-    "get_campus_diagnostics": [
+    "get_diagnostics": [
         "Running health audit on {room} devices ({timeframe})...",
         "Analyzing hardware connectivity for {room} ({timeframe})..."
     ],
@@ -92,7 +92,7 @@ BACKEND_TO_UI_TOOLS = {
     "get_occupancy": "Occupancy",
     "get_door_window_status": "Doors/Windows",
     "get_ambient_lights": "Lights",
-    "get_campus_diagnostics": "Diagnostics",
+    "get_diagnostics": "Diagnostics",
     "get_energy_infrastructure": "Energy",
     "search_topology": "Topology"
 }
@@ -169,7 +169,7 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
     
     ui_sync_data = {"tools": set(), "rooms": set()}
     accumulated_text = ""
-    has_called_tools = False # NEW: Tracks if we are in the 'Initial' or 'Processing' phase
+    has_called_tools = False # Tracks if we are in the 'Initial' or 'Processing' phase
     
     try:
         async for event in app.astream_events(
@@ -181,7 +181,6 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
             
             # A. Catch LLM Start (Initial Thinking vs. Data Processing)
             if kind == "on_chat_model_start":
-                # If tools were already used, the LLM is now generating the final answer
                 status_msg = random.choice(PROCESSING_PHRASES) if has_called_tools else random.choice(INITIAL_THINKING_PHRASES)
                 
                 await websocket.send_json({
@@ -198,10 +197,10 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
                     
                     args = event["data"].get("input", {})
                     
-                    # Extract variables safely with fallbacks
-                    room_id = args.get("room_id") or args.get("room") or "selected area"
+                    # UPDATED: Extract variables safely with fallbacks, including "target" for diagnostics
+                    room_id = args.get("target") or args.get("room_id") or args.get("room") or "selected area"
                     timeframe = args.get("timeframe") or "now"
-                    query_val = args.get("query") or args.get("search_query") or "your request" # NEW: For Topology
+                    query_val = args.get("query") or args.get("search_query") or "your request"
                     
                     logger.info(f"[AGENT TOOL] Executing: {tool_name} | Target: {room_id} | Args: {args}")
                     
@@ -213,7 +212,6 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
                     # Fetch dynamic phrase or fallback to generic
                     phrases = TOOL_PHRASES.get(tool_name, [f"Running {ui_tool_name}..."])
                     
-                    # NEW: Pass all three potential variables into the format string
                     status_msg = random.choice(phrases).format(
                         room=room_id, 
                         timeframe=timeframe,
@@ -278,7 +276,7 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
         try:
             await websocket.send_json({"type": "text", "text": "\n[System Error: Unable to process request.]"})
         except Exception:
-            pass # Socket is completely dead, ignore
+            pass 
         
     # --- CALCULATE EXACT QWEN TOKENS ---
     current_state = app.get_state(config)
@@ -299,22 +297,18 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
     # --- EXTRACT ALL TOOLS (LLM + MANUAL MAP CLICKS) ---
     session_tools = []
     for msg in messages:
-        # 1. LLM Executed Tools
         if hasattr(msg, "tool_calls") and msg.tool_calls:
             for tc in msg.tool_calls:
                 t_name = BACKEND_TO_UI_TOOLS.get(tc["name"], tc["name"])
                 args = tc.get("args", {})
-                room = args.get("room") or args.get("room_id") or "Unknown Area"
+                room = args.get("target") or args.get("room") or args.get("room_id") or "Unknown Area"
                 session_tools.append({"tool": t_name, "room": room})
         
-        # 2. Map-clicked Manual Tools (Parsed from System Logs)
         msg_content = getattr(msg, "content", msg.get("content", "") if isinstance(msg, dict) else "")
-        
         if isinstance(msg_content, str) and "The user clicked on the map to view" in msg_content:
             try:
                 after_view = msg_content.split("view ")[1]
                 domain_part = after_view.split(" for rooms: ")[0].strip()
-                
                 after_rooms = after_view.split(" for rooms: ")[1]
                 rooms_part = after_rooms.split(". Current data:")[0].strip()
                 
@@ -372,20 +366,22 @@ async def handle_map_interaction(rooms: list, floor: str, domain: str, thread_id
 
     combined_logs = []
     
-    # Execute tools sequentially and stream artifacts directly to frontend
     for room in target_rooms:
         try:
             # 1. SMART ARGUMENTS: Read tool schema to prevent Pydantic Validation crashes
             tool_args = {}
             try:
                 schema_props = target_tool.args_schema.schema().get("properties", {}) if target_tool.args_schema else {}
+                
+                # UPDATED: Add 'target' parameter support for diagnostics tool
                 if "room_id" in schema_props: tool_args["room_id"] = room
                 elif "room" in schema_props: tool_args["room"] = room
+                elif "target" in schema_props: tool_args["target"] = room
                 
                 if "timeframe" in schema_props: tool_args["timeframe"] = "now"
                 if "query" in schema_props: tool_args["query"] = f"status of {room}"
             except Exception:
-                tool_args = {"room": room, "timeframe": "now"} # Safe fallback
+                tool_args = {"room": room, "target": room, "timeframe": "now"} # Safe fallback
 
             # 2. SMART INVOKE: Force LangChain to return the Artifact by wrapping in a ToolCall
             tool_call = {
@@ -400,7 +396,6 @@ async def handle_map_interaction(rooms: list, floor: str, domain: str, thread_id
             try:
                 result = await target_tool.ainvoke(tool_call)
             except Exception:
-                # Fallback if the ToolCall wrapper fails
                 result = await target_tool.ainvoke(tool_args)
 
             raw_data = None
@@ -469,14 +464,13 @@ async def handle_map_interaction(rooms: list, floor: str, domain: str, thread_id
         except Exception:
             token_count = len(str(messages)) // 4
             
-        # --- EXTRACT ALL TOOLS (LLM + MANUAL MAP CLICKS) ---
         session_tools = []
         for msg in messages:
             if hasattr(msg, "tool_calls") and msg.tool_calls:
                 for tc in msg.tool_calls:
                     t_name = BACKEND_TO_UI_TOOLS.get(tc["name"], tc["name"]) 
                     args = tc.get("args", {})
-                    r_id = args.get("room") or args.get("room_id") or "Unknown Area"
+                    r_id = args.get("target") or args.get("room") or args.get("room_id") or "Unknown Area"
                     session_tools.append({"tool": t_name, "room": r_id})
             
             msg_content = getattr(msg, "content", msg.get("content", "") if isinstance(msg, dict) else "")

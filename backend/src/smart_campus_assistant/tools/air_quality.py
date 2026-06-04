@@ -760,7 +760,7 @@ if __name__ == "__main__":
     
     try:
         print("\n[Testing]")
-        summary, raw_data = get_air_quality.func(room="2.3", timeframe="now")
+        summary, raw_data = get_air_quality.func(room="2.4", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
