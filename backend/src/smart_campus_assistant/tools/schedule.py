@@ -12,6 +12,13 @@ registry = ScheduleRegistry()
 # --- DEFINE HARDCODED TIME FRAME LITERAL ---
 TimeframeLiteral = Literal["now", "today", "week", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
 
+# --- DEFINE ROOMS LITERAL ---
+Rooms = Literal[
+    'parkin.c', 'parkin.b', 'data_center', 'entrance', 'restaurant', 
+    '1.1', '1.2', 'kitchen', '2.1', '2.2', '2.3', '2.4', 
+    '3.7', '3.8', '3.9', '4.9', '5.6', '5.7'
+]
+
 # --- DYNAMIC ENUM HELPER ---
 # LLMs and LangChain respect native Python Enums for strict function calling. 
 # Because items like "Room 1.2" have spaces/dots, we must dynamically generate valid Enum keys.
@@ -22,7 +29,6 @@ def create_dynamic_enum(enum_name: str, values: List[str]) -> Enum:
     enum_dict = {f"ITEM_{i}": str(v) for i, v in enumerate(values)}
     return Enum(enum_name, enum_dict)
 
-RoomEnum = create_dynamic_enum("RoomEnum", registry.get_all_rooms())
 CourseEnum = create_dynamic_enum("CourseEnum", registry.get_all_courses())
 InstructorEnum = create_dynamic_enum("InstructorEnum", registry.get_all_instructors())
 SemesterEnum = create_dynamic_enum("SemesterEnum", registry.get_all_semesters())
@@ -30,7 +36,7 @@ SemesterEnum = create_dynamic_enum("SemesterEnum", registry.get_all_semesters())
 # --- DYNAMIC INPUT SCHEMAS FOR LANGGRAPH ---
 
 class RoomScheduleInput(BaseModel):
-    room: RoomEnum = Field(..., description="The exact room ID/name to query.") # type: ignore
+    room: Rooms = Field(..., description="The exact room ID/name to query.") 
     timeframe: TimeframeLiteral = Field(..., description="The time window to query.")
 
 class CourseScheduleInput(BaseModel):
@@ -51,6 +57,8 @@ def _format_yaml_response(domain: str, tool_name: str, filters: str, results: Li
     # Capture and format the current time
     current_time_str = datetime.now().strftime("%A, %b %d, %Y at %I:%M %p")
     
+    view_type = "snapshot" if timeframe.lower() == "now" else "schedule"
+    
     lines = []
     lines.append("Query_Context:")
     lines.append(f"  Current_Time: {current_time_str}")
@@ -63,7 +71,6 @@ def _format_yaml_response(domain: str, tool_name: str, filters: str, results: Li
     if not results:
         lines.append("Active_Schedule: []")
         
-        # Try to infer room_id if it was a room query
         r_id = "unknown"
         if "Room:" in filters:
             r_id = filters.split("Room: ")[1].strip()
@@ -73,12 +80,12 @@ def _format_yaml_response(domain: str, tool_name: str, filters: str, results: Li
         empty_artifact = {
             "type": "map_update",
             "artifact": {
-                "view_type": "schedule",
+                "view_type": view_type,
                 "domain": "Schedule",
                 "floor": floor_val,
                 "room_id": r_id,
                 "timeframe": timeframe,
-                "results": []
+                "room_aggregates": [] # Updated key
             }
         }
         return "\n".join(lines), empty_artifact
@@ -91,10 +98,9 @@ def _format_yaml_response(domain: str, tool_name: str, filters: str, results: Li
     room_to_results = {}
     
     for entry in results:
-        # Prepare the clean dictionary for the UI Artifact
         entry_artifact = dict(entry)
         
-        # Handle key mapping exactly as requested ("room_ids" to "rooms_id")
+        # Handle key mapping ("room_ids" to "rooms_id")
         r_ids = entry.get("room_ids", [])
         entry_artifact["rooms_id"] = r_ids
         if "room_ids" in entry_artifact:
@@ -131,7 +137,7 @@ def _format_yaml_response(domain: str, tool_name: str, filters: str, results: Li
             lines.append(f"    Instructor: {entry.get('instructor_name')}")
             lines.append(f"    Type: {entry.get('course_type')}")
             
-        # Group the result strictly by room to split the artifacts
+        # Group result by room
         for r_id in r_ids:
             if r_id not in room_to_results:
                 room_to_results[r_id] = []
@@ -143,17 +149,16 @@ def _format_yaml_response(domain: str, tool_name: str, filters: str, results: Li
         artifact = {
             "type": "map_update",
             "artifact": {
-                "view_type": "schedule",
+                "view_type": view_type,
                 "domain": "Schedule",
                 "floor": floor_val,
                 "room_id": str(r_id),
                 "timeframe": timeframe,
-                "results": r_results
+                "room_aggregates": r_results
             }
         }
         artifacts.append(artifact)
         
-    # Return a single dict if only 1 room is involved, else return the list of map updates
     final_artifact = artifacts[0] if len(artifacts) == 1 else artifacts
             
     return "\n".join(lines), final_artifact
@@ -161,9 +166,10 @@ def _format_yaml_response(domain: str, tool_name: str, filters: str, results: Li
 # --- TOOLS ---
 
 @tool("get_room_schedule", args_schema=RoomScheduleInput, response_format="content_and_artifact")
-def get_room_schedule(room: RoomEnum, timeframe: str) -> Tuple[str, Any]:   # type: ignore
+def get_room_schedule(room: Rooms, timeframe: str) -> Tuple[str, Any]: 
     """Get the academic schedule for a specific room."""
-    # Safely handle both Enum objects (from LLM) and raw strings (from local testing)
+    # Since `room` is now a Literal, it will be passed as a string natively.
+    # The `hasattr` check remains harmless but acts as a safety wrapper.
     room_val = room.value if hasattr(room, "value") else str(room)
     results = registry.get_by_room(room_val, timeframe)
     return _format_yaml_response("Campus_Schedule", "get_room_schedule", f"Room: {room_val}", results, timeframe)
@@ -201,7 +207,7 @@ if __name__ == "__main__":
     
     try:
         print("\n[Testing get_room_schedule (Room 1.2, timeframe: today)]")
-        summary, raw_data = get_room_schedule.func(room="1.2", timeframe="today")
+        summary, raw_data = get_room_schedule.func(room="1.2", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)

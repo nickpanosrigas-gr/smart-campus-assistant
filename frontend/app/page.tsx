@@ -5,9 +5,8 @@ import MapStage from "@/components/desktop/MapStage";
 import { RoomHealth } from "@/components/map/constants";
 
 export type AppState = "idle" | "routing" | "tool_execution" | "resolved";
-export type ViewType = "snapshot" | "graph" | "schedule"; // NEW: Expanded views
+export type ViewType = "snapshot" | "graph" | "schedule"; 
 
-// --- NEW INTERFACES ---
 export interface LLMStatus {
   state: "thinking" | "tool_use";
   message: string;
@@ -17,13 +16,11 @@ export interface LLMStatus {
 interface FloorState {
   selectedRooms: string[];
   activeTools: string[];
-  roomHealthData: Record<string, RoomHealth>;
   isZoomed: boolean;
 }
 
 const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/ws/chat";
 
-// Helper for Manual Map Clicks
 const getRoomsForFloor = (floor: string) => {
   if (floor === "-3") return ["parkin.c"];
   if (floor === "-2") return ["parkin.b"];
@@ -40,13 +37,12 @@ const getRoomsForFloor = (floor: string) => {
 
 export default function DesktopDashboard() {
   const [appState, setAppState] = useState<AppState>("idle");
-  
-  // --- NEW: ARTIFACT & VIEW STATES ---
   const [llmStatus, setLlmStatus] = useState<LLMStatus | null>(null);
-  const [roomArtifacts, setRoomArtifacts] = useState<Record<string, any>>({});
+  
+  // CACHING ARCHITECTURE: Maps roomId -> domain -> artifact
+  const [roomArtifacts, setRoomArtifacts] = useState<Record<string, Record<string, any>>>({});
   const [currentViewType, setCurrentViewType] = useState<ViewType>("snapshot");
   
-  // Floor States Dictionary & Tracker
   const [floorStates, setFloorStates] = useState<Record<string, FloorState>>({});
   const [activeLevel, setActiveLevel] = useState<string>("B"); 
 
@@ -57,19 +53,17 @@ export default function DesktopDashboard() {
   const ws = useRef<WebSocket | null>(null);
   const activeLevelRef = useRef(activeLevel);
 
-  const currentFloor = floorStates[activeLevel] || { selectedRooms: [], activeTools: [], roomHealthData: {}, isZoomed: false };
-  const { selectedRooms, activeTools, roomHealthData, isZoomed } = currentFloor;
+  const currentFloor = floorStates[activeLevel] || { selectedRooms: [], activeTools: [], isZoomed: false };
+  const { selectedRooms, activeTools, isZoomed } = currentFloor;
 
   const updateFloor = (level: string, updates: Partial<FloorState>) => {
     setFloorStates(prev => ({
       ...prev,
-      [level]: { ...(prev[level] || { selectedRooms: [], activeTools: [], roomHealthData: {}, isZoomed: false }), ...updates }
+      [level]: { ...(prev[level] || { selectedRooms: [], activeTools: [], isZoomed: false }), ...updates }
     }));
   };
 
-// --- COMPREHENSIVE BROWSER CACHING LOGIC (page.tsx) ---
-  
-  // 1. Load Everything on Mount
+  // --- BROWSER CACHING LOGIC ---
   useEffect(() => {
     const cachedFloors = sessionStorage.getItem("floorStates");
     if (cachedFloors) setFloorStates(JSON.parse(cachedFloors));
@@ -96,116 +90,91 @@ export default function DesktopDashboard() {
     if (cachedViewType) setCurrentViewType(cachedViewType as ViewType);
   }, []);
 
-  // 2. Save Everything on Change
-  useEffect(() => {
-    sessionStorage.setItem("floorStates", JSON.stringify(floorStates));
-  }, [floorStates]);
-
-  useEffect(() => {
+  useEffect(() => { sessionStorage.setItem("floorStates", JSON.stringify(floorStates)); }, [floorStates]);
+  useEffect(() => { 
     sessionStorage.setItem("activeLevel", activeLevel);
     activeLevelRef.current = activeLevel; 
   }, [activeLevel]);
+  useEffect(() => { sessionStorage.setItem("chatMessages", JSON.stringify(messages)); }, [messages]);
+  useEffect(() => { sessionStorage.setItem("roomArtifacts", JSON.stringify(roomArtifacts)); }, [roomArtifacts]);
+  useEffect(() => { sessionStorage.setItem("sessionTools", JSON.stringify(sessionTools)); }, [sessionTools]);
+  useEffect(() => { sessionStorage.setItem("contextData", JSON.stringify(contextData)); }, [contextData]);
+  useEffect(() => { sessionStorage.setItem("llmStatus", JSON.stringify(llmStatus)); }, [llmStatus]);
+  useEffect(() => { sessionStorage.setItem("currentViewType", currentViewType); }, [currentViewType]);
 
-  useEffect(() => {
-    sessionStorage.setItem("chatMessages", JSON.stringify(messages));
-  }, [messages]);
-
-  useEffect(() => {
-    sessionStorage.setItem("roomArtifacts", JSON.stringify(roomArtifacts));
-  }, [roomArtifacts]);
-
-  useEffect(() => {
-    sessionStorage.setItem("sessionTools", JSON.stringify(sessionTools));
-  }, [sessionTools]);
-
-  useEffect(() => {
-    sessionStorage.setItem("contextData", JSON.stringify(contextData));
-  }, [contextData]);
-
-  useEffect(() => {
-    sessionStorage.setItem("llmStatus", JSON.stringify(llmStatus));
-  }, [llmStatus]);
-
-  useEffect(() => {
-    sessionStorage.setItem("currentViewType", currentViewType);
-  }, [currentViewType]);
-  // --------------------------------------------------------
-
+  // --- WEBSOCKET CONNECTION ---
   useEffect(() => {
     ws.current = new WebSocket(WS_URL);
-    ws.current.onopen = () => console.log("Connected to Smart Campus Backend");
+    ws.current.onopen = () => console.log("🟢 Connected to Smart Campus Backend");
 
     ws.current.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        
+        // ==========================================
+        // 🚨 DEBUGGING INTERCEPTOR 🚨
+        console.log("📥 INCOMING WS PAYLOAD:", data);
+        // ==========================================
 
-        // --- 1. LLM STATUS STREAM ---
         if (data.type === "llm_status") {
           setAppState(data.state === "thinking" ? "routing" : "tool_execution");
-          setLlmStatus({
-            state: data.state,
-            message: data.message,
-            tool_name: data.tool_name
-          });
+          setLlmStatus({ state: data.state, message: data.message, tool_name: data.tool_name });
         }
         
-        // --- 2. THE SMART SERVER ARTIFACT PIPELINE ---
         if (data.type === "map_update" && data.artifact) {
           const artifact = data.artifact;
           const targetLevel = artifact.floor || activeLevelRef.current;
           const roomId = artifact.room_id;
+          const domain = artifact.domain || "Unknown";
+
+          console.log(`✅ Artifact Parsed Successfully for Room [${roomId}] under Domain [${domain}]`);
           
-          // A. Auto-Switch Floors based on backend calculation
           if (artifact.floor && artifact.floor !== activeLevelRef.current) {
             setActiveLevel(artifact.floor);
           }
-
-          // B. Auto-Route the UI View (Snapshot, Graph, Schedule)
+          
           if (artifact.view_type) {
-            setCurrentViewType(artifact.view_type as ViewType);
+            // If it's an error, force the UI to stay on the map ("snapshot") so we can see the red rooms
+            if (artifact.view_type === "error") {
+              setCurrentViewType("snapshot");
+            } else {
+              setCurrentViewType(artifact.view_type as ViewType);
+            }
           }
 
-          // C. Save the raw artifact payload for the UI components to render
+          // Save the artifact deeply nested by roomId AND domain
           if (roomId) {
             setRoomArtifacts(prev => ({
               ...prev,
-              [roomId]: artifact
+              [roomId]: {
+                ...(prev[roomId] || {}),
+                [domain]: artifact // Store by specific tool domain
+              }
             }));
           }
 
-          // D. Update the Visual Map State (Colors, Zoom, Active Tools)
           setFloorStates(prev => {
-            const floor = prev[targetLevel] || { selectedRooms: [], activeTools: [], roomHealthData: {}, isZoomed: false };
-            
-            // Zoom in unless it's a building-wide macro view
+            const floor = prev[targetLevel] || { selectedRooms: [], activeTools: [], isZoomed: false };
             const newZoom = roomId && roomId !== "building";
             
-            // Color the map polygon if the tool provided a status (e.g. good, warning)
-            const updatedHealthData = { ...floor.roomHealthData };
-            if (artifact.status && roomId) {
-               updatedHealthData[roomId] = artifact.status;
-            }
-
-            // Ensure the tool is visually toggled "ON" in the pill menu
             const newActiveTools = [...floor.activeTools];
-            if (artifact.domain && !newActiveTools.includes(artifact.domain)) {
-               newActiveTools.unshift(artifact.domain);
+            if (domain && domain !== "Unknown") {
+               const filteredTools = newActiveTools.filter(t => t !== domain);
+               newActiveTools.splice(0, newActiveTools.length, domain, ...filteredTools);
             }
 
             return {
               ...prev,
               [targetLevel]: {
                 ...floor,
-                selectedRooms: roomId ? [roomId] : floor.selectedRooms,
+                selectedRooms: roomId && !floor.selectedRooms.includes(roomId) ? [...floor.selectedRooms, roomId] : floor.selectedRooms,
                 isZoomed: newZoom,
-                roomHealthData: updatedHealthData,
                 activeTools: newActiveTools
               }
             };
           });
         }
 
-        // --- 3. CHAT TEXT UPDATES ---
         if (data.text) {
           const replyText = data.text;
           setMessages(prev => {
@@ -217,7 +186,7 @@ export default function DesktopDashboard() {
             return [...prev, { sender: "agent", text: replyText }];
           });
           setAppState("resolved");
-          setLlmStatus(null); // Clear the dynamic status message
+          setLlmStatus(null); 
         }
 
         if (data.type === "resolved") {
@@ -225,14 +194,13 @@ export default function DesktopDashboard() {
           setLlmStatus(null);
         }
 
-        // --- 4. TELEMETRY & CONTEXT UPDATES ---
         if (data.type === "context_update") {
            setContextData({ tokens: data.tokens });
            setSessionTools(data.session_tools);
         }
 
       } catch (err) {
-        console.error("Error parsing websocket message", err);
+        console.error("❌ Error parsing websocket message:", err);
       }
     };
     
@@ -248,36 +216,44 @@ export default function DesktopDashboard() {
       ws.current?.send(JSON.stringify({
         type: "chat_message",
         query: msg,
-        context: { 
-          activeLevel, 
-          selectedRooms: selectedRooms.length > 0 ? selectedRooms : ["ALL"] 
-        }
+        context: { activeLevel, selectedRooms: selectedRooms.length > 0 ? selectedRooms : ["ALL"] }
       }));
     }
   };
 
   const handleToggleSelect = (toggle: string) => {
-    const isActivating = !activeTools.includes(toggle);
-    const newTools = isActivating 
-      ? [toggle, ...activeTools] 
-      : [toggle, ...activeTools.filter(t => t !== toggle)];
+    const isNewTool = !activeTools.includes(toggle);
     
+    // Always bring the selected toggle to the front (index 0) so the UI visualizes it
+    const newTools = [toggle, ...activeTools.filter(t => t !== toggle)];
     let roomsToFetch = selectedRooms;
 
-    if (isActivating && selectedRooms.length === 0) {
+    if (isNewTool && selectedRooms.length === 0) {
       roomsToFetch = getRoomsForFloor(activeLevel);
       updateFloor(activeLevel, { activeTools: newTools, selectedRooms: roomsToFetch });
     } else {
       updateFloor(activeLevel, { activeTools: newTools });
     }
 
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current?.send(JSON.stringify({
+    // CACHE CHECK: Only fetch data if we don't already have the artifact for this specific tool + room
+    const roomsRequiringFetch = roomsToFetch.filter(roomId => {
+      // Loose case-insensitive check just to be safe
+      const roomData = roomArtifacts[roomId] || {};
+      const hasKey = Object.keys(roomData).some(k => k.toLowerCase() === toggle.toLowerCase());
+      return !hasKey;
+    });
+
+    if (roomsRequiringFetch.length > 0 && ws.current && ws.current.readyState === WebSocket.OPEN) {
+      const payload = {
         type: "map_interaction",
-        rooms: roomsToFetch.length > 0 ? roomsToFetch : ["ALL"],
+        rooms: roomsRequiringFetch,
         floor: activeLevel,
         domain: toggle
-      }));
+      };
+      console.log("📤 OUTGOING WS (Toggle):", payload);
+      ws.current?.send(JSON.stringify(payload));
+    } else {
+      console.log(`♻️ Skipping Fetch: Cache hit for Tool [${toggle}] across Rooms [${roomsToFetch}]`);
     }
   };
 
@@ -285,9 +261,8 @@ export default function DesktopDashboard() {
     const hasActiveTools = activeTools.length > 0;
     const isCurrentlySelected = selectedRooms.includes(roomId);
 
-    if (isCurrentlySelected && hasActiveTools) {
-       return; 
-    }
+    // Prevent deselection if tools are active (data is in LLM context)
+    if (isCurrentlySelected && hasActiveTools) return; 
 
     let newSelection = [];
     let newZoom = isZoomed;
@@ -303,14 +278,22 @@ export default function DesktopDashboard() {
 
     updateFloor(activeLevel, { selectedRooms: newSelection, isZoomed: newZoom });
 
+    // Fetch all active tools for the new room IF not already cached
     if (isSelecting && ws.current && ws.current.readyState === WebSocket.OPEN && hasActiveTools) {
         activeTools.forEach(tool => {
-            ws.current?.send(JSON.stringify({
-                type: "map_interaction",
-                rooms: [roomId], 
-                floor: activeLevel,
-                domain: tool
-            }));
+            const roomData = roomArtifacts[roomId] || {};
+            const hasCachedData = Object.keys(roomData).some(k => k.toLowerCase() === tool.toLowerCase());
+            
+            if (!hasCachedData) {
+                const payload = {
+                    type: "map_interaction",
+                    rooms: [roomId], 
+                    floor: activeLevel,
+                    domain: tool
+                };
+                console.log("📤 OUTGOING WS (Room):", payload);
+                ws.current?.send(JSON.stringify(payload));
+            }
         });
     }
   };
@@ -325,23 +308,44 @@ export default function DesktopDashboard() {
     setCurrentViewType("snapshot");
     setLlmStatus(null);
     setAppState("idle");
-    
-    sessionStorage.removeItem("floorStates");
-    sessionStorage.removeItem("activeLevel");
-
+    sessionStorage.clear(); // Complete cache clear on reset
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({ type: "reset_session" }));
     }
   };
 
+  // --- DYNAMIC VISUAL DERIVATION (CASE-INSENSITIVE) ---
+  const visuallyActiveTool = activeTools[0]; 
+  const activeViewArtifacts: Record<string, any> = {};
+  const currentRoomHealthData: Record<string, RoomHealth> = {};
+
+  if (visuallyActiveTool) {
+    Object.keys(roomArtifacts).forEach(roomId => {
+      // Find the exact tool key regardless of upper/lower case mismatch from backend
+      const toolKey = Object.keys(roomArtifacts[roomId]).find(
+          key => key.toLowerCase() === visuallyActiveTool.toLowerCase()
+      );
+
+      if (toolKey) {
+        const artifact = roomArtifacts[roomId][toolKey];
+        activeViewArtifacts[roomId] = artifact;
+        
+        // Force the status to lowercase to match the constants dictionary perfectly
+        if (artifact.status) {
+          currentRoomHealthData[roomId] = artifact.status.toLowerCase() as RoomHealth;
+        } 
+        // Catch error payloads that lack a status field and force them to "error"
+        else if (artifact.view_type === "error") {
+          currentRoomHealthData[roomId] = "error";
+        }
+      }
+    });
+  }
+
   return (
     <main className="w-full h-screen flex overflow-hidden bg-gradient-to-b from-[#0A664F] to-[#0A0A0A] text-[#A3B8B2] p-4 gap-4">
       
-      {/* LEFT SIDE: MAP & DATA STAGE CONTAINER */}
       <div className="flex-1 flex flex-col min-w-0 bg-[#0A0A0A]/40 border border-[#A3B8B2]/10 rounded-3xl backdrop-blur-md overflow-hidden relative shadow-2xl h-full">
-        {/* IMPORTANT: You will eventually update MapStage to accept currentViewType 
-          and roomArtifacts so it knows whether to render the 3D Map, the Graph, or the Schedule List. 
-        */}
         <MapStage 
           appState={appState} 
           activeTools={activeTools}
@@ -349,23 +353,21 @@ export default function DesktopDashboard() {
           setActiveLevel={setActiveLevel} 
           selectedRooms={selectedRooms}
           onRoomToggle={handleRoomSelect}
-          
-          // FIX: Pass the state directly to MapStage
           viewMode={currentViewType} 
           setViewMode={setCurrentViewType}
-          
           isZoomed={isZoomed}
           setIsZoomed={(z) => updateFloor(activeLevel, { isZoomed: z })}
-          roomHealthData={roomHealthData}
           onToggleSelect={handleToggleSelect}
+          
+          roomHealthData={currentRoomHealthData}
+          roomArtifacts={activeViewArtifacts} 
         />
       </div>
 
-      {/* RIGHT SIDE: CHAT INTERFACE */}
       <div className="w-[630px] flex-shrink-0 h-full transition-all duration-500 ease-in-out">
         <ChatPanel 
           appState={appState} 
-          llmStatus={llmStatus} /* NEW: Passing down the dynamic text */
+          llmStatus={llmStatus}
           onSendMessage={handleUserMessage}
           activeTools={activeTools}
           messages={messages}

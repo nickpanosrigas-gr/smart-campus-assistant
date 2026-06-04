@@ -1075,7 +1075,7 @@ if __name__ == "__main__":
     print("-" * 50)
     try:
         print("\n[Testing]")
-        summary, raw_data = get_occupancy.func(room="1.2", timeframe="now")
+        summary, raw_data = get_occupancy.func(room="2.1", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)

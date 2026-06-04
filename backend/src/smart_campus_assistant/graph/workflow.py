@@ -244,16 +244,18 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
                         
                     if raw_data:
                         if isinstance(raw_data, list):
-                            for artifact in raw_data:
-                                await websocket.send_json({
-                                    "type": "map_update",
-                                    "artifact": artifact
-                                })
-                        elif isinstance(raw_data, dict) and "view_type" in raw_data:
-                            await websocket.send_json({
-                                "type": "map_update",
-                                "artifact": raw_data
-                            })
+                            for item in raw_data:
+                                if isinstance(item, dict) and item.get("type") == "map_update":
+                                    await websocket.send_json(item)
+                                else:
+                                    await websocket.send_json({"type": "map_update", "artifact": item})
+                        elif isinstance(raw_data, dict):
+                            if raw_data.get("type") == "map_update":
+                                await websocket.send_json(raw_data)
+                            elif "artifact" in raw_data:
+                                await websocket.send_json({"type": "map_update", "artifact": raw_data["artifact"]})
+                            elif "view_type" in raw_data:
+                                await websocket.send_json({"type": "map_update", "artifact": raw_data})
             
             # D. Catch Chat Stream
             elif kind == "on_chat_model_stream":
@@ -332,6 +334,7 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
 
 async def handle_map_interaction(rooms: list, floor: str, domain: str, thread_id: str, websocket):
     """Bypasses LLM, runs tool directly for multiple rooms, and silently updates graph memory."""
+    import ast
     
     # Reverse map the UI domain to the backend tool name
     tool_name = None
@@ -341,10 +344,12 @@ async def handle_map_interaction(rooms: list, floor: str, domain: str, thread_id
             break
             
     if not tool_name:
+        logger.error(f"Could not find backend tool for UI domain: {domain}")
         return
         
     target_tool = next((t for t in all_campus_tools if t.name == tool_name), None)
     if not target_tool:
+        logger.error(f"Tool {tool_name} not found in all_campus_tools!")
         return
 
     # Complete Campus Floor Topology
@@ -363,35 +368,83 @@ async def handle_map_interaction(rooms: list, floor: str, domain: str, thread_id
     else:
         target_rooms = rooms
 
-    logger.info(f"[USER TOOL] Map Clicked: {tool_name} | Floor: {floor} | Target Rooms: {len(target_rooms)} rooms")
+    logger.info(f"[USER TOOL] Map Clicked: {tool_name} | Target Rooms: {target_rooms}")
 
     combined_logs = []
     
     # Execute tools sequentially and stream artifacts directly to frontend
     for room in target_rooms:
         try:
-            result = await target_tool.ainvoke({"room": room, "timeframe": "now"})
+            # 1. SMART ARGUMENTS: Read tool schema to prevent Pydantic Validation crashes
+            tool_args = {}
+            try:
+                schema_props = target_tool.args_schema.schema().get("properties", {}) if target_tool.args_schema else {}
+                if "room_id" in schema_props: tool_args["room_id"] = room
+                elif "room" in schema_props: tool_args["room"] = room
+                
+                if "timeframe" in schema_props: tool_args["timeframe"] = "now"
+                if "query" in schema_props: tool_args["query"] = f"status of {room}"
+            except Exception:
+                tool_args = {"room": room, "timeframe": "now"} # Safe fallback
+
+            # 2. SMART INVOKE: Force LangChain to return the Artifact by wrapping in a ToolCall
+            tool_call = {
+                "name": tool_name,
+                "args": tool_args,
+                "id": f"manual_call_{room.replace('.', '_')}",
+                "type": "tool_call"
+            }
             
-            yaml_summary = result[0] if isinstance(result, tuple) else str(result)
-            raw_data = result[1] if isinstance(result, tuple) else result 
+            logger.info(f"Invoking {tool_name} with args: {tool_args}")
+            
+            try:
+                result = await target_tool.ainvoke(tool_call)
+            except Exception:
+                # Fallback if the ToolCall wrapper fails
+                result = await target_tool.ainvoke(tool_args)
+
+            raw_data = None
+            yaml_summary = ""
+
+            # 3. EXTRACT ARTIFACT: Mirror exactly how the LLM extracts it
+            if hasattr(result, 'artifact') and getattr(result, 'artifact', None) is not None:
+                raw_data = result.artifact
+                yaml_summary = str(getattr(result, 'content', result))
+            elif isinstance(result, tuple) and len(result) > 1:
+                yaml_summary = str(result[0])
+                raw_data = result[1]
+            elif isinstance(result, dict):
+                raw_data = result
+                yaml_summary = str(result)
+            else:
+                yaml_summary = str(result)
+                try:
+                    raw_data = ast.literal_eval(yaml_summary)
+                except Exception:
+                    pass
+
+            if not raw_data:
+                logger.warning(f"⚠️ Warning: Could not find raw_data artifact for {room}!")
 
             combined_logs.append(f"--- Room {room} ---\n{yaml_summary}")
             
-            # Broadcast the artifacts exactly the same way the LLM loop does
+            # 4. BROADCAST TO FRONTEND
             if isinstance(raw_data, list):
-                for artifact in raw_data:
-                    await websocket.send_json({
-                        "type": "map_update",
-                        "artifact": artifact
-                    })
-            elif isinstance(raw_data, dict) and "view_type" in raw_data:
-                await websocket.send_json({
-                    "type": "map_update",
-                    "artifact": raw_data
-                })
+                for item in raw_data:
+                    if isinstance(item, dict) and item.get("type") == "map_update":
+                        await websocket.send_json(item)
+                    else:
+                        await websocket.send_json({"type": "map_update", "artifact": item})
+            elif isinstance(raw_data, dict):
+                if raw_data.get("type") == "map_update":
+                    await websocket.send_json(raw_data)
+                elif "artifact" in raw_data:
+                    await websocket.send_json({"type": "map_update", "artifact": raw_data["artifact"]})
+                elif "view_type" in raw_data:
+                    await websocket.send_json({"type": "map_update", "artifact": raw_data})
 
         except Exception as e:
-            logger.error(f"Direct tool execution failed for {domain} in {room}: {e}")
+            logger.error(f"❌ Direct tool execution failed for {domain} in {room}: {e}")
 
     if combined_logs:
         config = {"configurable": {"thread_id": thread_id}}
@@ -413,35 +466,31 @@ async def handle_map_interaction(rooms: list, floor: str, domain: str, thread_id
                 import tiktoken
                 enc = tiktoken.get_encoding("cl100k_base")
                 token_count = len(enc.encode(full_text))
-        except:
+        except Exception:
             token_count = len(str(messages)) // 4
             
         # --- EXTRACT ALL TOOLS (LLM + MANUAL MAP CLICKS) ---
         session_tools = []
         for msg in messages:
-            # 1. LLM Executed Tools
             if hasattr(msg, "tool_calls") and msg.tool_calls:
                 for tc in msg.tool_calls:
                     t_name = BACKEND_TO_UI_TOOLS.get(tc["name"], tc["name"]) 
                     args = tc.get("args", {})
-                    room = args.get("room") or args.get("room_id") or "Unknown Area"
-                    session_tools.append({"tool": t_name, "room": room})
+                    r_id = args.get("room") or args.get("room_id") or "Unknown Area"
+                    session_tools.append({"tool": t_name, "room": r_id})
             
-            # 2. Map-clicked Manual Tools (Parsed from System Logs)
             msg_content = getattr(msg, "content", msg.get("content", "") if isinstance(msg, dict) else "")
-            
             if isinstance(msg_content, str) and "The user clicked on the map to view" in msg_content:
                 try:
                     after_view = msg_content.split("view ")[1]
                     domain_part = after_view.split(" for rooms: ")[0].strip()
-                    
                     after_rooms = after_view.split(" for rooms: ")[1]
                     rooms_part = after_rooms.split(". Current data:")[0].strip()
                     
                     for r in rooms_part.split(","):
                         session_tools.append({"tool": domain_part, "room": r.strip()})
-                except Exception as e:
-                    logger.error(f"Failed to parse system log for tools: {e}")
+                except Exception:
+                    pass
                     
         await websocket.send_json({
             "type": "context_update",

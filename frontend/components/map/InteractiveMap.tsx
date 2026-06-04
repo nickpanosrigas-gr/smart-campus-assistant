@@ -1,3 +1,4 @@
+// InteractiveMap.tsx
 "use client";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft } from "lucide-react";
@@ -11,12 +12,15 @@ interface InteractiveMapProps {
   activeLevel: string;
   setActiveLevel: (lvl: string) => void;
   selectedRooms: string[];
-  onRoomToggle: (roomId: string) => void; // CHANGED
+  onRoomToggle: (roomId: string) => void;
   viewMode: "map" | "graph";
   setViewMode: (mode: "map" | "graph") => void;
   isZoomed: boolean;
   setIsZoomed: (zoom: boolean) => void;
   roomHealthData: Record<string, RoomHealth>; 
+  
+  // NEW
+  roomArtifacts: Record<string, any>;
 }
 
 export default function InteractiveMap(props: InteractiveMapProps) {
@@ -25,7 +29,8 @@ export default function InteractiveMap(props: InteractiveMapProps) {
     selectedRooms, onRoomToggle, 
     viewMode, 
     isZoomed, setIsZoomed,
-    roomHealthData
+    roomHealthData,
+    roomArtifacts
   } = props;
 
   let zoomOrigin = "50% 50%";
@@ -41,19 +46,30 @@ export default function InteractiveMap(props: InteractiveMapProps) {
     <div className="w-full h-full relative overflow-hidden flex items-center justify-center">
       
       <div className="absolute left-4 top-1/2 -translate-y-1/2 z-20 flex flex-col gap-2 bg-[#0A0A0A]/60 backdrop-blur-xl p-2 rounded-2xl border border-[#A3B8B2]/10 shadow-lg">
-        {BUILDING_LEVELS.map(lvl => (
-          <button
-            key={lvl}
-            onClick={() => setActiveLevel(lvl)} 
-            className={`w-10 h-10 rounded-xl font-bold transition-all ${
-              activeLevel === lvl 
-                ? "bg-[#14C89B] text-black shadow-[0_0_15px_rgba(20,200,155,0.4)]" 
-                : "text-[#A3B8B2] hover:bg-[#14C89B]/20"
-            }`}
-          >
-            {lvl}
-          </button>
-        ))}
+        {BUILDING_LEVELS.map(lvl => {
+          const isCurrent = activeLevel === lvl;
+          // Check if ANY artifact in memory belongs to this specific floor level
+          const hasData = Object.values(roomArtifacts || {}).some((artifact: any) => artifact.floor === lvl);
+          
+          let buttonStyles = "text-[#A3B8B2] hover:bg-[#14C89B]/20";
+          if (isCurrent) {
+             // Selected Floor -> Bright Green
+             buttonStyles = "bg-[#14C89B] text-black shadow-[0_0_15px_rgba(20,200,155,0.4)]";
+          } else if (hasData) {
+             // Not Selected, but HAS data -> Dark Green
+             buttonStyles = "bg-[#0A664F] text-white shadow-sm"; 
+          }
+
+          return (
+            <button
+              key={lvl}
+              onClick={() => setActiveLevel(lvl)} 
+              className={`w-10 h-10 rounded-xl font-bold transition-all ${buttonStyles}`}
+            >
+              {lvl}
+            </button>
+          );
+        })}
       </div>
 
       <AnimatePresence>
@@ -86,8 +102,9 @@ export default function InteractiveMap(props: InteractiveMapProps) {
               <Floor2Base 
                 activeTools={props.activeTools} 
                 selectedRooms={selectedRooms} 
-                onToggleRoom={onRoomToggle} // PASSING UP
+                onToggleRoom={onRoomToggle}
                 roomHealthData={roomHealthData}
+                roomArtifacts={roomArtifacts} // NEW
               />
             ) : (
               <div className="w-full text-center text-[#A3B8B2]/50 italic p-20">

@@ -2,7 +2,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import InteractiveMap from "@/components/map/InteractiveMap"; 
-import { AppState, ViewType } from "@/app/page"; // <-- Ensure ViewType is imported
+import { AppState, ViewType } from "@/app/page"; 
 import { motion, LayoutGroup } from "framer-motion";
 import { RoomHealth } from "@/components/map/constants";
 
@@ -13,15 +13,15 @@ interface MapStageProps {
   setActiveLevel: (level: string) => void;
   selectedRooms: string[];
   onRoomToggle: (roomId: string) => void; 
-  
-  // FIX: MapStage expects the new ViewType
   viewMode: ViewType;
   setViewMode: (mode: ViewType) => void;
-  
   isZoomed: boolean;
   setIsZoomed: (zoom: boolean) => void;
   roomHealthData: Record<string, RoomHealth>;
   onToggleSelect: (toggle: string) => void;
+  
+  // NEW: Accept the artifacts dictionary
+  roomArtifacts: Record<string, any>;
 }
 
 const ALL_TOGGLES = ["Air Quality", "Doors/Windows", "Lights", "Occupancy", "Climate", "Schedule", "Diagnostics"];
@@ -58,19 +58,18 @@ export default function MapStage(props: MapStageProps) {
           setActiveLevel={props.setActiveLevel}
           selectedRooms={props.selectedRooms}
           onRoomToggle={props.onRoomToggle} 
-          
-          // FIX: Translate the new types down to the legacy types for InteractiveMap
           viewMode={props.viewMode === "snapshot" ? "map" : "graph"}
           setViewMode={(mode) => props.setViewMode(mode === "map" ? "snapshot" : "graph")}
-          
           isZoomed={props.isZoomed}
           setIsZoomed={props.setIsZoomed}
           roomHealthData={props.roomHealthData}
+          
+          // NEW: Pass artifacts down to InteractiveMap
+          roomArtifacts={props.roomArtifacts}
         />
       </div>
 
       <LayoutGroup>
-         {/* ... Rest of your toggle buttons remain exactly the same ... */}
          <div className="w-full shrink-0 flex items-center justify-center gap-4 flex-wrap pb-2">
           {availableToggles.length > 0 && (
             <motion.div layout className="flex items-center bg-[#053D2F]/80 border border-[#0A664F] rounded-full p-1.5 shadow-[0_4px_20px_rgba(20,200,155,0.15)]">
