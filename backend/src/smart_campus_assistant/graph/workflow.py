@@ -68,6 +68,14 @@ TOOL_PHRASES = {
     "get_temp_humidity": [
         "Checking climate stats for {room} ({timeframe})...",
         "Analyzing {timeframe} climate stability in {room}..."
+    ],
+    "get_energy_infrastructure": [
+        "Auditing power metrics for {room} ({timeframe})...",
+        "Analyzing infrastructure load for {room} ({timeframe})..."
+    ],
+    "search_topology": [
+        "Searching campus records for: {query}...",
+        "Retrieving spatial documentation for your query..."
     ]
 }
 
@@ -84,7 +92,9 @@ BACKEND_TO_UI_TOOLS = {
     "get_occupancy": "Occupancy",
     "get_door_window_status": "Doors/Windows",
     "get_ambient_lights": "Lights",
-    "get_campus_diagnostics": "Diagnostics"
+    "get_campus_diagnostics": "Diagnostics",
+    "get_energy_infrastructure": "Energy",
+    "search_topology": "Topology"
 }
 
 # ==========================================
@@ -184,11 +194,14 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
             elif kind == "on_tool_start":
                 tool_name = event["name"]
                 if tool_name != "tools":
-                    has_called_tools = True # Flag that we have entered the tool phase
+                    has_called_tools = True
                     
                     args = event["data"].get("input", {})
+                    
+                    # Extract variables safely with fallbacks
                     room_id = args.get("room_id") or args.get("room") or "selected area"
                     timeframe = args.get("timeframe") or "now"
+                    query_val = args.get("query") or args.get("search_query") or "your request" # NEW: For Topology
                     
                     logger.info(f"[AGENT TOOL] Executing: {tool_name} | Target: {room_id} | Args: {args}")
                     
@@ -198,8 +211,14 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
                         ui_sync_data["rooms"].add(room_id)
                     
                     # Fetch dynamic phrase or fallback to generic
-                    phrases = TOOL_PHRASES.get(tool_name, [f"Running {ui_tool_name} for {{room}}..."])
-                    status_msg = random.choice(phrases).format(room=room_id, timeframe=timeframe)
+                    phrases = TOOL_PHRASES.get(tool_name, [f"Running {ui_tool_name}..."])
+                    
+                    # NEW: Pass all three potential variables into the format string
+                    status_msg = random.choice(phrases).format(
+                        room=room_id, 
+                        timeframe=timeframe,
+                        query=query_val
+                    )
                     
                     # Send unified llm_status payload
                     await websocket.send_json({

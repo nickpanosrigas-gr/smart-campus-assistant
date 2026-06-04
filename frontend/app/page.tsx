@@ -5,11 +5,15 @@ import MapStage from "@/components/desktop/MapStage";
 import { RoomHealth } from "@/components/map/constants";
 
 export type AppState = "idle" | "routing" | "tool_execution" | "resolved";
-export type ViewMode = "map" | "graph";
+export type ViewType = "snapshot" | "graph" | "schedule"; // NEW: Expanded views
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/ws/chat";
+// --- NEW INTERFACES ---
+export interface LLMStatus {
+  state: "thinking" | "tool_use";
+  message: string;
+  tool_name?: string;
+}
 
-// --- PER-FLOOR STATE INTERFACE ---
 interface FloorState {
   selectedRooms: string[];
   activeTools: string[];
@@ -17,7 +21,9 @@ interface FloorState {
   isZoomed: boolean;
 }
 
-// --- HELPER: MAP FLOORS TO ROOMS ---
+const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/ws/chat";
+
+// Helper for Manual Map Clicks
 const getRoomsForFloor = (floor: string) => {
   if (floor === "-3") return ["parkin.c"];
   if (floor === "-2") return ["parkin.b"];
@@ -34,7 +40,11 @@ const getRoomsForFloor = (floor: string) => {
 
 export default function DesktopDashboard() {
   const [appState, setAppState] = useState<AppState>("idle");
-  const [viewMode, setViewMode] = useState<ViewMode>("map");
+  
+  // --- NEW: ARTIFACT & VIEW STATES ---
+  const [llmStatus, setLlmStatus] = useState<LLMStatus | null>(null);
+  const [roomArtifacts, setRoomArtifacts] = useState<Record<string, any>>({});
+  const [currentViewType, setCurrentViewType] = useState<ViewType>("snapshot");
   
   // Floor States Dictionary & Tracker
   const [floorStates, setFloorStates] = useState<Record<string, FloorState>>({});
@@ -45,15 +55,11 @@ export default function DesktopDashboard() {
   const [messages, setMessages] = useState<Array<{ sender: "user" | "agent"; text: string }>>([]);
   
   const ws = useRef<WebSocket | null>(null);
-  
-  // --- NEW: REF TO PREVENT STALE CLOSURES IN WEBSOCKET ---
   const activeLevelRef = useRef(activeLevel);
 
-  // Derived current state for the active floor
   const currentFloor = floorStates[activeLevel] || { selectedRooms: [], activeTools: [], roomHealthData: {}, isZoomed: false };
   const { selectedRooms, activeTools, roomHealthData, isZoomed } = currentFloor;
 
-  // Helper to update state for a specific floor without losing others
   const updateFloor = (level: string, updates: Partial<FloorState>) => {
     setFloorStates(prev => ({
       ...prev,
@@ -61,24 +67,69 @@ export default function DesktopDashboard() {
     }));
   };
 
-  // --- BROWSER CACHING LOGIC ---
+// --- COMPREHENSIVE BROWSER CACHING LOGIC (page.tsx) ---
+  
+  // 1. Load Everything on Mount
   useEffect(() => {
     const cachedFloors = sessionStorage.getItem("floorStates");
     if (cachedFloors) setFloorStates(JSON.parse(cachedFloors));
+    
     const cachedLevel = sessionStorage.getItem("activeLevel");
     if (cachedLevel) setActiveLevel(cachedLevel);
+
+    const cachedMessages = sessionStorage.getItem("chatMessages");
+    if (cachedMessages) setMessages(JSON.parse(cachedMessages));
+
+    const cachedArtifacts = sessionStorage.getItem("roomArtifacts");
+    if (cachedArtifacts) setRoomArtifacts(JSON.parse(cachedArtifacts));
+
+    const cachedTools = sessionStorage.getItem("sessionTools");
+    if (cachedTools) setSessionTools(JSON.parse(cachedTools));
+
+    const cachedContext = sessionStorage.getItem("contextData");
+    if (cachedContext) setContextData(JSON.parse(cachedContext));
+    
+    const cachedStatus = sessionStorage.getItem("llmStatus");
+    if (cachedStatus && cachedStatus !== "null") setLlmStatus(JSON.parse(cachedStatus));
+
+    const cachedViewType = sessionStorage.getItem("currentViewType");
+    if (cachedViewType) setCurrentViewType(cachedViewType as ViewType);
   }, []);
 
+  // 2. Save Everything on Change
   useEffect(() => {
     sessionStorage.setItem("floorStates", JSON.stringify(floorStates));
   }, [floorStates]);
 
   useEffect(() => {
     sessionStorage.setItem("activeLevel", activeLevel);
-    // Keep the ref strictly in sync with the state so the WebSocket always sees the latest floor
     activeLevelRef.current = activeLevel; 
   }, [activeLevel]);
-  // ------------------------------
+
+  useEffect(() => {
+    sessionStorage.setItem("chatMessages", JSON.stringify(messages));
+  }, [messages]);
+
+  useEffect(() => {
+    sessionStorage.setItem("roomArtifacts", JSON.stringify(roomArtifacts));
+  }, [roomArtifacts]);
+
+  useEffect(() => {
+    sessionStorage.setItem("sessionTools", JSON.stringify(sessionTools));
+  }, [sessionTools]);
+
+  useEffect(() => {
+    sessionStorage.setItem("contextData", JSON.stringify(contextData));
+  }, [contextData]);
+
+  useEffect(() => {
+    sessionStorage.setItem("llmStatus", JSON.stringify(llmStatus));
+  }, [llmStatus]);
+
+  useEffect(() => {
+    sessionStorage.setItem("currentViewType", currentViewType);
+  }, [currentViewType]);
+  // --------------------------------------------------------
 
   useEffect(() => {
     ws.current = new WebSocket(WS_URL);
@@ -88,57 +139,73 @@ export default function DesktopDashboard() {
       try {
         const data = JSON.parse(event.data);
 
-        if (data.type === "tool_start") {
-          setAppState("tool_execution");
-          if (data.tools_used) {
-             setFloorStates(prev => {
-               // Use the ref here to avoid stale closures
-               const currentLvl = activeLevelRef.current;
-               const floor = prev[currentLvl] || { selectedRooms: [], activeTools: [], roomHealthData: {}, isZoomed: false };
-               const newTools = data.tools_used.filter((t: string) => !floor.activeTools.includes(t));
-               return { ...prev, [currentLvl]: { ...floor, activeTools: [...newTools, ...floor.activeTools] }};
-             });
-          }
+        // --- 1. LLM STATUS STREAM ---
+        if (data.type === "llm_status") {
+          setAppState(data.state === "thinking" ? "routing" : "tool_execution");
+          setLlmStatus({
+            state: data.state,
+            message: data.message,
+            tool_name: data.tool_name
+          });
         }
         
-        if (data.type === "map_update" || data.room_data || data.target_rooms) {
-          let targetLevel = activeLevelRef.current;
+        // --- 2. THE SMART SERVER ARTIFACT PIPELINE ---
+        if (data.type === "map_update" && data.artifact) {
+          const artifact = data.artifact;
+          const targetLevel = artifact.floor || activeLevelRef.current;
+          const roomId = artifact.room_id;
           
-          // Auto-Switch Floors
-          if (data.target_rooms && data.target_rooms.length > 0) {
-            const firstRoom = data.target_rooms[0];
-            if (firstRoom === "building") targetLevel = "B";
-            else if (firstRoom.startsWith("5.")) targetLevel = "5";
-            else if (firstRoom.startsWith("4.")) targetLevel = "4";
-            else if (firstRoom.startsWith("3.")) targetLevel = "3";
-            else if (firstRoom.startsWith("2.")) targetLevel = "2";
-            else if (firstRoom.startsWith("1.") || firstRoom === "kitchen") targetLevel = "1";
-            else if (firstRoom === "entrance" || firstRoom === "restaurant") targetLevel = "0";
-            else if (firstRoom === "data_center") targetLevel = "-1";
-            else if (firstRoom === "parkin.b") targetLevel = "-2";
-            else if (firstRoom === "parkin.c") targetLevel = "-3";
-            
-            setActiveLevel(targetLevel);
+          // A. Auto-Switch Floors based on backend calculation
+          if (artifact.floor && artifact.floor !== activeLevelRef.current) {
+            setActiveLevel(artifact.floor);
           }
 
+          // B. Auto-Route the UI View (Snapshot, Graph, Schedule)
+          if (artifact.view_type) {
+            setCurrentViewType(artifact.view_type as ViewType);
+          }
+
+          // C. Save the raw artifact payload for the UI components to render
+          if (roomId) {
+            setRoomArtifacts(prev => ({
+              ...prev,
+              [roomId]: artifact
+            }));
+          }
+
+          // D. Update the Visual Map State (Colors, Zoom, Active Tools)
           setFloorStates(prev => {
             const floor = prev[targetLevel] || { selectedRooms: [], activeTools: [], roomHealthData: {}, isZoomed: false };
-            let newZoom = floor.isZoomed;
-            if (data.target_rooms) {
-              newZoom = (data.target_rooms.length === 1 && data.target_rooms[0] !== "building");
+            
+            // Zoom in unless it's a building-wide macro view
+            const newZoom = roomId && roomId !== "building";
+            
+            // Color the map polygon if the tool provided a status (e.g. good, warning)
+            const updatedHealthData = { ...floor.roomHealthData };
+            if (artifact.status && roomId) {
+               updatedHealthData[roomId] = artifact.status;
             }
+
+            // Ensure the tool is visually toggled "ON" in the pill menu
+            const newActiveTools = [...floor.activeTools];
+            if (artifact.domain && !newActiveTools.includes(artifact.domain)) {
+               newActiveTools.unshift(artifact.domain);
+            }
+
             return {
               ...prev,
               [targetLevel]: {
                 ...floor,
-                selectedRooms: data.target_rooms || floor.selectedRooms,
+                selectedRooms: roomId ? [roomId] : floor.selectedRooms,
                 isZoomed: newZoom,
-                roomHealthData: { ...floor.roomHealthData, ...(data.room_data || {}) }
+                roomHealthData: updatedHealthData,
+                activeTools: newActiveTools
               }
             };
           });
         }
 
+        // --- 3. CHAT TEXT UPDATES ---
         if (data.text) {
           const replyText = data.text;
           setMessages(prev => {
@@ -150,10 +217,15 @@ export default function DesktopDashboard() {
             return [...prev, { sender: "agent", text: replyText }];
           });
           setAppState("resolved");
+          setLlmStatus(null); // Clear the dynamic status message
         }
 
-        if (data.type === "resolved") setAppState("resolved");
+        if (data.type === "resolved") {
+          setAppState("resolved");
+          setLlmStatus(null);
+        }
 
+        // --- 4. TELEMETRY & CONTEXT UPDATES ---
         if (data.type === "context_update") {
            setContextData({ tokens: data.tokens });
            setSessionTools(data.session_tools);
@@ -165,7 +237,7 @@ export default function DesktopDashboard() {
     };
     
     return () => { if (ws.current) ws.current.close(); };
-  }, []); // <--- CRITICAL FIX: Empty dependency array so it only mounts once
+  }, []); 
 
   const handleUserMessage = (msg: string) => {
     if (!msg.trim()) return;
@@ -192,7 +264,6 @@ export default function DesktopDashboard() {
     
     let roomsToFetch = selectedRooms;
 
-    // --- AUTO-SELECT ALL ROOMS IF NONE SELECTED ---
     if (isActivating && selectedRooms.length === 0) {
       roomsToFetch = getRoomsForFloor(activeLevel);
       updateFloor(activeLevel, { activeTools: newTools, selectedRooms: roomsToFetch });
@@ -214,9 +285,8 @@ export default function DesktopDashboard() {
     const hasActiveTools = activeTools.length > 0;
     const isCurrentlySelected = selectedRooms.includes(roomId);
 
-    // --- BLOCK UNSELECTING IF CONTEXT WAS FETCHED ---
     if (isCurrentlySelected && hasActiveTools) {
-       return; // Silently ignore the unselect attempt
+       return; 
     }
 
     let newSelection = [];
@@ -224,7 +294,6 @@ export default function DesktopDashboard() {
     let isSelecting = false;
 
     if (isCurrentlySelected) {
-        // Allowed to unselect ONLY because hasActiveTools is false
         newSelection = selectedRooms.filter(r => r !== roomId);
         if (newSelection.length !== 1 && isZoomed) newZoom = false;
     } else {
@@ -234,7 +303,6 @@ export default function DesktopDashboard() {
 
     updateFloor(activeLevel, { selectedRooms: newSelection, isZoomed: newZoom });
 
-    // Auto-fetch tools for the newly selected room
     if (isSelecting && ws.current && ws.current.readyState === WebSocket.OPEN && hasActiveTools) {
         activeTools.forEach(tool => {
             ws.current?.send(JSON.stringify({
@@ -248,19 +316,19 @@ export default function DesktopDashboard() {
   };
 
   const handleResetSession = () => {
-    // 1. Reset all frontend variables to their defaults
     setFloorStates({});
     setActiveLevel("B");
     setMessages([]);
     setSessionTools([]);
     setContextData({ tokens: 0 });
+    setRoomArtifacts({});
+    setCurrentViewType("snapshot");
+    setLlmStatus(null);
     setAppState("idle");
     
-    // 2. Clear out local storage so it doesn't immediately reload the old state
     sessionStorage.removeItem("floorStates");
     sessionStorage.removeItem("activeLevel");
 
-    // 3. Notify backend to clear LangGraph memory checkpointer
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({ type: "reset_session" }));
     }
@@ -269,8 +337,11 @@ export default function DesktopDashboard() {
   return (
     <main className="w-full h-screen flex overflow-hidden bg-gradient-to-b from-[#0A664F] to-[#0A0A0A] text-[#A3B8B2] p-4 gap-4">
       
-      {/* LEFT SIDE: MAP CONTAINER */}
+      {/* LEFT SIDE: MAP & DATA STAGE CONTAINER */}
       <div className="flex-1 flex flex-col min-w-0 bg-[#0A0A0A]/40 border border-[#A3B8B2]/10 rounded-3xl backdrop-blur-md overflow-hidden relative shadow-2xl h-full">
+        {/* IMPORTANT: You will eventually update MapStage to accept currentViewType 
+          and roomArtifacts so it knows whether to render the 3D Map, the Graph, or the Schedule List. 
+        */}
         <MapStage 
           appState={appState} 
           activeTools={activeTools}
@@ -278,8 +349,11 @@ export default function DesktopDashboard() {
           setActiveLevel={setActiveLevel} 
           selectedRooms={selectedRooms}
           onRoomToggle={handleRoomSelect}
-          viewMode={viewMode}
-          setViewMode={setViewMode}
+          
+          // FIX: Pass the state directly to MapStage
+          viewMode={currentViewType} 
+          setViewMode={setCurrentViewType}
+          
           isZoomed={isZoomed}
           setIsZoomed={(z) => updateFloor(activeLevel, { isZoomed: z })}
           roomHealthData={roomHealthData}
@@ -291,6 +365,7 @@ export default function DesktopDashboard() {
       <div className="w-[630px] flex-shrink-0 h-full transition-all duration-500 ease-in-out">
         <ChatPanel 
           appState={appState} 
+          llmStatus={llmStatus} /* NEW: Passing down the dynamic text */
           onSendMessage={handleUserMessage}
           activeTools={activeTools}
           messages={messages}
