@@ -60,14 +60,15 @@ export default function Floor2Base({ activeTools, selectedRooms, onToggleRoom, r
     return getOutlineColor(roomId);
   };
 
+  // Parses the backend JSON and renders it beautifully in the center of the room
   const renderRoomData = (roomId: string) => {
     if (!roomArtifacts || !roomArtifacts[roomId]) return null;
     const artifact = roomArtifacts[roomId];
 
     if (artifact.view_type === "error") {
       return (
-        <div className="w-full h-full flex flex-col items-center justify-center font-bold" style={{ color: SENSOR_COLORS.error, textShadow: '0px 2px 4px rgba(0,0,0,0.8)' }}>
-          <span className="text-[9px] text-center drop-shadow-md leading-tight max-w-[75px] whitespace-normal px-1">
+        <div className="w-full h-full flex flex-col items-center justify-center font-sans" style={{ color: SENSOR_COLORS.error }}>
+          <span className="text-[10px] text-center font-medium leading-tight max-w-[120px] whitespace-normal px-1 bg-[#0A0A0A]/60 p-1 rounded">
             ⚠️ {artifact.message || "Offline"}
           </span>
         </div>
@@ -80,6 +81,61 @@ export default function Floor2Base({ activeTools, selectedRooms, onToggleRoom, r
 
     if (!aggs && !results && domain !== "Schedule") return null;
 
+    if (domain === "Schedule") {
+      const isFree = (Array.isArray(aggs) && aggs.length === 0) || 
+                     (Array.isArray(results) && results.length === 0) || 
+                     (!aggs && !results);
+      
+      if (isFree) {
+        return (
+          <div className="w-full h-full flex flex-col items-center justify-center font-sans font-medium" style={{ color: SENSOR_COLORS.good }}>
+            <span className="text-lg leading-none">Free</span>
+            <span className="text-[10px] opacity-80 mt-1">No classes now</span>
+          </div>
+        );
+      } else {
+        const activeClass = (Array.isArray(aggs) && aggs.length > 0) ? aggs[0] : 
+                            (Array.isArray(results) && results.length > 0 ? results[0] : null);
+        if (activeClass) {
+          return (
+            <div className="w-full h-full flex flex-col items-start justify-center font-sans text-[8px] leading-[1.3] p-1 text-[#A3B8B2]">
+              <div className="font-bold text-[9px] mb-1 text-[#14C89B] truncate w-full">
+                {activeClass.course_name} (Sem {activeClass.semester})
+              </div>
+              <div className="truncate w-full"><span className="font-semibold text-white"></span> IN PROGRESS (Ends in {activeClass.time_remaining})</div>
+              <div className="truncate w-full"><span className="font-semibold text-white"></span> {activeClass.start_time} - {activeClass.end_time}</div>
+              <div className="truncate w-full"><span className="font-semibold text-white"></span> {activeClass.rooms_id?.[0] || roomId}</div>
+              <div className="truncate w-full"><span className="font-semibold text-white"></span> {activeClass.instructor_name}</div>
+              <div className="truncate w-full"><span className="font-semibold text-white"></span> {activeClass.course_type}</div>
+            </div>
+          );
+        }
+      }
+    }
+
+    if (domain === "Diagnostics") {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-center font-sans text-[10px] leading-[1.4] p-1 text-[#A3B8B2] text-center">
+          <div className="truncate w-full">
+            <span className="font-semibold text-white">Total:</span> {aggs?.total || 0}
+          </div>
+          <div className="truncate w-full" style={{ color: SENSOR_COLORS.good }}>
+            <span className="font-semibold text-white">Good:</span> {aggs?.good || 0}
+          </div>
+          <div className="truncate w-full" style={{ color: SENSOR_COLORS.warning }}>
+            <span className="font-semibold text-white">Warning:</span> {aggs?.warning || 0}
+          </div>
+          <div className="truncate w-full" style={{ color: SENSOR_COLORS.critical }}>
+            <span className="font-semibold text-white">Critical:</span> {aggs?.critical || 0}
+          </div>
+          <div className="truncate w-full" style={{ color: SENSOR_COLORS.error }}>
+            <span className="font-semibold text-white">Error:</span> {aggs?.error || 0}
+          </div>
+        </div>
+      );
+    }
+
+    // 🚨 GENERIC RENDERER (Climate, Lights, Occupancy, Air Quality, Doors) 🚨
     let topText = "";
     let bottomText = "";
 
@@ -92,35 +148,24 @@ export default function Floor2Base({ activeTools, selectedRooms, onToggleRoom, r
       topText = `${occ} / ${cap}`;
       bottomText = "People";
     } else if (domain === "Doors/Windows" && aggs) {
-      topText = aggs.open_count > 0 ? `${aggs.open_count} Open` : "Secure";
+      // FIX APPLIED HERE
+      const open = aggs.open_count ?? "-";
+      const total = aggs.total_count ?? "-";
+      topText = `${open} / ${total}`;
+      bottomText = "Open";
     } else if (domain === "Lights" && aggs) {
       topText = `${aggs.light_level ?? "0"} Lvl`;
     } else if (domain === "Air Quality" && aggs) {
       topText = `CO2: ${aggs.co2 || "--"}`;
       bottomText = `PM2.5: ${aggs.pm2_5 || "--"}`;
-    } else if (domain === "Diagnostics" && aggs) {
-      const issues = (aggs.critical || 0) + (aggs.warning || 0) + (aggs.error || 0);
-      topText = issues > 0 ? `${issues} ⚠️` : "✅ Good";
-    } else if (domain === "Schedule") {
-      const isFree = (Array.isArray(aggs) && aggs.length === 0) || 
-                     (Array.isArray(results) && results.length === 0) || 
-                     (!aggs && !results);
-      
-      if (isFree) {
-        topText = "Free";
-        bottomText = "No classes now";
-      } else {
-        topText = "Busy";
-        bottomText = "Class in session";
-      }
     }
 
     const textColor = SENSOR_COLORS[artifact.status as RoomHealth] || SENSOR_COLORS.good;
 
     return (
-      <div className="w-full h-full flex flex-col items-center justify-center font-bold" style={{ color: textColor, textShadow: '0px 2px 4px rgba(0,0,0,0.8)' }}>
-        <span className="text-lg drop-shadow-md leading-none">{topText}</span>
-        {bottomText && <span className="text-[10px] opacity-80 drop-shadow-md mt-1">{bottomText}</span>}
+      <div className="w-full h-full flex flex-col items-center justify-center font-sans font-medium" style={{ color: textColor }}>
+        <span className="text-xl leading-none">{topText}</span>
+        {bottomText && <span className="text-[10px] opacity-90 mt-1">{bottomText}</span>}
       </div>
     );
   };
@@ -360,25 +405,25 @@ export default function Floor2Base({ activeTools, selectedRooms, onToggleRoom, r
 
       <g id="Data-Centroids" className="pointer-events-none">
          {selectedRooms.includes("2.4") && (
-           <foreignObject x={550} y={250} width="80" height="40">
+           <foreignObject x={510} y={230} width="180" height="80">
                {renderRoomData("2.4")}
            </foreignObject>
          )}
 
          {selectedRooms.includes("2.3") && (
-           <foreignObject x={330} y={175} width="80" height="40">
+           <foreignObject x={295} y={165} width="175" height="80">
                {renderRoomData("2.3")}
            </foreignObject>
          )}
 
          {selectedRooms.includes("2.2") && (
-           <foreignObject x={218} y={285} width="80" height="40">
+           <foreignObject x={200} y={260} width="150" height="80">
                {renderRoomData("2.2")}
            </foreignObject>
          )}
 
          {selectedRooms.includes("2.1") && (
-           <foreignObject x={380} y={350} width="80" height="40">
+           <foreignObject x={330} y={325} width="150" height="80">
                {renderRoomData("2.1")}
            </foreignObject>
          )}

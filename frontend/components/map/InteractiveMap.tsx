@@ -94,7 +94,7 @@ export default function InteractiveMap(props: InteractiveMapProps) {
             exit={{ opacity: 0, rotateY: 90 }}
             className="w-full max-w-4xl absolute transition-transform duration-700 ease-[cubic-bezier(0.34,1.56,0.64,1)]"
             style={{ transformOrigin: zoomOrigin }}
-            animate={{ scale: isZoomed ? 1.8 : (activeLevel === "B" ? 0.68 : 1) }}
+            animate={{ scale: isZoomed ? 2.0 : (activeLevel === "B" ? 0.68 : 1.25) }}
           >
             {activeLevel === "B" ? (
               <BuildingView />
