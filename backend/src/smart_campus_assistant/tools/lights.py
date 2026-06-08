@@ -13,7 +13,7 @@ from src.smart_campus_assistant.clients.astral_client import astral_client
 Rooms = Literal[
     'parkin.c', 'parkin.b', 'data_center', 'entrance', 'restaurant', 
     '1.1', '1.2', 'kitchen', '2.1', '2.2', '2.3', '2.4', 
-    '3.7', '3.8', '3.9', '4.9', '5.6', '5.7'
+    '3.7', '3.8', '3.9', '4.9', '5.6', '5.7', 'building'
 ]
 
 Timeframes = Literal[
@@ -140,13 +140,18 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     Tracks indoor illumination using a discrete 0-5 scale.
     Uses state-transition logic to prevent mathematical hallucinations and maps integers to semantic labels.
     """
-    floor_val = str(room)[0] if str(room)[0].isdigit() else "0"
+    room_str = str(room).lower()
     
     # 1. Resolve All Devices in Room
-    all_iaq_devices = registry.get_devices_by_room_and_type(room, "IAQ")
+    if room_str == 'building':
+        floor_val = "B"
+        all_iaq_devices = registry.get_all_devices_by_type("IAQ")
+    else:
+        floor_val = str(room)[0] if str(room)[0].isdigit() else "0"
+        all_iaq_devices = registry.get_devices_by_room_and_type(room, "IAQ")
     
     if not all_iaq_devices:
-        error_msg = f"Query_Context:\n  Room: {room}\nError: No IAQ (Light) sensors found in this room."
+        error_msg = f"Query_Context:\n  Room: {room}\nError: No IAQ (Light) sensors found in this target."
         return error_msg, {
             "type": "map_update",
             "artifact": {
@@ -163,7 +168,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     offline_sensors = []
     
     for device_name, device_data in all_iaq_devices.items():
-        device_id = device_data.get("id")
+        device_id = device_data.get("id") if isinstance(device_data, dict) else device_data
         if not device_id: 
             offline_sensors.append(device_name)
             continue
@@ -219,9 +224,18 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     
     active_sensors_lines = [f"  Active_Sensors: {active_count}/{total_count} Online"]
     for device_name, device_data in active_iaq_devices.items():
-        z = device_data.get("zone", "Unspecified")
-        t = device_data.get("tag", "Unspecified")
-        active_sensors_lines.append(f"    - {device_name} (IAQ): Zone: {z}, Tag: {t}")
+        if isinstance(device_data, dict):
+            z = device_data.get("zone", "Unspecified")
+            t = device_data.get("tag", "Unspecified")
+            if room_str == 'building':
+                r = device_data.get("room", "Unknown")
+                place = f"Room: {r}, Zone: {z}, Tag: {t}"
+            else:
+                place = f"Zone: {z}, Tag: {t}"
+        else:
+            place = "Unspecified"
+            
+        active_sensors_lines.append(f"    - {device_name} (IAQ): {place}")
         
     if offline_sensors:
         active_sensors_lines.append(f"  Offline_Sensors: {', '.join(offline_sensors)}")
@@ -237,7 +251,8 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             raw_bases = []
             for d_name, d_data in active_iaq_devices.items():
                 try:
-                    raw_bases.append(fetch_prev(d_data.get("id"), ["light_level"]))
+                    d_id = d_data.get("id") if isinstance(d_data, dict) else d_data
+                    raw_bases.append(fetch_prev(d_id, ["light_level"]))
                 except Exception:
                     raw_bases.append({})
             
@@ -303,7 +318,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         output = [
             "Query_Context:",
             "  Domain: Ambient Light Intensity (0-5 Scale)",
-            f"  Room: {room}",
+            f"  Room: {room.upper()}",
             "  Timeframe: Now (Snapshot)",
             f"  Current_Time: {now_ts.strftime('%Y-%m-%d %H:%M:%S')}",
             f"  Active_Context: {current_ctx}"
@@ -369,14 +384,25 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         # 3. Active Sensors processing & text output
         light_vals = []
         for device_name, device_data in active_iaq_devices.items():
-            device_id = device_data.get("id")
+            device_id = device_data.get("id") if isinstance(device_data, dict) else device_data
+            
+            if room_str == 'building' and isinstance(device_data, dict):
+                r_label = device_data.get("room", "Unknown")
+                z_label = device_data.get("zone", "Unspecified")
+                place_label = f"Room: {r_label}, Zone: {z_label}"
+            elif isinstance(device_data, dict):
+                z_label = device_data.get("zone", "Unspecified")
+                place_label = f"Zone: {z_label}"
+            else:
+                place_label = "Unspecified"
+                
             raw_data = tb_client.get_now(device_id, ["light_level"])
             
             if "light_level" in raw_data and raw_data["light_level"]:
                 val = float(raw_data["light_level"][0]["value"])
                 light_vals.append(val)
                 # Keep text intact for LLM
-                output.append(f"  {device_name}: {get_semantic_label(val)}")
+                output.append(f"  {device_name} ({place_label}): {get_semantic_label(val)}")
                 
                 # New Status Logic: 0-1 (good), 2-3 (warning), 4-5 (critical)
                 rounded_val = round(val)
@@ -394,7 +420,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
                 }
             else:
                 # Keep text intact for LLM
-                output.append(f"  {device_name}: No Data (Despite being marked Online)")
+                output.append(f"  {device_name} ({place_label}): No Data (Despite being marked Online)")
                 ui_sensors[device_name] = {
                     "status": "error",
                     "category": "IAQ",
@@ -453,7 +479,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
 
     all_dataframes = []
     for device_name, device_data in active_iaq_devices.items():
-        device_id = device_data.get("id")
+        device_id = device_data.get("id") if isinstance(device_data, dict) else device_data
         
         try:
             raw_data = fetch_method(device_id, ["light_level"])
@@ -473,7 +499,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         online_sensor_names.append(WEATHER_STATION_NAME)
 
     if not all_dataframes:
-        error_msg = f"Query_Context:\n  Room: {room}\nError: No historical light data found for timeframe {timeframe}."
+        error_msg = f"Query_Context:\n  Room: {room.upper()}\nError: No historical light data found for timeframe {timeframe}."
         return error_msg, {
             "type": "map_update",
             "artifact": {
@@ -497,7 +523,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     raw_series = aligned_df['Room_Aggregate'].dropna()
 
     if raw_series.empty:
-        error_msg = f"Query_Context:\n  Room: {room}\nError: Historical data was fetched but contained only invalid values."
+        error_msg = f"Query_Context:\n  Room: {room.upper()}\nError: Historical data was fetched but contained only invalid values."
         return error_msg, {
             "type": "map_update",
             "artifact": {
@@ -573,7 +599,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         output = [
             "Query_Context:",
             "  Domain: Ambient Light Intensity (0-5 Scale)",
-            f"  Room: {room}",
+            f"  Room: {room.upper()}",
             f"  Timeframe: {timeframe} (Long-Term Statistical Profile)",
             f"  Current_Time: {pd.Timestamp.now(tz=settings.TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')}"
         ]
@@ -660,7 +686,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     output = [
         "Query_Context:",
         "  Domain: Ambient Light Intensity (0-5 Scale)",
-        f"  Room: {room}",
+        f"  Room: {room.upper()}",
         f"  Timeframe: {timeframe} ({bin_size} intervals)",
         f"  Current_Time: {pd.Timestamp.now(tz=settings.TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')}"
     ]
@@ -805,21 +831,21 @@ if __name__ == "__main__":
     print("-" * 50)
     try:
         print("\n[Testing]")
-        summary, raw_data = get_ambient_lights.func(room="2.2", timeframe="now")
+        summary, raw_data = get_ambient_lights.func(room="building", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("-" * 50)
 
         print("\n[Testing]")
-        summary, raw_data = get_ambient_lights.func(room="2.1", timeframe="now")
+        summary, raw_data = get_ambient_lights.func(room="building", timeframe="24h")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("-" * 50)
         
         print("\n[Testing]")
-        summary, raw_data = get_ambient_lights.func(room="2.4", timeframe="now")
+        summary, raw_data = get_ambient_lights.func(room="building", timeframe="30d")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)

@@ -1,4 +1,4 @@
-// InteractiveMap.tsx
+// frontend/components/map/InteractiveMap.tsx
 "use client";
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft } from "lucide-react";
@@ -18,8 +18,6 @@ interface InteractiveMapProps {
   isZoomed: boolean;
   setIsZoomed: (zoom: boolean) => void;
   roomHealthData: Record<string, RoomHealth>; 
-  
-  // NEW
   roomArtifacts: Record<string, any>;
 }
 
@@ -41,6 +39,10 @@ export default function InteractiveMap(props: InteractiveMapProps) {
     if (room === "2.2") zoomOrigin = "20% 70%"; 
     if (room === "2.1") zoomOrigin = "70% 70%"; 
   }
+
+  // 👇 Extract the building-wide aggregate artifact dynamically
+  const buildingArtifact = roomArtifacts["building"] || 
+    Object.values(roomArtifacts || {}).find((a: any) => a.floor === "B" || a.room_id === "building");
 
   return (
     <div className="w-full h-full relative overflow-hidden flex items-center justify-center">
@@ -97,14 +99,15 @@ export default function InteractiveMap(props: InteractiveMapProps) {
             animate={{ scale: isZoomed ? 2.0 : (activeLevel === "B" ? 0.68 : 1.25) }}
           >
             {activeLevel === "B" ? (
-              <BuildingView />
+              /* 👇 Fixed: Now hands down the actual aggregate metrics */
+              <BuildingView buildingArtifact={buildingArtifact} />
             ) : activeLevel === "2" ? (
               <Floor2Base 
                 activeTools={props.activeTools} 
                 selectedRooms={selectedRooms} 
                 onToggleRoom={onRoomToggle}
                 roomHealthData={roomHealthData}
-                roomArtifacts={roomArtifacts} // NEW
+                roomArtifacts={roomArtifacts} 
               />
             ) : (
               <div className="w-full text-center text-[#A3B8B2]/50 italic p-20">

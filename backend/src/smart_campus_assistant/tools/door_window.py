@@ -12,7 +12,7 @@ from src.smart_campus_assistant.clients.thingsboard_client import tb_client
 Rooms = Literal[
     'parkin.c', 'parkin.b', 'data_center', 'entrance', 'restaurant', 
     '1.1', '1.2', 'kitchen', '2.1', '2.2', '2.3', '2.4', 
-    '3.7', '3.8', '3.9', '4.9', '5.6', '5.7'
+    '3.7', '3.8', '3.9', '4.9', '5.6', '5.7', 'building'
 ]
 
 Timeframes = Literal[
@@ -86,12 +86,17 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
     Tracks physical access points (Doors/Windows) using Magnetic Contact (MC) sensors.
     Reports Open/Closed states, timelines of physical entry, and long-term anomalies.
     """
-    floor_val = str(room)[0] if str(room)[0].isdigit() else "0"
-
-    all_mc_devices = registry.get_devices_by_room_and_type(room, "MC")
+    room_str = str(room).lower()
+    
+    if room_str == 'building':
+        floor_val = "B"
+        all_mc_devices = registry.get_all_devices_by_type("MC")
+    else:
+        floor_val = str(room)[0] if str(room)[0].isdigit() else "0"
+        all_mc_devices = registry.get_devices_by_room_and_type(room, "MC")
     
     if not all_mc_devices:
-        error_msg = f"Query_Context:\n  Room: {room}\nError: No MC (Door/Window) sensors found in this room."
+        error_msg = f"Query_Context:\n  Room: {room}\nError: No MC (Door/Window) sensors found in this target."
         return error_msg, {
             "type": "map_update",
             "artifact": {
@@ -143,7 +148,7 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
     header_lines = [
         "Query_Context:",
         "  Domain: Door & Window Access State (Open/Closed)",
-        f"  Room: {room}",
+        f"  Room: {room.upper()}",
     ]
     
     if timeframe == "now": header_lines.append("  Timeframe: Now (Snapshot)")
@@ -160,7 +165,12 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
     for d_name, d_data in active_mc_devices.items():
         grp = d_data.get("group", "Unknown")
         tag = d_data.get("tag", "Unspecified")
-        header_lines.append(f"    - {d_name} ({grp}): Zone: Unspecified, Tag: {tag}")
+        
+        # Add room labels if evaluating the whole building
+        room_label = d_data.get("room", "Unknown") if room_str == "building" else "Unspecified"
+        context_str = f"Room: {room_label}, Tag: {tag}" if room_str == "building" else f"Zone: Unspecified, Tag: {tag}"
+        
+        header_lines.append(f"    - {d_name} ({grp}): {context_str}")
         if "door" in grp.lower(): doors.append(d_name)
         if "window" in grp.lower(): windows.append(d_name)
         
@@ -223,7 +233,6 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
         ])
         
         # --- NEW NESTED ARTIFACT LOGIC ---
-        ui_aggregates = {"open_count": 0, "total_count": total_count}
         ui_sensors = {}
         
         # 1. Offline Sensors processing
@@ -235,6 +244,8 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
             }
         
         open_count = 0
+        open_doors_count = 0
+        open_windows_count = 0
         
         # 2. Active Sensors processing & text output
         for device_name, device_data in active_mc_devices.items():
@@ -251,6 +262,8 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
                 # Update counters and status (Open = good, Closed = critical)
                 if is_open:
                     open_count += 1
+                    if device_name in doors: open_doors_count += 1
+                    if device_name in windows: open_windows_count += 1
                     sensor_status = "good"
                 else:
                     sensor_status = "critical"
@@ -269,7 +282,14 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
                     "readings": None
                 }
                 
-        ui_aggregates["open_count"] = open_count
+        ui_aggregates = {
+            "total_count": total_count,
+            "open_count": open_count,
+            "total_doors": len(doors),
+            "open_doors": open_doors_count,
+            "total_windows": len(windows),
+            "open_windows": open_windows_count
+        }
                 
         # 3. Overall Room Status Logic 
         if total_count > 0:
@@ -372,15 +392,30 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
     ui_df = combined_df[[col for col in combined_df.columns if col in active_mc_devices.keys()]].copy()
     
     # --- NEW: Binning & Delta (Change-Only) logic for the graph artifact ---
-    if timeframe in ["30d", "90d"]:
-        # For 30d/90d, show 1 if it was opened at any point during that day
-        artifact_df = ui_df.resample('1D').max()
+    if room_str == 'building':
+        artifact_df = pd.DataFrame(index=ui_df.index)
+        d_cols = [c for c in doors if c in ui_df.columns]
+        w_cols = [c for c in windows if c in ui_df.columns]
+        
+        artifact_df['open_doors'] = ui_df[d_cols].sum(axis=1) if d_cols else 0
+        artifact_df['open_windows'] = ui_df[w_cols].sum(axis=1) if w_cols else 0
+        
+        if timeframe in ["30d", "90d"]:
+            artifact_df = artifact_df.resample('1D').max()
+            
+        metadata = {"open_doors": "Open Doors Count", "open_windows": "Open Windows Count"}
     else:
-        # Use the base DataFrame for short timeframes to preserve exact minute changes
-        artifact_df = ui_df
+        if timeframe in ["30d", "90d"]:
+            # For 30d/90d, show 1 if it was opened at any point during that day
+            artifact_df = ui_df.resample('1D').max()
+        else:
+            # Use the base DataFrame for short timeframes to preserve exact minute changes
+            artifact_df = ui_df
+            
+        metadata = {col: "State (1=Open, 0=Closed)" for col in artifact_df.columns}
         
     series_data = []
-    # Track the last value sent to the frontend for each sensor
+    # Track the last value sent to the frontend for each sensor/aggregate to apply delta logic
     last_sent_values = {col: None for col in artifact_df.columns}
     
     for dt, row in artifact_df.iterrows():
@@ -389,14 +424,17 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
         for col in artifact_df.columns:
             val = row[col]
             if pd.notna(val):
-                mapped_val = 1 if val else 0  # Map boolean to 1 (Open) or 0 (Closed)
+                if room_str == 'building':
+                    mapped_val = int(val) # Send the summed integer
+                else:
+                    mapped_val = 1 if val else 0  # Map boolean to 1 (Open) or 0 (Closed)
                 
-                # Only include this sensor in the payload if its value CHANGED
+                # Only include this metric in the payload if its value CHANGED
                 if mapped_val != last_sent_values[col]:
                     point[col] = mapped_val
                     last_sent_values[col] = mapped_val
                     
-        # Only append the timestamp to the array if at least ONE sensor changed state
+        # Only append the timestamp to the array if at least ONE metric changed state
         if len(point) > 1:
             series_data.append(point)
             
@@ -411,7 +449,7 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
             "online_sensors": list(active_mc_devices.keys()),
             "offline_sensors": offline_sensors,
             "series": series_data,
-            "metadata": {col: "State (1=Open, 0=Closed)" for col in artifact_df.columns}
+            "metadata": metadata
         }
     }
 
@@ -477,9 +515,7 @@ def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dic
 
             if outliers:
                 lines.append("      Outliers:")
-                lines.extend(outliers[-10:]) 
-                if len(outliers) > 10:
-                    lines.append(f"        ... and {len(outliers) - 10} older events hidden.")
+                lines.extend(outliers)
             else:
                 lines.append("      Outliers: None detected.")
             return lines

@@ -61,7 +61,7 @@ DISPLAY_NAMES = {
 Rooms = Literal[
     'parkin.c', 'parkin.b', 'data_center', 'entrance', 'restaurant', 
     '1.1', '1.2', 'kitchen', '2.1', '2.2', '2.3', '2.4', 
-    '3.7', '3.8', '3.9', '4.9', '5.6', '5.7'
+    '3.7', '3.8', '3.9', '4.9', '5.6', '5.7', 'building'
 ]
 
 Timeframes = Literal[
@@ -217,11 +217,17 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     Tracks indoor Air Quality (CO2, PM2.5, PM10, TVOC).
     Focuses on absolute health limits and deviations from period averages.
     """
-    floor_val = str(room)[0] if str(room)[0].isdigit() else "0"
+    room_str = str(room).lower()
     
-    all_iaq_devices = registry.get_devices_by_room_and_type(room, "IAQ")
+    if room_str == 'building':
+        floor_val = "B"
+        all_iaq_devices = registry.get_all_devices_by_type("IAQ")
+    else:
+        floor_val = str(room)[0] if str(room)[0].isdigit() else "0"
+        all_iaq_devices = registry.get_devices_by_room_and_type(room, "IAQ")
+        
     if not all_iaq_devices:
-        error_msg = f"Query_Context:\n  Room: {room}\nError: No IAQ sensors found in this room."
+        error_msg = f"Query_Context:\n  Room: {room}\nError: No IAQ sensors found in this target."
         return error_msg, {
             "type": "map_update",
             "artifact": {
@@ -294,7 +300,11 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         if isinstance(data, dict):
             z = data.get("zone", "Unspecified")
             t = data.get("tag", "Unspecified")
-            place = f"Zone: {z}, Tag: {t}"
+            if room_str == 'building':
+                r = data.get("room", "Unknown")
+                place = f"Room: {r}, Zone: {z}, Tag: {t}"
+            else:
+                place = f"Zone: {z}, Tag: {t}"
         else:
             place = "Unspecified"
         sensor_info_lines.append(f"    - {name} (IAQ): {place}")
@@ -349,7 +359,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         output = [
             "Query_Context:",
             "  Domain: Health & Safety (Indoor_IAQ)",
-            f"  Room: {room}",
+            f"  Room: {room.upper()}",
             "  Timeframe: Now (Snapshot)",
             f"  Current_Time: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}",
             f"  Active_Context: {current_ctx}",
@@ -394,7 +404,14 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         i_curr_list = []
         for name, data in active_iaq_devices.items():
             d_id = data.get("id") if isinstance(data, dict) else data
-            zone = data.get("zone", "Unspecified") if isinstance(data, dict) else "Unspecified"
+            
+            if room_str == 'building' and isinstance(data, dict):
+                r_label = data.get("room", "Unknown")
+                z_label = data.get("zone", "Unspecified")
+                place_label = f"Room: {r_label}, Zone: {z_label}"
+            else:
+                z_label = data.get("zone", "Unspecified") if isinstance(data, dict) else "Unspecified"
+                place_label = f"Zone: {z_label}"
             
             i_curr = extract_current_values(tb_client.get_now(d_id, IAQ_KEYS), IAQ_KEYS, is_iaq=True)
             i_curr_list.append(i_curr)
@@ -423,7 +440,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             
             # Keep LLM text output intact
             i_parts = [format_val(k, i_curr.get(k), ctx_i_base.get(k)) for k in IAQ_KEYS if i_curr.get(k) is not None]
-            output.append(f"    - {name} (Zone: {zone}): {' | '.join(i_parts) if i_parts else 'Offline / No Data'}")
+            output.append(f"    - {name} ({place_label}): {' | '.join(i_parts) if i_parts else 'Offline / No Data'}")
             
         # 4. Aggregate IAQ for Room Level
         for k in IAQ_KEYS:
@@ -561,7 +578,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         output = [
             "Query_Context:",
             "  Domain: Health & Safety (Indoor_IAQ)",
-            f"  Room: {room}",
+            f"  Room: {room.upper()}",
             f"  Timeframe: {timeframe} (Long-Term Matrix Profile)",
             f"  Current_Time: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}",
         ]
@@ -640,7 +657,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     output = [
         "Query_Context:",
         "  Domain: Health & Safety (Indoor_IAQ)",
-        f"  Room: {room}",
+        f"  Room: {room.upper()}",
         f"  Timeframe: {timeframe} ({bin_size} intervals)",
         f"  Current_Time: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}",
     ]
@@ -760,21 +777,21 @@ if __name__ == "__main__":
     
     try:
         print("\n[Testing]")
-        summary, raw_data = get_air_quality.func(room="2.4", timeframe="now")
+        summary, raw_data = get_air_quality.func(room="building", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("\n" + "="*50)
         
         print("\n[Testing]")
-        summary, raw_data = get_air_quality.func(room="2.3", timeframe="24h")
+        summary, raw_data = get_air_quality.func(room="building", timeframe="24h")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("\n" + "="*50)
         
         print("\n[Testing]")
-        summary, raw_data = get_air_quality.func(room="2.3", timeframe="30d")
+        summary, raw_data = get_air_quality.func(room="building", timeframe="30d")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
