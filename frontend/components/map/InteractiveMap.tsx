@@ -3,7 +3,15 @@
 import { motion, AnimatePresence } from "framer-motion";
 import { ArrowLeft } from "lucide-react";
 import BuildingView from "./floors/BuildingView";
-import Floor2Base from "./floors/Floor2Base"; 
+import FloorMinus3Base from "./floors/FloorMinus3";
+import FloorMinus2Base from "./floors/FloorMinus2";
+import FloorMinus1Base from "./floors/FloorMinus1";
+import Floor0Base from "./floors/Floor0";
+import Floor1Base from "./floors/Floor1";
+import Floor2Base from "./floors/Floor2";
+import Floor3Base from "./floors/Floor3";
+import Floor4Base from "./floors/Floor4";
+import Floor5Base from "./floors/Floor5";
 import { BUILDING_LEVELS, RoomHealth } from "./constants"; 
 
 interface InteractiveMapProps {
@@ -40,7 +48,6 @@ export default function InteractiveMap(props: InteractiveMapProps) {
     if (room === "2.1") zoomOrigin = "70% 70%"; 
   }
 
-  // 👇 Extract the building-wide aggregate artifact dynamically
   const buildingArtifact = roomArtifacts["building"] || 
     Object.values(roomArtifacts || {}).find((a: any) => a.floor === "B" || a.room_id === "building");
 
@@ -101,8 +108,72 @@ export default function InteractiveMap(props: InteractiveMapProps) {
             {activeLevel === "B" ? (
               /* 👇 Fixed: Now hands down the actual aggregate metrics */
               <BuildingView buildingArtifact={buildingArtifact} />
+            ) : activeLevel === "-3" ? (
+              <FloorMinus3Base 
+                activeTools={props.activeTools} 
+                selectedRooms={selectedRooms} 
+                onToggleRoom={onRoomToggle}
+                roomHealthData={roomHealthData}
+                roomArtifacts={roomArtifacts} 
+              />
+            ) : activeLevel === "-2" ? (
+              <FloorMinus2Base 
+                activeTools={props.activeTools} 
+                selectedRooms={selectedRooms} 
+                onToggleRoom={onRoomToggle}
+                roomHealthData={roomHealthData}
+                roomArtifacts={roomArtifacts} 
+              />
+            ) : activeLevel === "-1" ? (
+              <FloorMinus1Base 
+                activeTools={props.activeTools} 
+                selectedRooms={selectedRooms} 
+                onToggleRoom={onRoomToggle}
+                roomHealthData={roomHealthData}
+                roomArtifacts={roomArtifacts} 
+              />
+            ) : activeLevel === "0" ? (
+              <Floor0Base 
+                activeTools={props.activeTools} 
+                selectedRooms={selectedRooms} 
+                onToggleRoom={onRoomToggle}
+                roomHealthData={roomHealthData}
+                roomArtifacts={roomArtifacts} 
+              />
+            ) : activeLevel === "1" ? (
+              <Floor1Base 
+                activeTools={props.activeTools} 
+                selectedRooms={selectedRooms} 
+                onToggleRoom={onRoomToggle}
+                roomHealthData={roomHealthData}
+                roomArtifacts={roomArtifacts} 
+              />
             ) : activeLevel === "2" ? (
               <Floor2Base 
+                activeTools={props.activeTools} 
+                selectedRooms={selectedRooms} 
+                onToggleRoom={onRoomToggle}
+                roomHealthData={roomHealthData}
+                roomArtifacts={roomArtifacts} 
+              />
+            ) : activeLevel === "3" ? (
+              <Floor3Base 
+                activeTools={props.activeTools} 
+                selectedRooms={selectedRooms} 
+                onToggleRoom={onRoomToggle}
+                roomHealthData={roomHealthData}
+                roomArtifacts={roomArtifacts} 
+              />
+            ) : activeLevel === "4" ? (
+              <Floor4Base 
+                activeTools={props.activeTools} 
+                selectedRooms={selectedRooms} 
+                onToggleRoom={onRoomToggle}
+                roomHealthData={roomHealthData}
+                roomArtifacts={roomArtifacts} 
+              />
+            ) : activeLevel === "5" ? (
+              <Floor5Base 
                 activeTools={props.activeTools} 
                 selectedRooms={selectedRooms} 
                 onToggleRoom={onRoomToggle}
