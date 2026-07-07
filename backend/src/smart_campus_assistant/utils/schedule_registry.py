@@ -22,10 +22,12 @@ class ScheduleRegistry:
                 self.metadata = data.get("metadata", {})
                 self.schedule = data.get("schedule", [])
                 self.holidays = data.get("holidays", [])
+                self.start_end_of_classes = data.get("start_end_of_classes", [])
         except FileNotFoundError:
             self.metadata = {}
             self.schedule = []
             self.holidays = []
+            self.start_end_of_classes = []
             print(f"Warning: Schedule file not found at {self.file_path}")
 
     def _get_current_time_info(self) -> dict:
@@ -35,33 +37,6 @@ class ScheduleRegistry:
             "time_str": now.strftime("%H:%M"),
             "datetime": now
         }
-
-    def check_holiday(self, day_name: str) -> Optional[str]:
-        """
-        Calculates the exact date for the given day in the CURRENT week 
-        and checks if it falls within any registered holiday periods.
-        """
-        now = datetime.now(self.tz)
-        days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        
-        try:
-            target_idx = days_of_week.index(day_name.capitalize())
-            current_idx = now.weekday()
-            
-            # Find the date for this day in the current week
-            diff = target_idx - current_idx
-            target_date = (now + timedelta(days=diff)).date()
-            
-            for holiday in self.holidays:
-                start = datetime.strptime(holiday["start_date"], "%Y-%m-%d").date()
-                end = datetime.strptime(holiday["end_date"], "%Y-%m-%d").date()
-                
-                if start <= target_date <= end:
-                    return holiday["name"]
-        except (ValueError, KeyError, TypeError):
-            pass
-            
-        return None
 
     def _filter_schedule(self, key: str, value: str, timeframe: str) -> List[Dict]:
         results = []
@@ -95,6 +70,62 @@ class ScheduleRegistry:
 
         return results
 
+    def check_holiday(self, day_name: str) -> Optional[str]:
+        """
+        Calculates the exact date for the given day in the CURRENT week 
+        and checks if it falls within any registered holiday periods.
+        """
+        now = datetime.now(self.tz)
+        days_of_week = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        
+        try:
+            target_idx = days_of_week.index(day_name.capitalize())
+            current_idx = now.weekday()
+            
+            # Find the date for this day in the current week
+            diff = target_idx - current_idx
+            target_date = (now + timedelta(days=diff)).date()
+            
+            for holiday in self.holidays:
+                start = datetime.strptime(holiday["start_date"], "%Y-%m-%d").date()
+                end = datetime.strptime(holiday["end_date"], "%Y-%m-%d").date()
+                
+                if start <= target_date <= end:
+                    return holiday["name"]
+        except (ValueError, KeyError, TypeError):
+            pass
+            
+        return None
+    
+    def check_semester_active(self) -> tuple[bool, str]:
+        """
+        Checks if the current date is within the active semester period.
+        Returns a boolean indicating if active, and a message explaining the status.
+        """
+        if not self.start_end_of_classes:
+            return True, "Active"
+            
+        now = datetime.now(self.tz).date()
+        period = self.start_end_of_classes[0]
+        
+        start_date_str = period.get("start_date")
+        end_date_str = period.get("end_date")
+        
+        if not start_date_str:
+            return True, "Active"
+            
+        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        
+        if now < start_date:
+            return False, f"The semester has not started yet. Classes begin on {start_date_str}."
+            
+        if end_date_str:
+            end_date = datetime.strptime(end_date_str, "%Y-%m-%d").date()
+            if now > end_date:
+                return False, f"The semester has ended. Classes ended on {end_date_str}."
+                
+        return True, "Active"
+    
     # --- QUERY GETTERS ---
 
     def get_by_room(self, room_id: str, timeframe: str) -> List[Dict]:

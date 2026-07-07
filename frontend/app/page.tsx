@@ -24,15 +24,29 @@ const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/ws/chat";
 const getRoomsForFloor = (floor: string) => {
   if (floor === "-3") return ["parkin.c"];
   if (floor === "-2") return ["parkin.b"];
-  if (floor === "-1") return ["data_center"];
+  if (floor === "-1") return ["data_center", "kitchen"];
   if (floor === "0") return ["entrance", "restaurant"];
-  if (floor === "1") return ["1.1", "1.2", "kitchen"];
+  if (floor === "1") return ["1.1", "1.2"];
   if (floor === "2") return ["2.1", "2.2", "2.3", "2.4"];
   if (floor === "3") return ["3.7", "3.8", "3.9"];
   if (floor === "4") return ["4.9"];
   if (floor === "5") return ["5.6", "5.7"];
   if (floor === "B") return ["building"];
   return [];
+};
+
+const getFloorForRoom = (roomId: string) => {
+  if (["parkin.c"].includes(roomId)) return "-3";
+  if (["parkin.b"].includes(roomId)) return "-2";
+  if (["data_center", "kitchen"].includes(roomId)) return "-1";
+  if (["entrance", "restaurant"].includes(roomId)) return "0";
+  if (["1.1", "1.2"].includes(roomId)) return "1";
+  if (["2.1", "2.2", "2.3", "2.4"].includes(roomId)) return "2";
+  if (["3.7", "3.8", "3.9"].includes(roomId)) return "3";
+  if (["4.9"].includes(roomId)) return "4";
+  if (["5.6", "5.7"].includes(roomId)) return "5";
+  if (["building"].includes(roomId)) return "B";
+  return null;
 };
 
 export default function DesktopDashboard() {
@@ -123,14 +137,26 @@ export default function DesktopDashboard() {
         
         if (data.type === "map_update" && data.artifact) {
           const artifact = data.artifact;
-          const targetLevel = artifact.floor || activeLevelRef.current;
           const roomId = artifact.room_id;
           const domain = artifact.domain || "Unknown";
 
+          // 1. Safely determine the floor (handling 0, integers, and missing data)
+          let resolvedFloor = activeLevelRef.current;
+          
+          if (artifact.floor !== undefined && artifact.floor !== null) {
+            resolvedFloor = String(artifact.floor); // Cast numbers to strings
+          } else if (roomId) {
+            const derivedFloor = getFloorForRoom(roomId); // Fallback if backend forgot the floor
+            if (derivedFloor) resolvedFloor = derivedFloor;
+          }
+
+          const targetLevel = resolvedFloor;
+
           console.log(`✅ Artifact Parsed Successfully for Room [${roomId}] under Domain [${domain}]`);
           
-          if (artifact.floor && artifact.floor !== activeLevelRef.current) {
-            setActiveLevel(artifact.floor);
+          // 2. Safely trigger level change
+          if (targetLevel !== activeLevelRef.current) {
+            setActiveLevel(targetLevel);
           }
           
           if (artifact.view_type) {

@@ -161,12 +161,10 @@ class DeviceRegistry:
         
         return matched_meters
 
-    # ==========================================
-    # NEW FLOOR LOOKUP METHOD
-    # ==========================================
     def get_floor_for_room(self, room: str) -> Optional[str]:
         """
-        Takes a room name as input and returns the floor ID that the room is located on.
+        Takes a room name as input and returns the floor ID that the room is located on,
+        stripping the 'F' prefix so that values like 'F-1' return as '-1'.
         """
         room_lower = str(room).strip().lower()
         buildings = self._topology.get("campus", {}).get("buildings", {})
@@ -175,7 +173,10 @@ class DeviceRegistry:
             for f_name, f_data in b_data.get("floors", {}).items():
                 rooms = f_data.get("rooms", {})
                 if room_lower in [str(r).lower() for r in rooms.keys()]:
-                    return f_name
+                    floor_id = str(f_name)
+                    if floor_id.upper().startswith("F"):
+                        return floor_id[1:]
+                    return floor_id
                     
         logger.warning(f"Room '{room}' not found. Cannot determine floor.")
         return None

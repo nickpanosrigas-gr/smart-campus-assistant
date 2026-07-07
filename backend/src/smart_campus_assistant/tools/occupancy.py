@@ -191,7 +191,9 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     Desk Sensors, People Counters (PC), Area Wait Counters (WO), or Motion Sensors (IAQ).
     """
     room_key = str(room).strip().lower()
-    floor_val = "B" if room_key == "building" else (str(room)[0] if str(room)[0].isdigit() else "0")
+    floor_val = "B" if room_key == "building" else (
+        registry.get_floor_for_room(room_key) or (str(room)[0] if str(room)[0].isdigit() else "0")
+    )
     
     # ==========================================
     # SENSOR TARGETING LOGIC

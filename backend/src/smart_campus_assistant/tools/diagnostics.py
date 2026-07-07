@@ -291,7 +291,7 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
         room_id = "building"
         target_rooms = registry.get_available_rooms()
     else:
-        floor_val = str(target)[0] if str(target)[0].isdigit() else "0"
+        floor_val = registry.get_floor_for_room(target) or (str(target)[0] if str(target)[0].isdigit() else "0")
         room_id = str(target)
         target_rooms = [target]
 

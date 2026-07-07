@@ -147,7 +147,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         floor_val = "B"
         all_iaq_devices = registry.get_all_devices_by_type("IAQ")
     else:
-        floor_val = str(room)[0] if str(room)[0].isdigit() else "0"
+        floor_val = registry.get_floor_for_room(room) or (str(room)[0] if str(room)[0].isdigit() else "0")
         all_iaq_devices = registry.get_devices_by_room_and_type(room, "IAQ")
     
     if not all_iaq_devices:
@@ -831,7 +831,7 @@ if __name__ == "__main__":
     print("-" * 50)
     try:
         print("\n[Testing]")
-        summary, raw_data = get_ambient_lights.func(room="building", timeframe="now")
+        summary, raw_data = get_ambient_lights.func(room="parkin.b", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)

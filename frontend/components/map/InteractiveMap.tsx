@@ -66,7 +66,7 @@ export default function InteractiveMap(props: InteractiveMapProps) {
              buttonStyles = "bg-[#14C89B] text-black shadow-[0_0_15px_rgba(20,200,155,0.4)]";
           } else if (hasData) {
              // Not Selected, but HAS data -> Dark Green
-             buttonStyles = "bg-[#0A664F] text-white shadow-sm"; 
+             buttonStyles = "bg-[#0A664F] text-white shadow-sm";
           }
 
           return (
@@ -106,7 +106,6 @@ export default function InteractiveMap(props: InteractiveMapProps) {
             animate={{ scale: isZoomed ? 2.0 : (activeLevel === "B" ? 0.68 : 1.25) }}
           >
             {activeLevel === "B" ? (
-              /* 👇 Fixed: Now hands down the actual aggregate metrics */
               <BuildingView buildingArtifact={buildingArtifact} />
             ) : activeLevel === "-3" ? (
               <FloorMinus3Base 
