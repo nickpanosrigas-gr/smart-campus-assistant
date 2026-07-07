@@ -14,7 +14,7 @@ export default function DataOverlay({ artifact, roomId }: DataOverlayProps) {
     return (
       <div className="w-full h-full flex flex-col items-center justify-center font-sans">
         <span className="text-xs font-light text-center leading-tight whitespace-normal text-[#C84B5E] drop-shadow-md">
-          ⚠️ {artifact.message || "Offline"}
+          {artifact.message || "Offline"}
         </span>
       </div>
     );
@@ -34,35 +34,32 @@ export default function DataOverlay({ artifact, roomId }: DataOverlayProps) {
   // Render a clean, borderless, typography-focused UI
   const renderContent = () => {
     if (domain === "Schedule") {
-      const isFree = (Array.isArray(aggs) && aggs.length === 0) || 
-                     (Array.isArray(results) && results.length === 0) || 
-                     (!aggs && !results);
+      // Look directly for the schedule payload we defined in the backend
+      const activeClass = artifact.schedule_data;
       
-      if (isFree) {
+      if (!activeClass) {
+        // No class is taking place: Display the dynamic backend message
         return (
-          <div className="flex flex-col items-center justify-center gap-1">
-            <span className="text-4xl font-light tracking-tight" style={{ color: SENSOR_COLORS.good }}>Free</span>
-            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#A3B8B2]/50">No classes now</span>
+          <div className="flex flex-col items-center justify-center gap-1 p-2 text-center">
+            <span className="text-lg font-light tracking-tight leading-snug" style={{ color: textColor }}>
+              {artifact.message || "Free"}
+            </span>
           </div>
         );
       } else {
-        const activeClass = (Array.isArray(aggs) && aggs.length > 0) ? aggs[0] : 
-                            (Array.isArray(results) && results.length > 0 ? results[0] : null);
-        if (activeClass) {
-          return (
-            <div className="flex flex-col items-start justify-center gap-1 w-full max-w-full overflow-hidden">
-              <span className="text-sm font-medium tracking-wide truncate w-full" style={{ color: SENSOR_COLORS.good }}>
-                {activeClass.course_name}
-              </span>
-              <div className="text-[10px] font-light text-[#A3B8B2]/80 leading-tight w-full">
-                <p className="uppercase tracking-wider text-white mb-1 truncate">Ends in {activeClass.time_remaining}</p>
-                <p className="truncate">{activeClass.start_time} - {activeClass.end_time}</p>
-                <p className="truncate">{activeClass.instructor_name}</p>
-                <p className="text-[#A3B8B2]/50 mt-1 uppercase tracking-widest text-[8px] truncate">{activeClass.course_type}</p>
-              </div>
+        // Class is currently active
+        return (
+          <div className="flex flex-col items-start justify-center gap-1 w-full max-w-full overflow-hidden">
+            <span className="text-sm font-medium tracking-wide truncate w-full" style={{ color: textColor }}>
+              {activeClass.course_name}
+            </span>
+            <div className="text-[10px] font-light text-[#A3B8B2]/80 leading-tight w-full">
+              <p className="truncate text-white mb-1">{activeClass.start_time} - {activeClass.end_time}</p>
+              <p className="truncate">{activeClass.instructor_name}</p>
+              <p className="text-[#A3B8B2]/50 mt-1 uppercase tracking-widest text-[8px] truncate">{activeClass.course_type}</p>
             </div>
-          );
-        }
+          </div>
+        );
       }
     }
 

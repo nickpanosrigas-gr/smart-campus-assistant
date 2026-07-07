@@ -154,7 +154,7 @@ def get_room_schedule(room: Rooms, timeframe: str) -> Tuple[str, Any]:
     academic_rooms = registry.get_all_rooms()
     if room_val not in academic_rooms:
         floor_val = device_registry.get_floor_for_room(room_val) or (str(room_val)[0] if str(room_val)[0].isdigit() else "0")
-        msg = "No Lessons take place in this Room"
+        msg = "No Lessons Scheduled"
         llm_msg = f"Query_Context:\n  Domain: Campus_Schedule\n  Room: {room_val}\n  Timeframe: {timeframe}\nStatus: {msg}. Advise the user accordingly."
         
         artifact = None
