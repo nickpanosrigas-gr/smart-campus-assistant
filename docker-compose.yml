@@ -1,0 +1,54 @@
+version: "3.8"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: smart_campus_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - /path/to/your/server/data:/app/data
+    environment:
+      - THINGSBOARD_BASE_URL
+      - THINGSBOARD_USERNAME
+      - THINGSBOARD_PASSWORD
+      - QDRANT_URL
+      - QDRANT_API_KEY
+      - QDRANT_COLLECTION_NAME
+      - LANGFUSE_SECRET_KEY
+      - LANGFUSE_PUBLIC_KEY
+      - LANGFUSE_HOST
+      - OLLAMA_BASE_URL
+      - OLLAMA_MODEL
+      - OLLAMA_EMBED_MODEL
+      - OLLAMA_NUM_CTX
+      - OLLAMA_TEMPERATURE
+      - WHISPER_API_URL
+      - WHISPER_MODEL
+      - WHISPER_LANGUAGE
+      - LATITUDE
+      - LONGITUDE
+      - TIMEZONE
+      - OLLAMA_MODEL
+      - OLLAMA_NUM_CTX
+      - QDRANT_HOST
+      - TELEGRAM_TOKEN
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Frontend needs them here for BUILD time
+        - API_URL=${API_URL}
+        - OLLAMA_MODEL=${OLLAMA_MODEL}
+        - OLLAMA_NUM_CTX=${OLLAMA_NUM_CTX}
+    container_name: smart_campus_frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
