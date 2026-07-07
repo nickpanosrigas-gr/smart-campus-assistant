@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from src.smart_campus_assistant.config.settings import settings
+
 # Configure logging for the module
 logger = logging.getLogger(__name__)
 
@@ -14,10 +16,13 @@ class DeviceRegistry:
     lookups for LangGraph tools.
     """
     
-    def __init__(self, topology_path: str = "data/campus_topology.json"):
+    def __init__(self, topology_path: str = None):
         """
         Initializes the registry and builds the in-memory cache.
         """
+        if topology_path is None:
+            topology_path = f"{settings.DATA_DIR}/campus_topology.json"
+        
         self.topology_path = Path(topology_path)
         self._topology: Dict = {}
         

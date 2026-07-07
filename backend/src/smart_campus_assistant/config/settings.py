@@ -2,17 +2,13 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent.parent
-ENV_FILE_PATH = ROOT_DIR / ".env"
+ENV_FILE_PATH = ROOT_DIR.parent / ".env"
 
 class Settings(BaseSettings):
     # ThinksBoard
     THINGSBOARD_BASE_URL: str
     THINGSBOARD_USERNAME: str
     THINGSBOARD_PASSWORD: str
-    
-    # Gemini
-    GOOGLE_API_KEY: str
-    GEMINI_MODEL: str
     
     # Qdrant
     QDRANT_URL: str
@@ -35,14 +31,13 @@ class Settings(BaseSettings):
     WHISPER_MODEL: str
     WHISPER_LANGUAGE: str
     
-    # Telegram
-    TELEGRAM_BOT_TOKEN: str
-    TELEGRAM_ALLOWED_USER_ID: int
-    
     # Astral
     LATITUDE: float
     LONGITUDE: float
     TIMEZONE: str
+    
+    # Defaults to the root /data directory for local development
+    DATA_DIR: str = str(ROOT_DIR.parent / "data")
     
     # Read from the .env file in the root directory
     model_config = SettingsConfigDict(

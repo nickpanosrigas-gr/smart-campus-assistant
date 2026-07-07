@@ -12,13 +12,17 @@ from src.smart_campus_assistant.clients.qdrant_client import kb_client
 
 logger = logging.getLogger(__name__)
 
-def sync_knowledge_base(data_dir: str = "data/knowledge"):
+def sync_knowledge_base(data_dir: str = None):
     """
     Scans the data/knowledge directory for Markdown files, parses their YAML frontmatter,
     embeds the content via Ollama, and synchronizes them with the Qdrant Vector Database.
     Automatically creates the Qdrant collection if it doesn't exist.
     """
     logger.info("Starting Knowledge Base synchronization...")
+    
+    # Default to the new dynamic data directory
+    if data_dir is None:
+        data_dir = os.path.join(settings.DATA_DIR, "knowledge")
     
     if not os.path.exists(data_dir):
         logger.warning(f"Knowledge directory '{data_dir}' does not exist. Creating it...")

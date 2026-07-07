@@ -9,6 +9,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from src.smart_campus_assistant.clients.qdrant_client import kb_client
+from src.smart_campus_assistant.config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +20,8 @@ def get_dynamic_options():
     unique_floors = set()
     unique_people = set()
     
-    knowledge_dir = "data/knowledge"
+    knowledge_dir = f"{settings.DATA_DIR}/knowledge"
+    
     if os.path.exists(knowledge_dir):
         for filepath in glob.glob(os.path.join(knowledge_dir, "**", "*.md"), recursive=True):
             try:

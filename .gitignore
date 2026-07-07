@@ -3,6 +3,8 @@
 # =========================
 .DS_Store
 .vscode/
+data/
+.env
 
 # =========================
 # BACKEND (Python)

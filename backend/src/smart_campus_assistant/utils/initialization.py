@@ -105,7 +105,8 @@ def run_initialization() -> bool:
     
     try:
         # Run the sync process we built earlier
-        sync_knowledge_base()
+        sync_knowledge_base(data_dir=f"{settings.DATA_DIR}/knowledge")
+        
         logger.info("Initialization sequence completed successfully.")
         return True
     except Exception as e:

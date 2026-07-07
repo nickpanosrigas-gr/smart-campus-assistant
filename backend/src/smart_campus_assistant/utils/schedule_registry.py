@@ -5,12 +5,18 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from typing import List, Dict, Optional
 
+from src.smart_campus_assistant.config.settings import settings
+
 class ScheduleRegistry:
     """
     Registry for managing and querying the static campus schedule.
     Handles exact metadata matching, time-based filtering, and holiday checking.
     """
-    def __init__(self, file_path: str = "data/schedule.json"):
+    def __init__(self, file_path: str = None):
+        
+        if file_path is None:
+            file_path = f"{settings.DATA_DIR}/schedule.json"
+        
         self.file_path = Path(file_path)
         self.tz = ZoneInfo("Europe/Athens")
         self._load_data()
@@ -184,7 +190,7 @@ if __name__ == "__main__":
     print("="*40)
     
     try:
-        registry = ScheduleRegistry(file_path="data/schedule.json") 
+        registry = ScheduleRegistry()
         
         print("\n[Holiday Check: Friday]")
         holiday = registry.check_holiday("Friday")
