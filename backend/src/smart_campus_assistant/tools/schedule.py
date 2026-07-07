@@ -54,7 +54,18 @@ class SemesterScheduleInput(BaseModel):
 
 # --- FORMATTER ---
 
-def _format_yaml_response(domain: str, tool_name: str, filters: str, results: List[dict], timeframe: str) -> Tuple[str, Any]:
+def _format_yaml_response(domain: str, tool_name: str, filters: str, results: List[dict], timeframe: str, room_id: str = None) -> Tuple[str, Any]:
+    # 1. Global State Checks
+    is_active, sem_msg = registry.check_semester_active()
+    
+    # Determine target day for holiday check
+    target_day = registry._get_current_time_info()["day"]
+    if timeframe.lower() not in ["now", "today", "week"]:
+        target_day = timeframe.capitalize()
+        
+    holiday_name = registry.check_holiday(target_day)
+
+    # 2. Build LLM Context String
     lines = [
         f"Query_Context:",
         f"  Domain: {domain}",
@@ -63,87 +74,73 @@ def _format_yaml_response(domain: str, tool_name: str, filters: str, results: Li
         f"  Timeframe: {timeframe}"
     ]
     
-    # --- NEW: Academic Context Checks ---
-    context_notes = []
-    
-    # 1. Check Semester Status
-    is_active, semester_msg = registry.check_semester_active()
+    # Provide explicit state alerts so the LLM doesn't hallucinate active classes
     if not is_active:
-        context_notes.append(f"Semester Status: {semester_msg}")
-        
-    # 2. Check Holiday Status
-    time_lower = timeframe.lower()
-    target_day = None
-    now = datetime.now(registry.tz)  # Use the timezone-aware datetime from the registry
-    
-    # Resolve timeframe to a day of the week
-    if time_lower in ["today", "now"]:
-        target_day = now.strftime("%A")
-    elif time_lower == "tomorrow":
-        target_day = (now + timedelta(days=1)).strftime("%A")
-    elif time_lower in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]:
-        target_day = timeframe.capitalize()
-        
-    is_holiday = False
-    if target_day:
-        holiday_name = registry.check_holiday(target_day)
-        if holiday_name:
-            is_holiday = True
-            context_notes.append(f"Holiday Alert: {target_day} is a holiday ({holiday_name}).")
-            
-    # Inject context notes into the LLM prompt if any exist
-    if context_notes:
-        lines.append("Academic_Context:")
-        for note in context_notes:
-            lines.append(f"  - {note}")
-            
-    # --- Evaluate Results ---
+        lines.append(f"  System_Alert: '{sem_msg}' - Note: The schedule below is for reference only. No classes are currently taking place.")
+    elif holiday_name:
+        lines.append(f"  System_Alert: 'Today is a holiday ({holiday_name})' - Note: The schedule below is for reference only. No classes are currently taking place.")
+
+    # Status breakdown for the LLM
     if not results:
-        if not is_active:
-            lines.append("Status: No classes scheduled because the semester is inactive.")
-        elif is_holiday:
-            lines.append("Status: No classes scheduled because it is a holiday.")
-        else:
-            lines.append("Status: No classes found for this specific query and timeframe.")
-        return "\n".join(lines), None
-        
-    # If we have results, list them, but explicitly warn the LLM if they aren't actually taking place
-    lines.append("Scheduled_Classes:")
-    if not is_active or is_holiday:
-        lines.append("  Note_to_LLM: The classes below are technically on the schedule, BUT THEY ARE NOT TAKING PLACE because of the Academic_Context (holiday or inactive semester). Inform the user accordingly.")
-        
-    for res in results:
-        lines.append(f"  - Course: {res.get('course_name')}")
-        lines.append(f"    Type: {res.get('course_type')}")
-        lines.append(f"    Instructor: {res.get('instructor_name')}")
-        lines.append(f"    Day: {res.get('day_of_week')}")
-        lines.append(f"    Time: {res.get('start_time')} - {res.get('end_time')}")
-        lines.append(f"    Rooms: {', '.join(res.get('room_ids', []))}")
-        
+        lines.append("  Status: The Class is Free (No lessons scheduled for this timeframe).")
+    else:
+        lines.append("  Status: Schedule found (See results below).")
+        lines.append("Results:")
+        for res in results:
+            lines.append(f"  - Course: {res.get('course_name')}")
+            lines.append(f"    Type: {res.get('course_type')}")
+            lines.append(f"    Instructor: {res.get('instructor_name')}")
+            lines.append(f"    Room: {', '.join(res.get('room_ids', []))}")
+            lines.append(f"    Time: {res.get('start_time')} - {res.get('end_time')}")
+
     yaml_str = "\n".join(lines)
-    
-    # --- Strict Artifact Generation ---
+
+    # 3. Artifact Generation (Strictly for the 'now' timeframe)
     artifact = None
-    
-    # Only generate an artifact if it's "now" AND the class is ACTUALLY taking place
-    if time_lower == "now" and is_active and not is_holiday:
-        room_ids = results[0].get("room_ids", [])
-        if room_ids:
-            first_room = room_ids[0]
-            # Use device_registry to safely resolve underground floors
-            floor_val = device_registry.get_floor_for_room(first_room) or (str(first_room)[0] if str(first_room)[0].isdigit() else "0")
+    if timeframe.lower() == "now":
+        # Try to resolve a room to target for the UI
+        target_room = room_id
+        if not target_room and results and results[0].get("room_ids"):
+            # Fallback: Extract room from results (for instructor/course queries)
+            target_room = results[0]["room_ids"][0] 
             
+        if target_room:
+            floor_val = device_registry.get_floor_for_room(target_room) or (str(target_room)[0] if str(target_room)[0].isdigit() else "0")
+            
+            # Map status conditions to your UI states
+            if target_room not in registry.get_all_rooms():
+                node_status = "unavailable"
+                msg = "No Lessons take place in this Room"
+            elif not is_active:
+                node_status = "warning"
+                msg = "Semester Inactive" 
+            elif holiday_name:
+                node_status = "warning"
+                msg = f"Holiday: {holiday_name}"
+            elif not results:
+                node_status = "good"
+                msg = "The Class is Free"
+            else:
+                node_status = "critical"
+                msg = f"Class in progress: {results[0].get('course_name')}"
+            
+            # Construct standard snapshot artifact
             artifact = {
                 "type": "map_update",
                 "artifact": {
                     "view_type": "snapshot",
                     "domain": "Schedule",
                     "floor": floor_val,
-                    "room_id": str(first_room),
-                    "schedule_data": results[0]
+                    "room_id": str(target_room),
+                    "status": node_status,
+                    "message": msg
                 }
             }
             
+            # Only attach full schedule data payload if a class is actually happening
+            if node_status == "critical" and results:
+                artifact["artifact"]["schedule_data"] = results[0]
+
     return yaml_str, artifact
 
 # --- TOOLS ---
@@ -152,75 +149,34 @@ def _format_yaml_response(domain: str, tool_name: str, filters: str, results: Li
 def get_room_schedule(room: Rooms, timeframe: str) -> Tuple[str, Any]: 
     """Get the academic schedule for a specific room."""
     room_val = room.value if hasattr(room, "value") else str(room)
-    time_lower = timeframe.lower()
     
-    # Resolve floor for the UI payload using device_registry
-    floor_val = device_registry.get_floor_for_room(room_val) or (str(room_val)[0] if str(room_val)[0].isdigit() else "0")
-
-    # 1. Non-Academic Room Check
+    # 1. Immediate Non-Academic Check
     academic_rooms = registry.get_all_rooms()
     if room_val not in academic_rooms:
+        floor_val = device_registry.get_floor_for_room(room_val) or (str(room_val)[0] if str(room_val)[0].isdigit() else "0")
         msg = "No Lessons take place in this Room"
-        llm_msg = f"Query_Context:\n  Domain: Campus_Schedule\n  Room: {room_val}\n  Timeframe: {timeframe}\nStatus: {msg}."
+        llm_msg = f"Query_Context:\n  Domain: Campus_Schedule\n  Room: {room_val}\n  Timeframe: {timeframe}\nStatus: {msg}. Advise the user accordingly."
         
         artifact = None
-        if time_lower == "now":
+        if timeframe.lower() == "now":
             artifact = {
                 "type": "map_update",
                 "artifact": {
-                    "view_type": "info",
+                    "view_type": "snapshot",
                     "domain": "Schedule",
                     "floor": floor_val,
                     "room_id": str(room_val),
+                    "status": "unavailable",
                     "message": msg
                 }
             }
         return llm_msg, artifact
 
-    # 2. Semester Active Check
-    is_active, status_message = registry.check_semester_active()
-    if not is_active:
-        msg = "The Semester Ended"
-        llm_msg = f"Query_Context:\n  Domain: Campus_Schedule\n  Room: {room_val}\n  Timeframe: {timeframe}\nStatus: {status_message}. {msg}."
-        
-        artifact = None
-        if time_lower == "now":
-            artifact = {
-                "type": "map_update",
-                "artifact": {
-                    "view_type": "info",
-                    "domain": "Schedule",
-                    "floor": floor_val,
-                    "room_id": str(room_val),
-                    "message": msg
-                }
-            }
-        return llm_msg, artifact
-
-    # 3. Fetch results for the academic room
+    # 2. Academic Room: Fetch results and defer to the global formatter
     results = registry.get_by_room(room_val, timeframe)
     
-    # 4. Class is Free Check (No classes in this timeframe)
-    if not results:
-        msg = "The Class is Free"
-        llm_msg = f"Query_Context:\n  Domain: Campus_Schedule\n  Room: {room_val}\n  Timeframe: {timeframe}\nStatus: {msg}."
-        
-        artifact = None
-        if time_lower == "now":
-            artifact = {
-                "type": "map_update",
-                "artifact": {
-                    "view_type": "info",
-                    "domain": "Schedule",
-                    "floor": floor_val,
-                    "room_id": str(room_val),
-                    "message": msg
-                }
-            }
-        return llm_msg, artifact
-
-    # 5. Normal Execution (Classes found)
-    return _format_yaml_response("Campus_Schedule", "get_room_schedule", f"Room: {room_val}", results, timeframe)
+    # Pass room_id explicitly so the artifact generates even if results are empty (class is free)
+    return _format_yaml_response("Campus_Schedule", "get_room_schedule", f"Room: {room_val}", results, timeframe, room_id=room_val)
 
 @tool("get_course_schedule", args_schema=CourseScheduleInput, response_format="content_and_artifact")
 def get_course_schedule(course_name: CourseEnum, timeframe: str) -> Tuple[str, Any]:    # type: ignore
