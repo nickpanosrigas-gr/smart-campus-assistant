@@ -32,8 +32,8 @@ export default function ChatPanel({
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const LLM_MODEL = process.env.NEXT_PUBLIC_LLM_MODEL || "Qwen3.5 4B";
-  const MAX_TOKENS = Number(process.env.NEXT_PUBLIC_LLM_CONTEXT_SIZE) || 8192;
+  const LLM_MODEL = process.env.OLLAMA_MODEL || "Qwen3.5 4B";
+  const MAX_TOKENS = Number(process.env.OLLAMA_NUM_CTX) || 8192;
 
   useEffect(() => {
     if (llmStatus && llmStatus.message) {
