@@ -19,8 +19,6 @@ interface FloorState {
   isZoomed: boolean;
 }
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || "ws://localhost:8000/ws/chat";
-
 const getRoomsForFloor = (floor: string) => {
   if (floor === "-3") return ["parkin.c"];
   if (floor === "-2") return ["parkin.b"];
@@ -118,7 +116,19 @@ export default function DesktopDashboard() {
 
   // --- WEBSOCKET CONNECTION ---
   useEffect(() => {
-    ws.current = new WebSocket(WS_URL);
+    // Dynamically generate the WS URL based on the browser's current address
+    const getWsUrl = () => {
+      if (typeof window === "undefined") return ""; // SSR safety
+      // Local development fallback
+      if (window.location.hostname === "localhost") {
+        return "ws://localhost:8000/ws/chat"; 
+      }
+      // Production: use the exact same domain the user is visiting
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      return `${protocol}//${window.location.host}/ws/chat`;
+    };
+
+    ws.current = new WebSocket(getWsUrl()); // 👈 Use the dynamic function here
     ws.current.onopen = () => console.log("🟢 Connected to Smart Campus Backend");
 
     ws.current.onmessage = (event) => {

@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: smart_campus_backend
     ports:
-      - "8001:8000"
+      - "${BACKEND_PORT}:8000"
     volumes:
       - /path/to/your/server/data:/app/data
     environment:
@@ -48,7 +48,7 @@ services:
         - OLLAMA_NUM_CTX=${OLLAMA_NUM_CTX}
     container_name: smart_campus_frontend
     ports:
-      - "3004:3000"
+      - "${FRONTEND_PORT}:3000"
     depends_on:
       - backend
     restart: unless-stopped
