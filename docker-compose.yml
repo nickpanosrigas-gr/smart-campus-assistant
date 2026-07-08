@@ -9,7 +9,7 @@ services:
     ports:
       - "${BACKEND_PORT}:8000"
     volumes:
-      - /path/to/your/server/data:/app/data
+      - /home/nick/docker/smart-campus-assistant/data:/data
     environment:
       - THINGSBOARD_BASE_URL
       - THINGSBOARD_USERNAME
