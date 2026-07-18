@@ -266,7 +266,7 @@ export default function Floor4Base({ activeTools, selectedRooms, onToggleRoom, r
 
         <g id="Data-Centroids" className="pointer-events-none">
           {selectedRooms.includes("4.9") && (
-              <foreignObject x={490} y={250} width="200" height="100">
+              <foreignObject x={420} y={120} width="200" height="100">
                 <DataOverlay artifact={roomArtifacts?.["4.9"]} roomId="4.9" />
               </foreignObject>
           )}

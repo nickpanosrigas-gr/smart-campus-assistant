@@ -184,13 +184,13 @@ export default function FloorMinus1Base({ activeTools, selectedRooms, onToggleRo
 
         <g id="Data-Centroids" className="pointer-events-none">
           {selectedRooms.includes("data_center") && (
-              <foreignObject x={285} y={365} width="200" height="100">
+              <foreignObject x={235} y={380} width="200" height="100">
                 <DataOverlay artifact={roomArtifacts?.["data_center"]} roomId="data_center" />
               </foreignObject>
           )}
 
           {selectedRooms.includes("kitchen") && (
-              <foreignObject x={340} y={250} width="200" height="100">
+              <foreignObject x={290} y={170} width="200" height="100">
                 <DataOverlay artifact={roomArtifacts?.["kitchen"]} roomId="kitchen" />
               </foreignObject>
           )}

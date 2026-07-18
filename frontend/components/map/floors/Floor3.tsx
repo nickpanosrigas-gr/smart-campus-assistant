@@ -249,19 +249,19 @@ export default function Floor3Base({ activeTools, selectedRooms, onToggleRoom, r
 
       <g id="Data-Centroids" className="pointer-events-none">
         {selectedRooms.includes("3.7") && (
-          <foreignObject x={290} y={185} width="200" height="100">
+          <foreignObject x={260} y={155} width="200" height="100">
             <DataOverlay artifact={roomArtifacts?.["3.7"]} roomId="3.7" />
           </foreignObject>
         )}
 
         {selectedRooms.includes("3.8") && (
-          <foreignObject x={430} y={245} width="200" height="100">
+          <foreignObject x={310} y={265} width="200" height="100">
             <DataOverlay artifact={roomArtifacts?.["3.8"]} roomId="3.8" />
           </foreignObject>
         )}
 
         {selectedRooms.includes("3.9") && (
-          <foreignObject x={520} y={235} width="200" height="100">
+          <foreignObject x={525} y={210} width="200" height="100">
             <DataOverlay artifact={roomArtifacts?.["3.9"]} roomId="3.9" />
           </foreignObject>
         )}

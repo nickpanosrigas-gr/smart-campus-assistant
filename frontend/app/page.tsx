@@ -379,9 +379,14 @@ export default function DesktopDashboard() {
   }
 
   return (
-    <main className="w-full h-screen flex overflow-hidden bg-gradient-to-b from-[#0A664F] to-[#0A0A0A] text-[#A3B8B2] p-4 gap-4">
+    <main 
+      className="w-full h-screen flex overflow-hidden text-[#A3B8B2] p-4 gap-4"
+      style={{
+        background: "radial-gradient(circle at 30% 20%, #064E3B 0%, #020604 50%, #000000 100%)"
+      }}
+    >
       
-      <div className="flex-1 flex flex-col min-w-0 bg-[#0A0A0A]/40 border border-[#A3B8B2]/10 rounded-3xl backdrop-blur-md overflow-hidden relative shadow-2xl h-full">
+      <div className="flex-1 flex flex-col min-w-0 relative overflow-hidden h-full">
         <MapStage 
           appState={appState} 
           activeTools={activeTools}
@@ -397,6 +402,7 @@ export default function DesktopDashboard() {
           
           roomHealthData={currentRoomHealthData}
           roomArtifacts={activeViewArtifacts} 
+          allArtifacts={roomArtifacts}
         />
       </div>
 

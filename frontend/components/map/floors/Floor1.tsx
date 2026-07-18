@@ -255,13 +255,13 @@ export default function Floor1Base({ activeTools, selectedRooms, onToggleRoom, r
 
         <g id="Data-Centroids" className="pointer-events-none">
           {selectedRooms.includes("1.2") && (
-              <foreignObject x={300} y={245} width="200" height="100">
+              <foreignObject x={250} y={200} width="200" height="100">
                 <DataOverlay artifact={roomArtifacts?.["1.2"]} roomId="1.2" />
               </foreignObject>
           )}
 
           {selectedRooms.includes("1.1") && (
-              <foreignObject x={420} y={395} width="200" height="100">
+              <foreignObject x={350} y={350} width="200" height="100">
                 <DataOverlay artifact={roomArtifacts?.["1.1"]} roomId="1.1" />
               </foreignObject>
           )}

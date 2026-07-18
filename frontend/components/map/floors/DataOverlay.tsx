@@ -7,6 +7,15 @@ interface DataOverlayProps {
   roomId?: string; // Optional context for room-specific labels
 }
 
+// Helper to format numbers to max 1 decimal point
+const formatNum = (val: any) => {
+  if (val === null || val === undefined) return null;
+  const num = Number(val);
+  if (isNaN(num)) return val;
+  // If it's a whole number, return as is. Otherwise, round to 1 decimal place.
+  return Number.isInteger(num) ? num.toString() : num.toFixed(1);
+};
+
 export default function DataOverlay({ artifact, roomId }: DataOverlayProps) {
   if (!artifact) return null;
 
@@ -68,16 +77,13 @@ export default function DataOverlay({ artifact, roomId }: DataOverlayProps) {
         return (
           <div className="flex flex-col items-center justify-center gap-1">
             <div className="flex items-baseline gap-3">
-              <span className="text-4xl font-light tracking-tighter" style={{ color: textColor }}>
-                {aggs?.temperature ? `${aggs.temperature}°C` : "--"}
+              <span className="text-3xl font-light tracking-tighter" style={{ color: textColor }}>
+                {aggs?.temperature ? `${formatNum(aggs.temperature)}°C` : "--"}
               </span>
               <span className="text-2xl font-light text-[#A3B8B2]/70">
-                {aggs?.humidity ? `${aggs.humidity}%` : "--"}
+                {aggs?.humidity ? `${formatNum(aggs.humidity)}%` : "--"}
               </span>
             </div>
-            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#A3B8B2]/50">
-              Climate
-            </span>
           </div>
         );
 
@@ -85,10 +91,7 @@ export default function DataOverlay({ artifact, roomId }: DataOverlayProps) {
         return (
           <div className="flex flex-col items-center justify-center gap-1">
             <span className="text-4xl font-light tracking-tighter" style={{ color: textColor }}>
-              {aggs?.occupancy ?? "--"} <span className="text-xl text-[#A3B8B2]/60">/ {aggs?.capacity ?? "--"}</span>
-            </span>
-            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#A3B8B2]/50">
-              Occupancy
+              {aggs?.occupancy !== undefined ? formatNum(aggs.occupancy) : "--"} <span className="text-xl text-[#A3B8B2]/60">/ {aggs?.capacity ?? "--"}</span>
             </span>
           </div>
         );
@@ -98,11 +101,11 @@ export default function DataOverlay({ artifact, roomId }: DataOverlayProps) {
           <div className="flex flex-col items-center justify-center gap-2">
             <div className="flex items-baseline gap-5">
               <div className="flex flex-col items-center">
-                <span className="text-3xl font-light" style={{ color: textColor }}>{aggs?.co2 || "--"}</span>
+                <span className="text-3xl font-light" style={{ color: textColor }}>{aggs?.co2 !== undefined ? formatNum(aggs.co2) : "--"}</span>
                 <span className="text-[9px] uppercase tracking-widest text-[#A3B8B2]/50">CO2</span>
               </div>
               <div className="flex flex-col items-center">
-                <span className="text-3xl font-light" style={{ color: textColor }}>{aggs?.pm2_5 || "--"}</span>
+                <span className="text-3xl font-light" style={{ color: textColor }}>{aggs?.pm2_5 !== undefined ? formatNum(aggs.pm2_5) : "--"}</span>
                 <span className="text-[9px] uppercase tracking-widest text-[#A3B8B2]/50">PM2.5</span>
               </div>
             </div>
@@ -110,24 +113,38 @@ export default function DataOverlay({ artifact, roomId }: DataOverlayProps) {
         );
 
       case "Lights":
-      case "Doors/Windows":
-        const topVal = domain === "Lights" ? `${aggs?.light_level ?? "0"} Lvl` : `${aggs?.open_count ?? "0"} Open`;
-        const label = domain === "Lights" ? "Illumination" : "Active Access";
         return (
-          <div className="flex flex-col items-center justify-center gap-1">
-            <span className="text-3xl font-light tracking-tight" style={{ color: textColor }}>{topVal}</span>
-            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#A3B8B2]/50">{label}</span>
+          <div className="flex flex-col items-center justify-center gap-2 text-sm font-light text-[#A3B8B2]">
+            <div className="flex flex-col items-center">
+              <span className="text-3xl font-light" style={{ color: textColor }}>{aggs?.light_level !== undefined ? formatNum(aggs.light_level) : "0"}</span>
+              <span className="text-[9px] uppercase tracking-widest text-[#A3B8B2]/50">LEVEL</span>
+            </div>
+          </div>
+        );
+
+      case "Doors/Windows":
+        return (
+          <div className="flex flex-col items-center justify-center gap-2 text-sm font-light text-[#A3B8B2]">
+            <div className="flex items-baseline gap-5">
+              <div className="flex flex-col items-center">
+                <span className="text-3xl font-light" style={{ color: textColor }}>{aggs?.open_doors !== undefined ? formatNum(aggs.open_doors) : 0}</span>
+                <span className="text-[9px] uppercase tracking-widest text-[#A3B8B2]/50">DOORS</span>
+              </div>
+              <div className="flex flex-col items-center">
+                <span className="text-3xl font-light" style={{ color: textColor }}>{aggs?.open_windows !== undefined ? formatNum(aggs.open_windows) : 0}</span>
+                <span className="text-[9px] uppercase tracking-widest text-[#A3B8B2]/50">WINDOWS</span>
+              </div>
+            </div>
           </div>
         );
 
       case "Diagnostics":
         return (
           <div className="flex flex-col items-center justify-center gap-1 text-sm font-light text-[#A3B8B2]">
-            <span className="text-[10px] font-semibold uppercase tracking-[0.2em] mb-1 text-white/40">Status: {aggs?.total || 0} Total</span>
             <div className="flex gap-3">
-               <div className="flex flex-col items-center"><span style={{ color: SENSOR_COLORS.good }} className="text-xl">{aggs?.good || 0}</span><span className="text-[8px] uppercase">OK</span></div>
-               <div className="flex flex-col items-center"><span style={{ color: SENSOR_COLORS.warning }} className="text-xl">{aggs?.warning || 0}</span><span className="text-[8px] uppercase">Warn</span></div>
-               <div className="flex flex-col items-center"><span style={{ color: SENSOR_COLORS.error }} className="text-xl">{aggs?.error || 0}</span><span className="text-[8px] uppercase">Err</span></div>
+               <div className="flex flex-col items-center"><span style={{ color: SENSOR_COLORS.good }} className="text-2xl">{aggs?.good !== undefined ? formatNum(aggs.good) : 0}</span><span className="text-[8px] uppercase">OK</span></div>
+               <div className="flex flex-col items-center"><span style={{ color: SENSOR_COLORS.warning }} className="text-2xl">{aggs?.warning !== undefined ? formatNum(aggs.warning) : 0}</span><span className="text-[8px] uppercase">Warn</span></div>
+               <div className="flex flex-col items-center"><span style={{ color: SENSOR_COLORS.error }} className="text-2xl">{aggs?.error !== undefined ? formatNum(aggs.error) : 0}</span><span className="text-[8px] uppercase">Err</span></div>
             </div>
           </div>
         );

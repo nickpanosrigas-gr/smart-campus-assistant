@@ -1,4 +1,4 @@
-// MapStage.tsx
+// frontend/components/desktop/MapStage.tsx
 "use client";
 import { useState, useEffect, useRef } from "react";
 import InteractiveMap from "@/components/map/InteractiveMap"; 
@@ -19,9 +19,8 @@ interface MapStageProps {
   setIsZoomed: (zoom: boolean) => void;
   roomHealthData: Record<string, RoomHealth>;
   onToggleSelect: (toggle: string) => void;
-  
-  // NEW: Accept the artifacts dictionary
   roomArtifacts: Record<string, any>;
+  allArtifacts: Record<string, Record<string, any>>;
 }
 
 const ALL_TOGGLES = ["Air Quality", "Doors/Windows", "Lights", "Occupancy", "Climate", "Schedule", "Diagnostics"];
@@ -48,9 +47,11 @@ export default function MapStage(props: MapStageProps) {
   const unavailableToggles = ALL_TOGGLES.filter(t => !props.activeTools.includes(t));
 
   return (
-    <div className="w-full h-full flex flex-col relative p-6 bg-gradient-to-br from-[#0d0d0d] to-[#141414]">
+    // FIX: Replaced the bg-gradient classes with bg-transparent
+    <div className="w-full h-full relative overflow-hidden bg-transparent">
       
-      <div className="flex-1 flex min-h-0 mb-6 relative items-center justify-center">
+      {/* MAP LAYER */}
+      <div className="absolute inset-0 z-0"> 
         <InteractiveMap 
           appState={props.appState}
           activeTools={currentView ? [currentView] : []}
@@ -63,52 +64,54 @@ export default function MapStage(props: MapStageProps) {
           isZoomed={props.isZoomed}
           setIsZoomed={props.setIsZoomed}
           roomHealthData={props.roomHealthData}
-          
-          // NEW: Pass artifacts down to InteractiveMap
           roomArtifacts={props.roomArtifacts}
+          allArtifacts={props.allArtifacts}
         />
       </div>
 
-      <LayoutGroup>
-         <div className="w-full shrink-0 flex items-center justify-center gap-4 flex-wrap pb-2">
-          {availableToggles.length > 0 && (
-            <motion.div layout className="flex items-center bg-[#053D2F]/80 border border-[#0A664F] rounded-full p-1.5 shadow-[0_4px_20px_rgba(20,200,155,0.15)]">
-              {availableToggles.map(toggle => {
-                const isSelected = toggle === currentView;
-                return (
+      {/* TOGGLES LAYER */}
+      <div className="absolute bottom-6 left-0 right-0 z-10 pointer-events-none flex flex-col items-center justify-end">
+        <LayoutGroup>
+           <div className="w-full shrink-0 flex items-center justify-center gap-4 flex-wrap pb-2 pointer-events-auto">
+            {availableToggles.length > 0 && (
+              <motion.div layout className="flex items-center bg-[#053D2F]/80 border border-[#0A664F] rounded-full p-1.5 shadow-[0_4px_20px_rgba(20,200,155,0.15)]">
+                {availableToggles.map(toggle => {
+                  const isSelected = toggle === currentView;
+                  return (
+                    <motion.button 
+                      layout="position" 
+                      key={toggle} 
+                      onClick={() => handleToggleClick(toggle)}
+                      className={`px-6 py-2.5 rounded-full text-sm font-semibold transition-colors duration-300 ${
+                        isSelected 
+                          ? "bg-[#14C89B] text-[#0A0A0A] shadow-[0_0_15px_rgba(20,200,155,0.4)]" 
+                          : "bg-transparent text-[#14C89B] hover:bg-[#0A664F]/60"
+                      }`}
+                    >
+                      {toggle}
+                    </motion.button>
+                  );
+                })}
+              </motion.div>
+            )}
+
+            {unavailableToggles.length > 0 && (
+              <motion.div layout className="flex items-center bg-[#1A1A1A]/80 border border-[#333333] rounded-full p-1.5 shadow-inner">
+                {unavailableToggles.map(toggle => (
                   <motion.button 
                     layout="position" 
                     key={toggle} 
                     onClick={() => handleToggleClick(toggle)}
-                    className={`px-6 py-2.5 rounded-full text-sm font-semibold transition-colors duration-300 ${
-                      isSelected 
-                        ? "bg-[#14C89B] text-[#0A0A0A] shadow-[0_0_15px_rgba(20,200,155,0.4)]" 
-                        : "bg-transparent text-[#14C89B] hover:bg-[#0A664F]/60"
-                    }`}
+                    className="px-5 py-2.5 rounded-full text-sm font-medium bg-transparent text-[#A3B8B2]/50 hover:text-[#A3B8B2] hover:bg-[#2A2A2A] transition-colors duration-300"
                   >
                     {toggle}
                   </motion.button>
-                );
-              })}
-            </motion.div>
-          )}
-
-          {unavailableToggles.length > 0 && (
-            <motion.div layout className="flex items-center bg-[#1A1A1A]/80 border border-[#333333] rounded-full p-1.5 shadow-inner">
-              {unavailableToggles.map(toggle => (
-                <motion.button 
-                  layout="position" 
-                  key={toggle} 
-                  onClick={() => handleToggleClick(toggle)}
-                  className="px-5 py-2.5 rounded-full text-sm font-medium bg-transparent text-[#A3B8B2]/50 hover:text-[#A3B8B2] hover:bg-[#2A2A2A] transition-colors duration-300"
-                >
-                  {toggle}
-                </motion.button>
-              ))}
-            </motion.div>
-          )}
-        </div>
-      </LayoutGroup>
+                ))}
+              </motion.div>
+            )}
+          </div>
+        </LayoutGroup>
+      </div>
     </div>
   );
 }

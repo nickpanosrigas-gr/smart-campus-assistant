@@ -203,13 +203,13 @@ export default function Floor0Base({ activeTools, selectedRooms, onToggleRoom, r
 
         <g id="Data-Centroids" className="pointer-events-none">
           {selectedRooms.includes("restaurant") && (
-              <foreignObject x={400} y={210} width="200" height="100">
+              <foreignObject x={250} y={140} width="200" height="100">
                 <DataOverlay artifact={roomArtifacts?.["restaurant"]} roomId="restaurant" />
               </foreignObject>
           )}
 
           {selectedRooms.includes("entrance") && (
-              <foreignObject x={380} y={320} width="200" height="100">
+              <foreignObject x={400} y={350} width="200" height="100">
                 <DataOverlay artifact={roomArtifacts?.["entrance"]} roomId="entrance" />
               </foreignObject>
           )}
