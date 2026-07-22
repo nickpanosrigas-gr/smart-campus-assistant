@@ -80,8 +80,8 @@ class DoorWindowInput(BaseModel):
         description="The time window for the data request. 'now' provides a real-time snapshot. '2h', '24h', '7d' provide timelines. '30d', '90d' provide long-term profiling."
     )
 
-@tool("get_door_window_status", args_schema=DoorWindowInput, response_format="content_and_artifact")
-def get_door_window_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
+@tool("get_doors_windows_status", args_schema=DoorWindowInput, response_format="content_and_artifact")
+def get_doors_windows_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     """
     Tracks physical access points (Doors/Windows) using Magnetic Contact (MC) sensors.
     Reports Open/Closed states, timelines of physical entry, and long-term anomalies.
@@ -677,21 +677,21 @@ if __name__ == "__main__":
     print("-" * 50)
     try:
         print("\n[Testing]")
-        summary, raw_data = get_door_window_status.func(room="2.3", timeframe="now")
+        summary, raw_data = get_doors_windows_status.func(room="2.3", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("-" * 50)
         
         print("\n[Testing]")
-        summary, raw_data = get_door_window_status.func(room="2.3", timeframe="24h")
+        summary, raw_data = get_doors_windows_status.func(room="2.3", timeframe="24h")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("-" * 50)
         
         print("\n[Testing]")
-        summary, raw_data = get_door_window_status.func(room="2.3", timeframe="30d")
+        summary, raw_data = get_doors_windows_status.func(room="2.3", timeframe="30d")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)

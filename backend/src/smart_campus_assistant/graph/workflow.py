@@ -48,7 +48,7 @@ TOOL_PHRASES = {
         "Running health audit on {room} devices ({timeframe})...",
         "Analyzing hardware connectivity for {room} ({timeframe})..."
     ],
-    "get_door_window_status": [
+    "get_doors_windows_status": [
         "Scanning access states for {room} ({timeframe})...",
         "Reviewing {timeframe} entry logs for {room}..."
     ],
@@ -65,7 +65,7 @@ TOOL_PHRASES = {
         "Loading {timeframe} schedule data for {room}...",
         "Verifying course occupancy for {room} ({timeframe})..."
     ],
-    "get_temp_humidity": [
+    "get_climate": [
         "Checking climate stats for {room} ({timeframe})...",
         "Analyzing {timeframe} climate stability in {room}..."
     ],
@@ -87,10 +87,10 @@ BACKEND_TO_UI_TOOLS = {
     "get_course_schedule": "Schedule", 
     "get_instructor_schedule": "Schedule", 
     "get_semester_schedule": "Schedule",
-    "get_temp_humidity": "Climate",
+    "get_climate": "Climate",
     "get_air_quality": "Air Quality",
     "get_occupancy": "Occupancy",
-    "get_door_window_status": "Doors/Windows",
+    "get_doors_windows_status": "Doors/Windows",
     "get_ambient_lights": "Lights",
     "get_diagnostics": "Diagnostics",
     "get_energy_infrastructure": "Energy",
@@ -172,8 +172,11 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
     has_called_tools = False # Tracks if we are in the 'Initial' or 'Processing' phase
     
     try:
+        # Wrap the user query in XML tags to enforce the security instructions in the system prompt
+        secure_query = f"<user_input>\n{user_query}\n</user_input>"
+        
         async for event in app.astream_events(
-            {"messages": [HumanMessage(content=user_query)]}, 
+            {"messages": [HumanMessage(content=secure_query)]}, 
             config=config, 
             version="v2"
         ):

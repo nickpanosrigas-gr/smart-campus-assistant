@@ -176,8 +176,8 @@ def average_nested_baselines(raw_bases: List[Dict], keys: List[str]) -> Dict[str
             final_result[k][c] = np.mean(vals) if vals else None
     return final_result
 
-@tool("get_temp_humidity", args_schema=TempHumidityInput, response_format="content_and_artifact")
-def get_temp_humidity(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
+@tool("get_climate", args_schema=TempHumidityInput, response_format="content_and_artifact")
+def get_climate(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     """
     Tracks indoor Temperature, Humidity, and Pressure, correlated with Outdoor Weather.
     Splits baselines via a schedule matrix and strictly enforces absolute safety limits.
@@ -945,21 +945,21 @@ if __name__ == "__main__":
     
     try:
         print("\n[Testing]")
-        summary, raw_data = get_temp_humidity.func(room="parkin.b", timeframe="now")
+        summary, raw_data = get_climate.func(room="parkin.b", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("\n" + "="*50)
         
         print("\n[Testing]")
-        summary, raw_data = get_temp_humidity.func(room="building", timeframe="24h")
+        summary, raw_data = get_climate.func(room="building", timeframe="24h")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("\n" + "="*50)
         
         print("\n[Testing]")
-        summary, raw_data = get_temp_humidity.func(room="building", timeframe="30d")
+        summary, raw_data = get_climate.func(room="building", timeframe="30d")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
