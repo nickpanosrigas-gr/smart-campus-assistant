@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from "react";
 import ChatPanel from "@/components/desktop/ChatPanel";
 import MapStage from "@/components/desktop/MapStage";
 import { RoomHealth } from "@/components/map/constants";
+import Sidebar from "@/components/desktop/Sidebar";
 
 export type AppState = "idle" | "routing" | "tool_execution" | "resolved";
 export type ViewType = "snapshot" | "graph" | "schedule"; 
@@ -378,44 +379,61 @@ export default function DesktopDashboard() {
 
   return (
     <main 
-      className="w-full h-screen flex overflow-hidden text-[#A3B8B2] p-4 gap-4"
+      className="w-full h-screen flex overflow-hidden text-[#A3B8B2]"
       style={{
         background: "radial-gradient(circle at 30% 20%, #064E3B 0%, #020604 50%, #000000 100%)"
       }}
     >
-      <div className="flex-1 flex flex-col min-w-0 relative overflow-hidden h-full">
-        <MapStage 
-          appState={appState} 
-          activeTools={activeTools}
-          activeLevel={activeLevel}
-          setActiveLevel={setActiveLevel} 
-          selectedRooms={selectedRooms}
-          onRoomToggle={handleRoomSelect}
-          viewMode={currentViewType} 
-          setViewMode={setCurrentViewType}
-          isZoomed={isZoomed}
-          setIsZoomed={(z) => updateFloor(activeLevel, { isZoomed: z })}
-          onToggleSelect={handleToggleSelect}
-          roomHealthData={currentRoomHealthData}
-          roomArtifacts={activeViewArtifacts} 
-          allArtifacts={roomArtifacts}
-        />
-      </div>
+      {/* Sidebar sits completely flush to the left, top, and bottom edge */}
+      <Sidebar 
+        activeLevel={activeLevel}
+        setActiveLevel={setActiveLevel}
+        selectedRooms={selectedRooms}
+        onRoomToggle={handleRoomSelect}
+        activeTools={activeTools}
+        floorStates={floorStates} // <--- NEW PROP ADDED HERE
+      />
 
-      <div className="w-[630px] flex-shrink-0 h-full transition-all duration-500 ease-in-out">
-        <ChatPanel 
-          appState={appState} 
-          llmStatus={llmStatus}
-          onSendMessage={handleUserMessage}
-          onSendAudio={handleSendAudio}
-          activeTools={activeTools}
-          messages={messages}
-          contextData={contextData}  
-          sessionTools={sessionTools} 
-          onResetSession={handleResetSession}
-          transcribedText={transcribedText}
-          onClearTranscribedText={() => setTranscribedText(null)}
-        />
+      {/* The rest of the app has padding so it floats nicely next to the flush sidebar */}
+      <div className="flex-1 flex gap-4 p-4 min-w-0">
+        
+        {/* MapStage Wrapper (Rounded to match new pill UI) */}
+        <div className="flex-1 flex flex-col min-w-0 relative overflow-hidden h-full rounded-3xl">
+          <MapStage 
+            appState={appState} 
+            activeTools={activeTools}
+            activeLevel={activeLevel}
+            setActiveLevel={setActiveLevel} 
+            selectedRooms={selectedRooms}
+            onRoomToggle={handleRoomSelect}
+            viewMode={currentViewType} 
+            setViewMode={setCurrentViewType}
+            isZoomed={isZoomed}
+            setIsZoomed={(z) => updateFloor(activeLevel, { isZoomed: z })}
+            onToggleSelect={handleToggleSelect}
+            roomHealthData={currentRoomHealthData}
+            roomArtifacts={activeViewArtifacts} 
+            allArtifacts={roomArtifacts}
+          />
+        </div>
+
+        {/* ChatPanel */}
+        <div className="w-[630px] flex-shrink-0 h-full transition-all duration-500 ease-in-out">
+          <ChatPanel 
+            appState={appState} 
+            llmStatus={llmStatus}
+            onSendMessage={handleUserMessage}
+            onSendAudio={handleSendAudio}
+            activeTools={activeTools}
+            messages={messages}
+            contextData={contextData}  
+            sessionTools={sessionTools} 
+            onResetSession={handleResetSession}
+            transcribedText={transcribedText}
+            onClearTranscribedText={() => setTranscribedText(null)}
+          />
+        </div>
+
       </div>
     </main>
   );

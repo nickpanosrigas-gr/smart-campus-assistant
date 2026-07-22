@@ -1,4 +1,3 @@
-// frontend/components/map/InteractiveMap.tsx
 "use client";
 import { useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -15,7 +14,7 @@ import Floor4Base from "./floors/Floor4";
 import Floor5Base from "./floors/Floor5";
 import { BUILDING_LEVELS, RoomHealth } from "./constants";
 
-// ADDED: Helper function to map rooms to floors
+// Helper function to map rooms to floors
 const getFloorForRoom = (roomId: string) => {
   if (["parkin.c"].includes(roomId)) return "-3";
   if (["parkin.b"].includes(roomId)) return "-2";
@@ -43,7 +42,6 @@ interface InteractiveMapProps {
   setIsZoomed: (zoom: boolean) => void;
   roomHealthData: Record<string, RoomHealth>;
   roomArtifacts: Record<string, any>;
-  // ADDED: TypeScript definition for the new prop
   allArtifacts?: Record<string, Record<string, any>>; 
 }
 
@@ -65,35 +63,7 @@ export default function InteractiveMap(props: InteractiveMapProps) {
   return (
     <div className="w-full h-full relative overflow-hidden flex items-center justify-center">
 
-      <div className="absolute left-4 top-1/2 -translate-y-1/2 z-20 flex flex-col gap-2 bg-[#0A0A0A]/60 backdrop-blur-xl p-2 rounded-2xl border border-[#A3B8B2]/10 shadow-lg">
-        {BUILDING_LEVELS.map(lvl => {
-          const isCurrent = activeLevel === lvl;
-          
-          const hasData = Object.entries(allArtifacts || roomArtifacts || {}).some(([roomId, data]: [string, any]) => {
-            if (getFloorForRoom(roomId) === String(lvl)) return true;
-            
-            const artifacts = allArtifacts ? Object.values(data) : [data];
-            return artifacts.some((artifact: any) => artifact && String(artifact.floor) === String(lvl));
-          });
-
-          let buttonStyles = "text-[#A3B8B2] hover:bg-[#14C89B]/20";
-          if (isCurrent) {
-            buttonStyles = "bg-[#14C89B] text-black shadow-[0_0_15px_rgba(20,200,155,0.4)]";
-          } else if (hasData) {
-            buttonStyles = "bg-[#0A664F] text-white shadow-sm";
-          }
-
-          return (
-            <button
-              key={lvl}
-              onClick={() => setActiveLevel(lvl)}
-              className={`w-10 h-10 rounded-xl font-bold transition-all ${buttonStyles}`}
-            >
-              {lvl}
-            </button>
-          );
-        })}
-      </div>
+      {/* The old vertical bar has been completely removed from here! */}
 
       <AnimatePresence mode="wait">
         {viewMode === "map" ? (
@@ -117,12 +87,12 @@ export default function InteractiveMap(props: InteractiveMapProps) {
           >
             <TransformComponent
               wrapperStyle={{ width: "100%", height: "100%" }}
-              contentStyle={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}
+              contentStyle={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyItems: "center" }}
             >
               <motion.div
                 key="map"
                 exit={{ opacity: 0, rotateY: 90 }}
-                className="w-full h-full max-w-[80%] max-h-[80%] transition-transform duration-700 ease-[cubic-bezier(0.34,1.56,0.64,1)]"
+                className="w-full h-full max-w-[80%] max-h-[80%] transition-transform duration-700 ease-[cubic-bezier(0.34,1.56,0.64,1)] flex items-center justify-center"
                 onClickCapture={(e) => {
                   if (isDragging.current) {
                     e.stopPropagation();
