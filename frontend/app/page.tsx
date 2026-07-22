@@ -8,7 +8,7 @@ export type AppState = "idle" | "routing" | "tool_execution" | "resolved";
 export type ViewType = "snapshot" | "graph" | "schedule"; 
 
 export interface LLMStatus {
-  state: "thinking" | "tool_use";
+  state: "thinking" | "tool_use" | "transcribing";
   message: string;
   tool_name?: string;
 }
@@ -61,6 +61,7 @@ export default function DesktopDashboard() {
   const [contextData, setContextData] = useState({ tokens: 0 });
   const [sessionTools, setSessionTools] = useState<{tool: string, room: string}[]>([]);
   const [messages, setMessages] = useState<Array<{ sender: "user" | "agent"; text: string }>>([]);
+  const [transcribedText, setTranscribedText] = useState<string | null>(null);
   
   const ws = useRef<WebSocket | null>(null);
   const activeLevelRef = useRef(activeLevel);
@@ -116,33 +117,38 @@ export default function DesktopDashboard() {
 
   // --- WEBSOCKET CONNECTION ---
   useEffect(() => {
-    // Dynamically generate the WS URL based on the browser's current address
     const getWsUrl = () => {
-      if (typeof window === "undefined") return ""; // SSR safety
-      // Local development fallback
+      if (typeof window === "undefined") return ""; 
       if (window.location.hostname === "localhost") {
         return "ws://localhost:8000/ws/chat"; 
       }
-      // Production: use the exact same domain the user is visiting
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       return `${protocol}//${window.location.host}/ws/chat`;
     };
 
-    ws.current = new WebSocket(getWsUrl()); // 👈 Use the dynamic function here
+    ws.current = new WebSocket(getWsUrl());
     ws.current.onopen = () => console.log("🟢 Connected to Smart Campus Backend");
 
     ws.current.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        
-        // ==========================================
-        // 🚨 DEBUGGING INTERCEPTOR 🚨
         console.log("📥 INCOMING WS PAYLOAD:", data);
-        // ==========================================
 
         if (data.type === "llm_status") {
-          setAppState(data.state === "thinking" ? "routing" : "tool_execution");
+          setAppState(data.state === "thinking" || data.state === "transcribing" ? "routing" : "tool_execution");
           setLlmStatus({ state: data.state, message: data.message, tool_name: data.tool_name });
+        }
+        
+        // Handles Voice Message Text Echo (when transcribing + sending to LLM)
+        if (data.type === "transcription_result") {
+          setMessages(prev => [...prev, { sender: "user", text: data.text }]);
+        }
+
+        // Handles Transcribe Only mode
+        if (data.type === "transcription_only_result") {
+          setTranscribedText(data.text);
+          setAppState("idle");
+          setLlmStatus(null);
         }
         
         if (data.type === "map_update" && data.artifact) {
@@ -150,27 +156,22 @@ export default function DesktopDashboard() {
           const roomId = artifact.room_id;
           const domain = artifact.domain || "Unknown";
 
-          // 1. Safely determine the floor (handling 0, integers, and missing data)
           let resolvedFloor = activeLevelRef.current;
           
           if (artifact.floor !== undefined && artifact.floor !== null) {
-            resolvedFloor = String(artifact.floor); // Cast numbers to strings
+            resolvedFloor = String(artifact.floor); 
           } else if (roomId) {
-            const derivedFloor = getFloorForRoom(roomId); // Fallback if backend forgot the floor
+            const derivedFloor = getFloorForRoom(roomId); 
             if (derivedFloor) resolvedFloor = derivedFloor;
           }
 
           const targetLevel = resolvedFloor;
 
-          console.log(`✅ Artifact Parsed Successfully for Room [${roomId}] under Domain [${domain}]`);
-          
-          // 2. Safely trigger level change
           if (targetLevel !== activeLevelRef.current) {
             setActiveLevel(targetLevel);
           }
           
           if (artifact.view_type) {
-            // If it's an error, force the UI to stay on the map ("snapshot") so we can see the red rooms
             if (artifact.view_type === "error") {
               setCurrentViewType("snapshot");
             } else {
@@ -178,13 +179,12 @@ export default function DesktopDashboard() {
             }
           }
 
-          // Save the artifact deeply nested by roomId AND domain
           if (roomId) {
             setRoomArtifacts(prev => ({
               ...prev,
               [roomId]: {
                 ...(prev[roomId] || {}),
-                [domain]: artifact // Store by specific tool domain
+                [domain]: artifact 
               }
             }));
           }
@@ -211,7 +211,7 @@ export default function DesktopDashboard() {
           });
         }
 
-        if (data.text) {
+        if (data.type === "text" && data.text) {
           const replyText = data.text;
           setMessages(prev => {
             if (prev.length > 0 && prev[prev.length - 1].sender === "agent") {
@@ -257,10 +257,20 @@ export default function DesktopDashboard() {
     }
   };
 
+  const handleSendAudio = (audioBase64: string, sendToLLM: boolean, currentInput: string) => {
+    setAppState("routing");
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({
+        type: sendToLLM ? "voice_message" : "transcribe_audio",
+        audio: audioBase64,
+        format: "webm",
+        prepend_text: currentInput
+      }));
+    }
+  };
+
   const handleToggleSelect = (toggle: string) => {
     const isNewTool = !activeTools.includes(toggle);
-    
-    // Always bring the selected toggle to the front (index 0) so the UI visualizes it
     const newTools = [toggle, ...activeTools.filter(t => t !== toggle)];
     let roomsToFetch = selectedRooms;
 
@@ -271,9 +281,7 @@ export default function DesktopDashboard() {
       updateFloor(activeLevel, { activeTools: newTools });
     }
 
-    // CACHE CHECK: Only fetch data if we don't already have the artifact for this specific tool + room
     const roomsRequiringFetch = roomsToFetch.filter(roomId => {
-      // Loose case-insensitive check just to be safe
       const roomData = roomArtifacts[roomId] || {};
       const hasKey = Object.keys(roomData).some(k => k.toLowerCase() === toggle.toLowerCase());
       return !hasKey;
@@ -286,10 +294,7 @@ export default function DesktopDashboard() {
         floor: activeLevel,
         domain: toggle
       };
-      console.log("📤 OUTGOING WS (Toggle):", payload);
       ws.current?.send(JSON.stringify(payload));
-    } else {
-      console.log(`♻️ Skipping Fetch: Cache hit for Tool [${toggle}] across Rooms [${roomsToFetch}]`);
     }
   };
 
@@ -297,7 +302,6 @@ export default function DesktopDashboard() {
     const hasActiveTools = activeTools.length > 0;
     const isCurrentlySelected = selectedRooms.includes(roomId);
 
-    // Prevent deselection if tools are active (data is in LLM context)
     if (isCurrentlySelected && hasActiveTools) return; 
 
     let newSelection = [];
@@ -314,7 +318,6 @@ export default function DesktopDashboard() {
 
     updateFloor(activeLevel, { selectedRooms: newSelection, isZoomed: newZoom });
 
-    // Fetch all active tools for the new room IF not already cached
     if (isSelecting && ws.current && ws.current.readyState === WebSocket.OPEN && hasActiveTools) {
         activeTools.forEach(tool => {
             const roomData = roomArtifacts[roomId] || {};
@@ -327,7 +330,6 @@ export default function DesktopDashboard() {
                     floor: activeLevel,
                     domain: tool
                 };
-                console.log("📤 OUTGOING WS (Room):", payload);
                 ws.current?.send(JSON.stringify(payload));
             }
         });
@@ -344,20 +346,19 @@ export default function DesktopDashboard() {
     setCurrentViewType("snapshot");
     setLlmStatus(null);
     setAppState("idle");
-    sessionStorage.clear(); // Complete cache clear on reset
+    setTranscribedText(null);
+    sessionStorage.clear();
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({ type: "reset_session" }));
     }
   };
 
-  // --- DYNAMIC VISUAL DERIVATION (CASE-INSENSITIVE) ---
   const visuallyActiveTool = activeTools[0]; 
   const activeViewArtifacts: Record<string, any> = {};
   const currentRoomHealthData: Record<string, RoomHealth> = {};
 
   if (visuallyActiveTool) {
     Object.keys(roomArtifacts).forEach(roomId => {
-      // Find the exact tool key regardless of upper/lower case mismatch from backend
       const toolKey = Object.keys(roomArtifacts[roomId]).find(
           key => key.toLowerCase() === visuallyActiveTool.toLowerCase()
       );
@@ -366,12 +367,9 @@ export default function DesktopDashboard() {
         const artifact = roomArtifacts[roomId][toolKey];
         activeViewArtifacts[roomId] = artifact;
         
-        // Force the status to lowercase to match the constants dictionary perfectly
         if (artifact.status) {
           currentRoomHealthData[roomId] = artifact.status.toLowerCase() as RoomHealth;
-        } 
-        // Catch error payloads that lack a status field and force them to "error"
-        else if (artifact.view_type === "error") {
+        } else if (artifact.view_type === "error") {
           currentRoomHealthData[roomId] = "error";
         }
       }
@@ -385,7 +383,6 @@ export default function DesktopDashboard() {
         background: "radial-gradient(circle at 30% 20%, #064E3B 0%, #020604 50%, #000000 100%)"
       }}
     >
-      
       <div className="flex-1 flex flex-col min-w-0 relative overflow-hidden h-full">
         <MapStage 
           appState={appState} 
@@ -399,7 +396,6 @@ export default function DesktopDashboard() {
           isZoomed={isZoomed}
           setIsZoomed={(z) => updateFloor(activeLevel, { isZoomed: z })}
           onToggleSelect={handleToggleSelect}
-          
           roomHealthData={currentRoomHealthData}
           roomArtifacts={activeViewArtifacts} 
           allArtifacts={roomArtifacts}
@@ -411,11 +407,14 @@ export default function DesktopDashboard() {
           appState={appState} 
           llmStatus={llmStatus}
           onSendMessage={handleUserMessage}
+          onSendAudio={handleSendAudio}
           activeTools={activeTools}
           messages={messages}
           contextData={contextData}  
           sessionTools={sessionTools} 
           onResetSession={handleResetSession}
+          transcribedText={transcribedText}
+          onClearTranscribedText={() => setTranscribedText(null)}
         />
       </div>
     </main>

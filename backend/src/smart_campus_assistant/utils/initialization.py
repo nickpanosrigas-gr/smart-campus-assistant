@@ -84,6 +84,27 @@ def check_whisper() -> bool:
         logger.error(f"Whisper API is offline or unreachable: {e}")
         return False
 
+def unload_ollama_embed_model():
+    """
+    Sends a termination signal to Ollama to instantly drop the embedding model from VRAM.
+    """
+    logger.info(f"Evicting embedding model '{settings.OLLAMA_EMBED_MODEL}' from VRAM...")
+    
+    base_url = settings.OLLAMA_BASE_URL.rstrip('/')
+    url = f"{base_url}/api/generate"
+    
+    # keep_alive: 0 instructs Ollama to immediately unload the model
+    payload = {
+        "model": settings.OLLAMA_EMBED_MODEL,
+        "keep_alive": 0
+    }
+    
+    try:
+        requests.post(url, json=payload, timeout=5)
+        logger.info("Embedding model VRAM successfully cleared.")
+    except RequestException as e:
+        logger.error(f"Failed to unload Ollama embedding model: {e}")
+
 def run_initialization() -> bool:
     """
     Master initialization sequence. 
@@ -106,6 +127,9 @@ def run_initialization() -> bool:
     try:
         # Run the sync process we built earlier
         sync_knowledge_base(data_dir=f"{settings.DATA_DIR}/knowledge")
+        
+        # Unload the embedding model from VRAM now that sync is complete
+        unload_ollama_embed_model()
         
         logger.info("Initialization sequence completed successfully.")
         return True

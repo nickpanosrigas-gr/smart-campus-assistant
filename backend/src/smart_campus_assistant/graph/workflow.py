@@ -12,6 +12,7 @@ from transformers import AutoTokenizer
 
 from src.smart_campus_assistant.config.settings import settings
 from src.smart_campus_assistant.agents.supervisor import supervisor_llm, all_campus_tools, supervisor_prompt
+from src.smart_campus_assistant.clients.whisper_client import whisper_client
 
 logger = logging.getLogger(__name__)
 
@@ -493,4 +494,92 @@ async def handle_map_interaction(rooms: list, floor: str, domain: str, thread_id
             "type": "context_update",
             "tokens": token_count,
             "session_tools": session_tools
+        })
+
+async def process_voice_message(base64_audio: str, audio_format: str, prepend_text: str, thread_id: str, websocket):
+    """
+    Transcribes incoming base64 voice recordings, combines them with any existing 
+    text from the input box, echoes the final text to the UI, and hands execution over to the LLM.
+    """
+    await websocket.send_json({
+        "type": "llm_status",
+        "state": "transcribing",
+        "message": "Transcribing voice message..."
+    })
+
+    try:
+        transcribed_text = await whisper_client.transcribe_base64_audio(
+            base64_audio, 
+            file_extension=audio_format or "webm"
+        )
+
+        # Stitch existing text and new transcription together
+        parts = []
+        if prepend_text and prepend_text.strip():
+            parts.append(prepend_text.strip())
+        if transcribed_text and transcribed_text.strip():
+            parts.append(transcribed_text.strip())
+            
+        final_text = " ".join(parts)
+
+        if not final_text:
+            await websocket.send_json({
+                "type": "text", 
+                "text": "\n[Could not transcribe audio. Please try speaking again.]"
+            })
+            return
+
+        # Send the combined text back to the frontend so the UI bubble displays it correctly
+        await websocket.send_json({
+            "type": "transcription_result",
+            "text": final_text
+        })
+
+        # Route the fully combined text to the LLM
+        await process_chat_message(final_text, thread_id, websocket)
+
+    except Exception as e:
+        logger.error(f"[VOICE PROCESS ERROR] {e}")
+        await websocket.send_json({
+            "type": "text", 
+            "text": "\n[System Error: Unable to process voice message.]"
+        })
+
+async def process_transcribe_only(base64_audio: str, audio_format: str, websocket):
+    """
+    Transcribes incoming base64 voice recordings and returns the text to the UI 
+    without executing the LLM workflow.
+    """
+    # 1. Notify UI that audio is being processed
+    await websocket.send_json({
+        "type": "llm_status",
+        "state": "transcribing",
+        "message": "Transcribing audio..."
+    })
+
+    try:
+        # 2. Perform transcription via your new Whisper Client
+        transcribed_text = await whisper_client.transcribe_base64_audio(
+            base64_audio, 
+            file_extension=audio_format or "webm"
+        )
+
+        if not transcribed_text:
+            await websocket.send_json({
+                "type": "text", 
+                "text": "\n[Could not transcribe audio.]"
+            })
+            return
+
+        # 3. Send transcribed text back to frontend so UI can append it to the input field
+        await websocket.send_json({
+            "type": "transcription_only_result",
+            "text": transcribed_text
+        })
+
+    except Exception as e:
+        logger.error(f"[TRANSCRIBE ONLY ERROR] {e}")
+        await websocket.send_json({
+            "type": "text", 
+            "text": "\n[System Error: Transcription failed.]"
         })
