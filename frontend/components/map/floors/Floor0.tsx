@@ -202,17 +202,25 @@ export default function Floor0Base({ activeTools, selectedRooms, onToggleRoom, r
         </g>
 
         <g id="Data-Centroids" className="pointer-events-none">
-          {selectedRooms.includes("restaurant") && (
-              <foreignObject x={250} y={140} width="200" height="100">
-                <DataOverlay artifact={roomArtifacts?.["restaurant"]} roomId="restaurant" />
-              </foreignObject>
-          )}
+          <foreignObject x={250} y={140} width="200" height="100">
+            {selectedRooms.includes("restaurant") ? (
+              <DataOverlay artifact={roomArtifacts?.["restaurant"]} roomId="restaurant" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center font-sans">
+                <span className="text-[#A3B8B2]/50 text-base font-light tracking-widest uppercase drop-shadow-md">Restaurant</span>
+              </div>
+            )}
+          </foreignObject>
 
-          {selectedRooms.includes("entrance") && (
-              <foreignObject x={400} y={350} width="200" height="100">
-                <DataOverlay artifact={roomArtifacts?.["entrance"]} roomId="entrance" />
-              </foreignObject>
-          )}
+          <foreignObject x={400} y={350} width="200" height="100">
+            {selectedRooms.includes("entrance") ? (
+              <DataOverlay artifact={roomArtifacts?.["entrance"]} roomId="entrance" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center font-sans">
+                <span className="text-[#A3B8B2]/50 text-base font-light tracking-widest uppercase drop-shadow-md">Entrance</span>
+              </div>
+            )}
+          </foreignObject>
         </g>
 
         <defs>

@@ -473,7 +473,7 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             "  Domain: Occupancy",
             f"  Room: {room}",
             "  Timeframe: Now (Snapshot)",
-            f"  Current_Time: {now_ts.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"  Current_Time: {now_ts.strftime('%A, %Y-%m-%d %H:%M:%S')}",
             f"  Active_Context: {current_ctx}",
             f"  Primary_Sensor: {primary_type}",
             f"  Supporting_Sensors: {support_sensors_str}"
@@ -803,7 +803,7 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             "  Domain: Occupancy",
             f"  Room: {room}",
             f"  Timeframe: {timeframe} (Long-Term Statistical Profile)",
-            f"  Current_Time: {now_ts.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"  Current_Time: {now_ts.strftime('%A, %Y-%m-%d %H:%M:%S')}",
             f"  Primary_Sensor: {primary_type}",
             f"  Supporting_Sensors: {support_sensors_str}"
         ]
@@ -937,7 +937,7 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         "  Domain: Occupancy",
         f"  Room: {room}",
         f"  Timeframe: {timeframe} ({bin_size} intervals)",
-        f"  Current_Time: {now_ts.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"  Current_Time: {now_ts.strftime('%A, %Y-%m-%d %H:%M:%S')}",
         f"  Primary_Sensor: {primary_type}",
         f"  Supporting_Sensors: {support_sensors_str}",
     ]

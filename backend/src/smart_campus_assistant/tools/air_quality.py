@@ -361,7 +361,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             "  Domain: Health & Safety (Indoor_IAQ)",
             f"  Room: {room.upper()}",
             "  Timeframe: Now (Snapshot)",
-            f"  Current_Time: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"  Current_Time: {pd.Timestamp.now().strftime('%A, %Y-%m-%d %H:%M:%S')}",
             f"  Active_Context: {current_ctx}",
         ]
         output.extend(sensor_info_lines)
@@ -580,7 +580,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             "  Domain: Health & Safety (Indoor_IAQ)",
             f"  Room: {room.upper()}",
             f"  Timeframe: {timeframe} (Long-Term Matrix Profile)",
-            f"  Current_Time: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"  Current_Time: {pd.Timestamp.now().strftime('%A, %Y-%m-%d %H:%M:%S')}",
         ]
         output.extend(sensor_info_lines)
         output.extend([
@@ -659,7 +659,7 @@ def get_air_quality(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         "  Domain: Health & Safety (Indoor_IAQ)",
         f"  Room: {room.upper()}",
         f"  Timeframe: {timeframe} ({bin_size} intervals)",
-        f"  Current_Time: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        f"  Current_Time: {pd.Timestamp.now().strftime('%A, %Y-%m-%d %H:%M:%S')}",
     ]
     output.extend(sensor_info_lines)
     output.extend([

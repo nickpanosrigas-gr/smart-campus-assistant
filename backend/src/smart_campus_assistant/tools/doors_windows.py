@@ -156,7 +156,7 @@ def get_doors_windows_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, d
     else: header_lines.append(f"  Timeframe: {timeframe} ({TIMEFRAME_CONFIG[timeframe]['bin_size']} intervals)")
 
     now_ts_for_ctx = pd.Timestamp.now(tz=settings.TIMEZONE)
-    header_lines.append(f"  Current_Time: {now_ts_for_ctx.strftime('%Y-%m-%d %H:%M:%S')}")
+    header_lines.append(f"  Current_Time: {now_ts_for_ctx.strftime('%A, %Y-%m-%d %H:%M:%S')}")
     header_lines.append(f"  Active_Context: {get_time_context(now_ts_for_ctx)}")
     header_lines.append(f"  Active_Sensors: {active_count}/{total_count} Online")
     

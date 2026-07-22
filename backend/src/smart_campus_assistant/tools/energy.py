@@ -167,7 +167,7 @@ def get_energy_infrastructure(room: Rooms, timeframe: Timeframes) -> str:
     else: header_lines.append(f"  Timeframe: {timeframe} ({TIMEFRAME_CONFIG[timeframe]['bin_size']} intervals)")
         
     header_lines.extend([
-        f"  Current_Time: {now_ts.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"  Current_Time: {now_ts.strftime('%A, %Y-%m-%d %H:%M:%S')}",
         f"  Active_Context: {current_ctx}",
         f"  Active_Sensors: {len(active_meters)}/{len(meters)} Online"
     ])

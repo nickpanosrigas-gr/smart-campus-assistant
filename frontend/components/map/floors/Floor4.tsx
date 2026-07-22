@@ -265,11 +265,15 @@ export default function Floor4Base({ activeTools, selectedRooms, onToggleRoom, r
         </g>
 
         <g id="Data-Centroids" className="pointer-events-none">
-          {selectedRooms.includes("4.9") && (
-              <foreignObject x={420} y={120} width="200" height="100">
-                <DataOverlay artifact={roomArtifacts?.["4.9"]} roomId="4.9" />
-              </foreignObject>
-          )}
+          <foreignObject x={420} y={120} width="200" height="100">
+            {selectedRooms.includes("4.9") ? (
+              <DataOverlay artifact={roomArtifacts?.["4.9"]} roomId="4.9" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center font-sans">
+                <span className="text-[#A3B8B2]/50 text-base font-light tracking-widest uppercase drop-shadow-md">Room 4.9</span>
+              </div>
+            )}
+          </foreignObject>
         </g>
 
         <defs>

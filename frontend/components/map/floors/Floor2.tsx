@@ -349,29 +349,45 @@ export default function Floor2Base({ activeTools, selectedRooms, onToggleRoom, r
       </g>
 
       <g id="Data-Centroids" className="pointer-events-none">
-         {selectedRooms.includes("2.4") && (
-           <foreignObject x={485} y={220} width="200" height="100">
-               <DataOverlay artifact={roomArtifacts?.["2.4"]} roomId="2.4" />
-           </foreignObject>
-         )}
+         <foreignObject x={485} y={220} width="200" height="100">
+           {selectedRooms.includes("2.4") ? (
+             <DataOverlay artifact={roomArtifacts?.["2.4"]} roomId="2.4" />
+           ) : (
+             <div className="w-full h-full flex items-center justify-center font-sans">
+               <span className="text-[#A3B8B2]/50 text-base font-light tracking-widest uppercase drop-shadow-md">Room 2.4</span>
+             </div>
+           )}
+         </foreignObject>
 
-         {selectedRooms.includes("2.3") && (
-           <foreignObject x={270} y={155} width="200" height="100">
-               <DataOverlay artifact={roomArtifacts?.["2.3"]} roomId="2.3" />
-           </foreignObject>
-         )}
+         <foreignObject x={270} y={155} width="200" height="100">
+           {selectedRooms.includes("2.3") ? (
+             <DataOverlay artifact={roomArtifacts?.["2.3"]} roomId="2.3" />
+           ) : (
+             <div className="w-full h-full flex items-center justify-center font-sans">
+               <span className="text-[#A3B8B2]/50 text-base font-light tracking-widest uppercase drop-shadow-md">Room 2.3</span>
+             </div>
+           )}
+         </foreignObject>
 
-         {selectedRooms.includes("2.2") && (
-           <foreignObject x={162} y={245} width="200" height="100">
-               <DataOverlay artifact={roomArtifacts?.["2.2"]} roomId="2.2" />
-           </foreignObject>
-         )}
+         <foreignObject x={162} y={245} width="200" height="100">
+           {selectedRooms.includes("2.2") ? (
+             <DataOverlay artifact={roomArtifacts?.["2.2"]} roomId="2.2" />
+           ) : (
+             <div className="w-full h-full flex items-center justify-center font-sans">
+               <span className="text-[#A3B8B2]/50 text-base font-light tracking-widest uppercase drop-shadow-md">Room 2.2</span>
+             </div>
+           )}
+         </foreignObject>
 
-         {selectedRooms.includes("2.1") && (
-           <foreignObject x={315} y={315} width="200" height="100">
-               <DataOverlay artifact={roomArtifacts?.["2.1"]} roomId="2.1" />
-           </foreignObject>
-         )}
+         <foreignObject x={315} y={315} width="200" height="100">
+           {selectedRooms.includes("2.1") ? (
+             <DataOverlay artifact={roomArtifacts?.["2.1"]} roomId="2.1" />
+           ) : (
+             <div className="w-full h-full flex items-center justify-center font-sans">
+               <span className="text-[#A3B8B2]/50 text-base font-light tracking-widest uppercase drop-shadow-md">Room 2.1</span>
+             </div>
+           )}
+         </foreignObject>
       </g>
 
       <defs>

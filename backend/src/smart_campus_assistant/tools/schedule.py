@@ -71,7 +71,8 @@ def _format_yaml_response(domain: str, tool_name: str, filters: str, results: Li
         f"  Domain: {domain}",
         f"  Tool: {tool_name}",
         f"  Filters: {filters}",
-        f"  Timeframe: {timeframe}"
+        f"  Timeframe: {timeframe}",
+        f"  Current_Time: {datetime.now().strftime('%A, %Y-%m-%d %H:%M:%S')}"
     ]
     
     # Provide explicit state alerts so the LLM doesn't hallucinate active classes

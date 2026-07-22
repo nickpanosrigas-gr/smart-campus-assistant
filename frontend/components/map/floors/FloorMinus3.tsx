@@ -117,11 +117,15 @@ export default function FloorMinus3Base({ activeTools, selectedRooms, onToggleRo
         </g>
 
         <g id="Data-Centroids" className="pointer-events-none">
-          {selectedRooms.includes("parkin.c") && (
-              <foreignObject x={700} y={420} width="200" height="100">
-                <DataOverlay artifact={roomArtifacts?.["parkin.c"]} roomId="parkin.c" />
-              </foreignObject>
-          )}
+          <foreignObject x={700} y={420} width="200" height="100">
+            {selectedRooms.includes("parkin.c") ? (
+              <DataOverlay artifact={roomArtifacts?.["parkin.c"]} roomId="parkin.c" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center font-sans">
+                <span className="text-[#A3B8B2]/50 text-base font-light tracking-widest uppercase drop-shadow-md">Parking C</span>
+              </div>
+            )}
+          </foreignObject>
         </g>
 
         <defs>

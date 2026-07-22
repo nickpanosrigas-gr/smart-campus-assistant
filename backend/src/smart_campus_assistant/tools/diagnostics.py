@@ -315,7 +315,7 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
             }
         }
 
-    current_time_str = datetime.now().strftime("%A, %b %d, %Y at %I:%M:%S %p EEST")
+    current_time_str = datetime.now().strftime("%A, %Y-%m-%d %H:%M:%S")
     total_scanned = len(tasks)
 
     # ==========================================

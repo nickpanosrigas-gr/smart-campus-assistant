@@ -248,23 +248,35 @@ export default function Floor3Base({ activeTools, selectedRooms, onToggleRoom, r
       </g>
 
       <g id="Data-Centroids" className="pointer-events-none">
-        {selectedRooms.includes("3.7") && (
-          <foreignObject x={260} y={155} width="200" height="100">
+        <foreignObject x={260} y={155} width="200" height="100">
+          {selectedRooms.includes("3.7") ? (
             <DataOverlay artifact={roomArtifacts?.["3.7"]} roomId="3.7" />
-          </foreignObject>
-        )}
+          ) : (
+            <div className="w-full h-full flex items-center justify-center font-sans">
+              <span className="text-[#A3B8B2]/50 text-base font-light tracking-widest uppercase drop-shadow-md">Room 3.7</span>
+            </div>
+          )}
+        </foreignObject>
 
-        {selectedRooms.includes("3.8") && (
-          <foreignObject x={310} y={265} width="200" height="100">
+        <foreignObject x={310} y={265} width="200" height="100">
+          {selectedRooms.includes("3.8") ? (
             <DataOverlay artifact={roomArtifacts?.["3.8"]} roomId="3.8" />
-          </foreignObject>
-        )}
+          ) : (
+            <div className="w-full h-full flex items-center justify-center font-sans">
+              <span className="text-[#A3B8B2]/50 text-base font-light tracking-widest uppercase drop-shadow-md">Room 3.8</span>
+            </div>
+          )}
+        </foreignObject>
 
-        {selectedRooms.includes("3.9") && (
-          <foreignObject x={525} y={210} width="200" height="100">
+        <foreignObject x={525} y={210} width="200" height="100">
+          {selectedRooms.includes("3.9") ? (
             <DataOverlay artifact={roomArtifacts?.["3.9"]} roomId="3.9" />
-          </foreignObject>
-        )}
+          ) : (
+            <div className="w-full h-full flex items-center justify-center font-sans">
+              <span className="text-[#A3B8B2]/50 text-base font-light tracking-widest uppercase drop-shadow-md">Room 3.9</span>
+            </div>
+          )}
+        </foreignObject>
       </g>
 
       <defs>

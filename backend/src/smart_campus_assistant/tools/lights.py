@@ -320,7 +320,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             "  Domain: Ambient Light Intensity (0-5 Scale)",
             f"  Room: {room.upper()}",
             "  Timeframe: Now (Snapshot)",
-            f"  Current_Time: {now_ts.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"  Current_Time: {now_ts.strftime('%A, %Y-%m-%d %H:%M:%S')}",
             f"  Active_Context: {current_ctx}"
         ]
         output.extend(active_sensors_lines)
@@ -601,7 +601,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             "  Domain: Ambient Light Intensity (0-5 Scale)",
             f"  Room: {room.upper()}",
             f"  Timeframe: {timeframe} (Long-Term Statistical Profile)",
-            f"  Current_Time: {pd.Timestamp.now(tz=settings.TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')}"
+            f"  Current_Time: {pd.Timestamp.now(tz=settings.TIMEZONE).strftime('%A, %Y-%m-%d %H:%M:%S')}"
         ]
         output.extend(active_sensors_lines)
         output.extend([
@@ -688,7 +688,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         "  Domain: Ambient Light Intensity (0-5 Scale)",
         f"  Room: {room.upper()}",
         f"  Timeframe: {timeframe} ({bin_size} intervals)",
-        f"  Current_Time: {pd.Timestamp.now(tz=settings.TIMEZONE).strftime('%Y-%m-%d %H:%M:%S')}"
+        f"  Current_Time: {pd.Timestamp.now(tz=settings.TIMEZONE).strftime('%A, %Y-%m-%d %H:%M:%S')}"
     ]
     output.extend(active_sensors_lines)
     output.extend(solar_context_lines)

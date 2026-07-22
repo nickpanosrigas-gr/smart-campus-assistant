@@ -254,17 +254,25 @@ export default function Floor1Base({ activeTools, selectedRooms, onToggleRoom, r
         </g>
 
         <g id="Data-Centroids" className="pointer-events-none">
-          {selectedRooms.includes("1.2") && (
-              <foreignObject x={250} y={200} width="200" height="100">
-                <DataOverlay artifact={roomArtifacts?.["1.2"]} roomId="1.2" />
-              </foreignObject>
-          )}
+          <foreignObject x={250} y={200} width="200" height="100">
+            {selectedRooms.includes("1.2") ? (
+              <DataOverlay artifact={roomArtifacts?.["1.2"]} roomId="1.2" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center font-sans">
+                <span className="text-[#A3B8B2]/50 text-base font-light tracking-widest uppercase drop-shadow-md">Room 1.2</span>
+              </div>
+            )}
+          </foreignObject>
 
-          {selectedRooms.includes("1.1") && (
-              <foreignObject x={350} y={350} width="200" height="100">
-                <DataOverlay artifact={roomArtifacts?.["1.1"]} roomId="1.1" />
-              </foreignObject>
-          )}
+          <foreignObject x={350} y={350} width="200" height="100">
+            {selectedRooms.includes("1.1") ? (
+              <DataOverlay artifact={roomArtifacts?.["1.1"]} roomId="1.1" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center font-sans">
+                <span className="text-[#A3B8B2]/50 text-base font-light tracking-widest uppercase drop-shadow-md">Room 1.1</span>
+              </div>
+            )}
+          </foreignObject>
         </g>
 
         <defs>
