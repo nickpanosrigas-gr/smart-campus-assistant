@@ -417,7 +417,7 @@ export default function DesktopDashboard() {
       </div>
 
       {/* ChatPanel Wrapper: Retains top and right padding (pt-4 pr-4), but sits flush at pb-0! */}
-      <div className="w-[630px] flex-shrink-0 h-full pt-4 pr-4 pb-0 pl-2 transition-all duration-500 ease-in-out flex flex-col justify-end">
+      <div className="w-[clamp(380px,30vw,630px)] flex-shrink-0 h-full pt-4 pr-4 pb-0 pl-2 transition-all duration-500 ease-in-out flex flex-col justify-end">
         <ChatPanel 
           appState={appState} 
           llmStatus={llmStatus}

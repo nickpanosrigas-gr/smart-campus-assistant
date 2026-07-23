@@ -47,7 +47,6 @@ export default function MapStage(props: MapStageProps) {
   const unavailableToggles = ALL_TOGGLES.filter(t => !props.activeTools.includes(t));
 
   return (
-    // FIX: Replaced the bg-gradient classes with bg-transparent
     <div className="w-full h-full relative overflow-hidden bg-transparent">
       
       {/* MAP LAYER */}
@@ -69,12 +68,12 @@ export default function MapStage(props: MapStageProps) {
         />
       </div>
 
-      {/* TOGGLES LAYER */}
-      <div className="absolute bottom-6 left-0 right-0 z-10 pointer-events-none flex flex-col items-center justify-end">
+      {/* TOGGLES LAYER (Now uses CSS clamp() for fluid scaling across resolutions!) */}
+      <div className="absolute bottom-4 left-0 right-0 z-10 pointer-events-none flex flex-col items-center justify-end px-2">
         <LayoutGroup>
-           <div className="w-full shrink-0 flex items-center justify-center gap-4 flex-wrap pb-2 pointer-events-auto">
+           <div className="w-full shrink-0 flex items-center justify-center gap-[clamp(0.5rem,1vw,1rem)] flex-wrap pb-1 pointer-events-auto">
             {availableToggles.length > 0 && (
-              <motion.div layout className="flex items-center bg-[#053D2F]/80 border border-[#0A664F] rounded-full p-1.5 shadow-[0_4px_20px_rgba(20,200,155,0.15)]">
+              <motion.div layout className="flex items-center bg-[#053D2F]/80 border border-[#0A664F] rounded-full p-[clamp(0.2rem,0.3vw,0.375rem)] shadow-[0_4px_20px_rgba(20,200,155,0.15)]">
                 {availableToggles.map(toggle => {
                   const isSelected = toggle === currentView;
                   return (
@@ -82,7 +81,7 @@ export default function MapStage(props: MapStageProps) {
                       layout="position" 
                       key={toggle} 
                       onClick={() => handleToggleClick(toggle)}
-                      className={`px-6 py-2.5 rounded-full text-sm font-semibold transition-colors duration-300 ${
+                      className={`px-[clamp(0.75rem,1.2vw,1.5rem)] py-[clamp(0.35rem,0.6vh,0.625rem)] rounded-full text-[clamp(0.75rem,0.85vw,0.875rem)] font-semibold transition-colors duration-300 whitespace-nowrap ${
                         isSelected 
                           ? "bg-[#14C89B] text-[#0A0A0A] shadow-[0_0_15px_rgba(20,200,155,0.4)]" 
                           : "bg-transparent text-[#14C89B] hover:bg-[#0A664F]/60"
@@ -96,13 +95,13 @@ export default function MapStage(props: MapStageProps) {
             )}
 
             {unavailableToggles.length > 0 && (
-              <motion.div layout className="flex items-center bg-[#1A1A1A]/80 border border-[#333333] rounded-full p-1.5 shadow-inner">
+              <motion.div layout className="flex items-center bg-[#1A1A1A]/80 border border-[#333333] rounded-full p-[clamp(0.2rem,0.3vw,0.375rem)] shadow-inner">
                 {unavailableToggles.map(toggle => (
                   <motion.button 
                     layout="position" 
                     key={toggle} 
                     onClick={() => handleToggleClick(toggle)}
-                    className="px-5 py-2.5 rounded-full text-sm font-medium bg-transparent text-[#A3B8B2]/50 hover:text-[#A3B8B2] hover:bg-[#2A2A2A] transition-colors duration-300"
+                    className="px-[clamp(0.6rem,1vw,1.25rem)] py-[clamp(0.35rem,0.6vh,0.625rem)] rounded-full text-[clamp(0.75rem,0.85vw,0.875rem)] font-medium bg-transparent text-[#A3B8B2]/50 hover:text-[#A3B8B2] hover:bg-[#2A2A2A] transition-colors duration-300 whitespace-nowrap"
                   >
                     {toggle}
                   </motion.button>

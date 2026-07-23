@@ -30,7 +30,8 @@ const TIMEFRAMES = ["2h", "24h", "7d", "30d", "90d"];
 export default function Sidebar({ activeLevel, setActiveLevel, selectedRooms, onRoomToggle, activeTools, floorStates }: SidebarProps) {
   const [isTimeframeMenuOpen, setIsTimeframeMenuOpen] = useState(false);
   const [timeframe, setTimeframe] = useState("24h");
-  const [mode, setMode] = useState<"now" | "historical">("now");
+  // UPDATED: State renamed from "now" | "historical" to "map" | "graph"
+  const [mode, setMode] = useState<"map" | "graph">("map");
   
   const [isCollapsed, setIsCollapsed] = useState(true);
 
@@ -57,7 +58,7 @@ export default function Sidebar({ activeLevel, setActiveLevel, selectedRooms, on
   return (
     <div 
       className={`h-full flex flex-col bg-[#0A0A0A] shrink-0 z-10 shadow-2xl transition-all duration-300 ease-in-out ${
-        isCollapsed ? "w-[88px]" : "w-[320px]"
+        isCollapsed ? "w-[88px]" : "w-[clamp(260px,18vw,320px)]"
       }`}
     >
       
@@ -65,21 +66,21 @@ export default function Sidebar({ activeLevel, setActiveLevel, selectedRooms, on
       <div className="p-3 pt-4 pb-1 shrink-0">
         <div
           onClick={() => setIsCollapsed(!isCollapsed)}
-          className={`w-full h-14 rounded-2xl bg-white/5 hover:bg-white/10 cursor-pointer flex items-center transition-all duration-300 shadow-sm border border-white/5 ${
-            isCollapsed ? "justify-center px-0" : "px-4 gap-3"
+          className={`w-full h-12 rounded-2xl bg-white/5 hover:bg-white/10 cursor-pointer flex items-center transition-all duration-300 shadow-sm border border-white/5 ${
+            isCollapsed ? "justify-center px-0" : "px-3.5 gap-3"
           }`}
           title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
         >
-          <img src="/icon.png" alt="HUAssistant Logo" className="w-8 h-8 rounded-xl shrink-0 object-contain" />
+          <img src="/icon.png" alt="HUAssistant Logo" className="w-7 h-7 rounded-xl shrink-0 object-contain" />
           {!isCollapsed && (
-            <span className="font-bold text-white text-lg tracking-wide truncate">
+            <span className="font-bold text-white text-base tracking-wide truncate">
               HUAssistant
             </span>
           )}
         </div>
       </div>
 
-      {/* Scrollable Container */}
+      {/* Scrollable Container - Rows and Squircles reduced to 40px (h-10/w-10) */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden chat-scrollbar pb-4 pt-2">
         {FLOORS.map((floor) => {
           const isActiveFloor = activeLevel === floor.id;
@@ -89,29 +90,27 @@ export default function Sidebar({ activeLevel, setActiveLevel, selectedRooms, on
             <div 
               key={floor.id} 
               onClick={() => { if (!isActiveFloor) setActiveLevel(floor.id); }}
-              // FIXED: py-3 and mb-1 are now applied identically in BOTH open and closed states to guarantee pixel-perfect vertical alignment!
-              className={`flex py-3 mb-1 transition-colors duration-300 group cursor-pointer rounded-3xl ${
-                isCollapsed ? "mx-2 justify-center" : "mx-3"
+              className={`flex py-2.5 transition-colors duration-300 group cursor-pointer rounded-3xl ${
+                isCollapsed ? "mx-2 justify-center" : "mx-3 mb-1"
               } ${isActiveFloor ? "bg-[#0A664F]" : "hover:bg-[#0A664F]/40"}`}
             >
               
-              {/* Left Column: Floor Number */}
-              <div className={`${isCollapsed ? "flex justify-center" : "w-20 shrink-0 flex justify-center items-start"}`}>
+              {/* Left Column: Floor Number (w-10 h-10 Squircle) */}
+              <div className={`${isCollapsed ? "flex justify-center" : "w-16 shrink-0 flex justify-center items-start"}`}>
                 <div
-                  // UPDATED: Added group-hover:text-[#0A0A0A] and hover:text-[#0A0A0A] so the letter/number turns black on hover!
-                  className={`w-12 h-12 flex items-center justify-center font-bold text-lg transition-all duration-300 rounded-2xl ${
+                  className={`w-10 h-10 flex items-center justify-center font-bold text-base transition-all duration-300 rounded-xl ${
                     isActiveFloor ? "bg-[#14C89B] text-[#0A0A0A] shadow-lg" : 
-                    hasData ? "bg-[#0A664F] text-white shadow-md group-hover:text-[#0A0A0A] hover:text-[#0A0A0A]" : 
-                    "text-[#A3B8B2] bg-transparent group-hover:bg-[#0A664F] group-hover:text-[#0A0A0A] group-hover:shadow-md hover:text-[#0A0A0A]"
+                    hasData ? "bg-[#0A664F] text-white shadow-md" : 
+                    "text-[#A3B8B2] bg-transparent group-hover:bg-[#0A664F] group-hover:text-white group-hover:shadow-md"
                   }`}
                 >
                   {floor.label}
                 </div>
               </div>
 
-              {/* Right Column: Rooms */}
+              {/* Right Column: Rooms (h-10) */}
               {!isCollapsed && (
-                <div className="flex-1 flex flex-col pr-5 gap-2 min-w-0">
+                <div className="flex-1 flex flex-col pr-4 gap-1.5 min-w-0">
                   {isActiveFloor ? (
                     floor.rooms.map((room) => {
                       const isSelected = selectedRooms.includes(room.id);
@@ -121,17 +120,17 @@ export default function Sidebar({ activeLevel, setActiveLevel, selectedRooms, on
                         <div
                           key={room.id}
                           onClick={(e) => { e.stopPropagation(); onRoomToggle(room.id); }}
-                          className={`h-12 px-5 transition-all duration-300 flex items-center justify-between rounded-full truncate ${
+                          className={`h-10 px-4 transition-all duration-300 flex items-center justify-between rounded-full truncate ${
                             isSelected ? "bg-[#14C89B] text-[#0A0A0A] font-bold shadow-md" : "bg-black/20 text-[#A3B8B2] hover:bg-[#14C89B] hover:text-[#0A0A0A]"
                           } ${cantUnselect ? "cursor-not-allowed opacity-90" : ""}`}
                         >
-                          <span className="text-sm truncate block">{room.name}</span>
+                          <span className="text-xs truncate block">{room.name}</span>
                         </div>
                       );
                     })
                   ) : (
-                    <div className="h-12 flex items-center">
-                      <span className="text-sm text-[#A3B8B2] opacity-40 truncate group-hover:opacity-100 transition-opacity w-full block">
+                    <div className="h-10 flex items-center">
+                      <span className="text-xs text-[#A3B8B2] opacity-40 truncate group-hover:opacity-100 transition-opacity w-full block">
                         {floor.rooms.map((r) => r.name).join(", ")}
                       </span>
                     </div>
@@ -144,31 +143,31 @@ export default function Sidebar({ activeLevel, setActiveLevel, selectedRooms, on
         })}
       </div>
 
-      {/* Bottom Profile & Timeframe Section */}
+      {/* Bottom Profile & Timeframe Section - Compacted padding and 40px element heights */}
       <div 
         ref={bottomSectionRef} 
-        className={`bg-[#0A664F] shrink-0 relative flex flex-col gap-4 rounded-t-3xl border-t border-[#14C89B]/20 shadow-[0_-10px_30px_rgba(0,0,0,0.3)] transition-all duration-300 py-6 ${
-          isCollapsed ? "px-3 items-center" : "px-6"
+        className={`bg-[#0A664F] shrink-0 relative flex flex-col gap-3.5 rounded-t-3xl border-t border-[#14C89B]/20 shadow-[0_-10px_30px_rgba(0,0,0,0.3)] transition-all duration-300 py-5 ${
+          isCollapsed ? "px-3 items-center" : "px-5"
         }`}
       >
         
         {isCollapsed ? (
           /* COLLAPSED BOTTOM VIEW */
-          <div className="flex flex-col items-center gap-4 w-full">
+          <div className="flex flex-col items-center gap-3.5 w-full">
             
-            {/* H / N Squircle Toggle */}
+            {/* M / G Squircle Toggle (w-10 h-10 rounded-xl) */}
             <motion.button
               whileTap={{ scale: 0.92 }}
               onClick={() => {
-                if (mode === "now") {
-                  setMode("historical");
+                if (mode === "map") {
+                  setMode("graph");
                   setIsCollapsed(false); 
                 } else {
-                  setMode("now");
+                  setMode("map");
                 }
               }}
-              className="w-12 h-12 rounded-2xl bg-[#14C89B] text-[#0A0A0A] flex items-center justify-center font-bold text-lg shadow-lg hover:brightness-110 transition-all"
-              title={mode === "historical" ? "Historical Mode (Click for Now)" : "Now Mode (Click for Historical)"}
+              className="w-10 h-10 rounded-xl bg-[#14C89B] text-[#0A0A0A] flex items-center justify-center font-bold text-base shadow-lg hover:brightness-110 transition-all"
+              title={mode === "graph" ? "Graph Mode (Click for Map)" : "Map Mode (Click for Graph)"}
             >
               <AnimatePresence mode="wait">
                 <motion.span
@@ -179,25 +178,25 @@ export default function Sidebar({ activeLevel, setActiveLevel, selectedRooms, on
                   transition={{ duration: 0.15 }}
                   className="block"
                 >
-                  {mode === "historical" ? "H" : "N"}
+                  {mode === "graph" ? "G" : "M"}
                 </motion.span>
               </AnimatePresence>
             </motion.button>
 
-            {/* User Icon Squircle */}
+            {/* User Icon Squircle (w-10 h-10 rounded-xl) */}
             <div 
-              className="w-12 h-12 rounded-2xl bg-black/20 flex items-center justify-center shrink-0 text-white shadow-md cursor-default"
+              className="w-10 h-10 rounded-xl bg-black/20 flex items-center justify-center shrink-0 text-white shadow-md cursor-default"
               title="admin@smartcampus.gr"
             >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
             </div>
 
           </div>
         ) : (
           /* EXPANDED BOTTOM VIEW */
           <>
-            {/* Pill-Shaped Toggles: Historical vs Now */}
-            <div className="relative grid grid-cols-2 bg-black/20 p-1 rounded-full gap-1 shadow-inner mx-1 h-12">
+            {/* Pill-Shaped Toggles: Map vs Graph (Locked to h-10 / 40px) */}
+            <div className="relative grid grid-cols-2 bg-black/20 p-1 rounded-full gap-1 shadow-inner mx-1 h-10">
               {isTimeframeMenuOpen && (
                 <div className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 w-48 bg-[#0A664F] border border-[#14C89B]/30 rounded-2xl shadow-2xl overflow-hidden z-50">
                   {TIMEFRAMES.map(tf => (
@@ -206,9 +205,9 @@ export default function Sidebar({ activeLevel, setActiveLevel, selectedRooms, on
                       onClick={() => { 
                         setTimeframe(tf); 
                         setIsTimeframeMenuOpen(false); 
-                        setMode("historical"); 
+                        setMode("graph"); 
                       }}
-                      className={`w-full text-left px-5 py-3 text-sm transition-colors ${
+                      className={`w-full text-left px-4 py-2.5 text-xs transition-colors ${
                         timeframe === tf ? "bg-[#14C89B] text-[#0A0A0A] font-bold" : "text-white hover:bg-[#14C89B] hover:text-[#0A0A0A]"
                       }`}
                     >
@@ -218,25 +217,25 @@ export default function Sidebar({ activeLevel, setActiveLevel, selectedRooms, on
                 </div>
               )}
 
-              {/* Historical Grouped Pill */}
+              {/* Graph Grouped Pill */}
               <div className={`flex items-center justify-between rounded-full overflow-hidden transition-all duration-300 h-full ${
-                mode === "historical" ? "bg-[#14C89B] text-[#0A0A0A] shadow-md" : "text-white/90 hover:bg-[#14C89B] hover:text-[#0A0A0A]"
+                mode === "graph" ? "bg-[#14C89B] text-[#0A0A0A] shadow-md" : "text-white/90 hover:bg-[#14C89B] hover:text-[#0A0A0A]"
               }`}>
                 <button
-                  onClick={() => setMode("historical")}
+                  onClick={() => setMode("graph")}
                   className="flex-1 flex items-center justify-center h-full pl-3 text-xs font-bold whitespace-nowrap"
                 >
-                  Historical ({timeframe})
+                  Graph ({timeframe})
                 </button>
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
                     setIsTimeframeMenuOpen(!isTimeframeMenuOpen);
-                    setMode("historical"); 
+                    setMode("graph"); 
                   }}
                   className="px-2 h-full flex items-center justify-center transition-transform duration-200"
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                     {isTimeframeMenuOpen ? (
                       <polyline points="18 15 12 9 6 15" /> 
                     ) : (
@@ -246,32 +245,32 @@ export default function Sidebar({ activeLevel, setActiveLevel, selectedRooms, on
                 </button>
               </div>
 
-              {/* Now Pill */}
+              {/* Map Pill */}
               <button
-                onClick={() => setMode("now")}
+                onClick={() => setMode("map")}
                 className={`flex items-center justify-center h-full rounded-full text-xs font-bold transition-all duration-300 whitespace-nowrap ${
-                  mode === "now" ? "bg-[#14C89B] text-[#0A0A0A] shadow-md" : "text-white/90 hover:bg-[#14C89B] hover:text-[#0A0A0A]"
+                  mode === "map" ? "bg-[#14C89B] text-[#0A0A0A] shadow-md" : "text-white/90 hover:bg-[#14C89B] hover:text-[#0A0A0A]"
                 }`}
               >
-                Now
+                Map
               </button>
             </div>
 
-            {/* Profile Element */}
-            <div className="flex items-center gap-3 bg-transparent h-12">
-              <div className="w-12 h-12 rounded-2xl bg-black/20 flex items-center justify-center shrink-0 shadow-sm">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            {/* Profile Element (Locked to h-10 / 40px, User Icon & Exit Button changed to w-10 h-10 rounded-xl Squircles) */}
+            <div className="flex items-center gap-2.5 bg-transparent h-10">
+              <div className="w-10 h-10 rounded-xl bg-black/20 flex items-center justify-center shrink-0 shadow-sm">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
               </div>
               
-              <div className="flex-1 text-sm text-white font-medium line-clamp-2 break-all leading-tight">
+              <div className="flex-1 text-xs text-white font-medium line-clamp-2 break-all leading-tight">
                 it2022094@hua.gr
               </div>
 
               <button 
-                className="w-12 h-12 rounded-2xl bg-[#8E2F3E] text-white flex items-center justify-center shrink-0 transition-all hover:bg-[#C84B5E] hover:text-[#0A0A0A] shadow-md"
+                className="w-10 h-10 rounded-xl bg-[#8E2F3E] text-white flex items-center justify-center shrink-0 transition-all hover:bg-[#C84B5E] hover:text-[#0A0A0A] shadow-md"
                 title="Log Out"
               >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
               </button>
             </div>
           </>
