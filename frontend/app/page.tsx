@@ -391,13 +391,11 @@ export default function DesktopDashboard() {
         selectedRooms={selectedRooms}
         onRoomToggle={handleRoomSelect}
         activeTools={activeTools}
-        floorStates={floorStates} // <--- NEW PROP ADDED HERE
+        floorStates={floorStates}
       />
 
-      {/* The rest of the app has padding so it floats nicely next to the flush sidebar */}
-      <div className="flex-1 flex gap-4 p-4 min-w-0">
-        
-        {/* MapStage Wrapper (Rounded to match new pill UI) */}
+      {/* MapStage Wrapper: Retains full 16px padding on all sides */}
+      <div className="flex-1 flex flex-col min-w-0 relative overflow-hidden h-full py-4 pl-4 pr-2">
         <div className="flex-1 flex flex-col min-w-0 relative overflow-hidden h-full rounded-3xl">
           <MapStage 
             appState={appState} 
@@ -416,24 +414,23 @@ export default function DesktopDashboard() {
             allArtifacts={roomArtifacts}
           />
         </div>
+      </div>
 
-        {/* ChatPanel */}
-        <div className="w-[630px] flex-shrink-0 h-full transition-all duration-500 ease-in-out">
-          <ChatPanel 
-            appState={appState} 
-            llmStatus={llmStatus}
-            onSendMessage={handleUserMessage}
-            onSendAudio={handleSendAudio}
-            activeTools={activeTools}
-            messages={messages}
-            contextData={contextData}  
-            sessionTools={sessionTools} 
-            onResetSession={handleResetSession}
-            transcribedText={transcribedText}
-            onClearTranscribedText={() => setTranscribedText(null)}
-          />
-        </div>
-
+      {/* ChatPanel Wrapper: Retains top and right padding (pt-4 pr-4), but sits flush at pb-0! */}
+      <div className="w-[630px] flex-shrink-0 h-full pt-4 pr-4 pb-0 pl-2 transition-all duration-500 ease-in-out flex flex-col justify-end">
+        <ChatPanel 
+          appState={appState} 
+          llmStatus={llmStatus}
+          onSendMessage={handleUserMessage}
+          onSendAudio={handleSendAudio}
+          activeTools={activeTools}
+          messages={messages}
+          contextData={contextData}  
+          sessionTools={sessionTools} 
+          onResetSession={handleResetSession}
+          transcribedText={transcribedText}
+          onClearTranscribedText={() => setTranscribedText(null)}
+        />
       </div>
     </main>
   );
