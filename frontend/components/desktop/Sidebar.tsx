@@ -264,7 +264,7 @@ export default function Sidebar({ activeLevel, setActiveLevel, selectedRooms, on
               </div>
               
               <div className="flex-1 text-sm text-white font-medium line-clamp-2 break-all leading-tight">
-                admin@smartcampus.gr
+                it2022094@hua.gr
               </div>
 
               <button 
