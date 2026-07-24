@@ -70,7 +70,8 @@ async def websocket_endpoint(websocket: WebSocket):
                 rooms = data.get("rooms", [])
                 floor = data.get("floor", "B")
                 domain = data.get("domain")
-                await handle_map_interaction(rooms, floor, domain, thread_id, websocket)
+                timeframe = data.get("timeframe", "now")
+                await handle_map_interaction(rooms, floor, domain, timeframe, thread_id, websocket)
             
             elif msg_type == "reset_session":
                 active_sessions[base_user] = str(uuid.uuid4())

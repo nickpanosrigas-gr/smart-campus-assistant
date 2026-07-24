@@ -1,8 +1,6 @@
-// frontend/components/desktop/MapStage.tsx
 "use client";
-import { useState, useEffect, useRef } from "react";
 import InteractiveMap from "@/components/map/InteractiveMap"; 
-import { AppState, ViewType } from "@/app/page"; 
+import { AppState, ViewType, Timeframe } from "@/app/page"; 
 import { motion, LayoutGroup } from "framer-motion";
 import { RoomHealth } from "@/components/map/constants";
 
@@ -20,26 +18,17 @@ interface MapStageProps {
   roomHealthData: Record<string, RoomHealth>;
   onToggleSelect: (toggle: string) => void;
   roomArtifacts: Record<string, any>;
-  allArtifacts: Record<string, Record<string, any>>;
+  allArtifacts: Record<string, Record<string, Record<string, any>>>;
+  timeframe: Timeframe;
 }
 
 const ALL_TOGGLES = ["Air Quality", "Doors/Windows", "Lights", "Occupancy", "Climate", "Schedule", "Diagnostics"];
 
 export default function MapStage(props: MapStageProps) {
-  const [currentView, setCurrentView] = useState<string>("");
-  const previousToolsLength = useRef(props.activeTools.length);
-
-  useEffect(() => {
-    if (props.activeTools.length > 0 && props.activeTools[0] !== currentView) {
-      setCurrentView(props.activeTools[0]);
-    } else if (props.activeTools.length === 0) {
-      setCurrentView("");
-    }
-    previousToolsLength.current = props.activeTools.length;
-  }, [props.activeTools, currentView]);
+  // ---> CRITICAL FIX: Directly derive active tool from props to eliminate render lag! <---
+  const currentView = props.activeTools[0] || "";
 
   const handleToggleClick = (toggle: string) => {
-    setCurrentView(toggle);
     props.onToggleSelect(toggle);
   };
 
@@ -49,7 +38,7 @@ export default function MapStage(props: MapStageProps) {
   return (
     <div className="w-full h-full relative overflow-hidden bg-transparent">
       
-      {/* MAP LAYER */}
+      {/* MAP / GRAPH LAYER */}
       <div className="absolute inset-0 z-0"> 
         <InteractiveMap 
           appState={props.appState}
@@ -64,11 +53,12 @@ export default function MapStage(props: MapStageProps) {
           setIsZoomed={props.setIsZoomed}
           roomHealthData={props.roomHealthData}
           roomArtifacts={props.roomArtifacts}
-          allArtifacts={props.allArtifacts}
+          allArtifacts={props.allArtifacts as any}
+          timeframe={props.timeframe}
         />
       </div>
 
-      {/* TOGGLES LAYER (Now uses CSS clamp() for fluid scaling across resolutions!) */}
+      {/* CONTROLS LAYER: Tool Toggles Only */}
       <div className="absolute bottom-4 left-0 right-0 z-10 pointer-events-none flex flex-col items-center justify-end px-2">
         <LayoutGroup>
            <div className="w-full shrink-0 flex items-center justify-center gap-[clamp(0.5rem,1vw,1rem)] flex-wrap pb-1 pointer-events-auto">

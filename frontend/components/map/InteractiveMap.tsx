@@ -12,22 +12,8 @@ import Floor2Base from "./floors/Floor2";
 import Floor3Base from "./floors/Floor3";
 import Floor4Base from "./floors/Floor4";
 import Floor5Base from "./floors/Floor5";
-import { BUILDING_LEVELS, RoomHealth } from "./constants";
-
-// Helper function to map rooms to floors
-const getFloorForRoom = (roomId: string) => {
-  if (["parkin.c"].includes(roomId)) return "-3";
-  if (["parkin.b"].includes(roomId)) return "-2";
-  if (["data_center", "kitchen"].includes(roomId)) return "-1";
-  if (["entrance", "restaurant"].includes(roomId)) return "0";
-  if (["1.1", "1.2"].includes(roomId)) return "1";
-  if (["2.1", "2.2", "2.3", "2.4"].includes(roomId)) return "2";
-  if (["3.7", "3.8", "3.9"].includes(roomId)) return "3";
-  if (["4.9"].includes(roomId)) return "4";
-  if (["5.6", "5.7"].includes(roomId)) return "5";
-  if (["building"].includes(roomId)) return "B";
-  return null;
-};
+import { RoomHealth } from "./constants";
+import GraphView from "./graphs/GraphView";
 
 interface InteractiveMapProps {
   appState: "idle" | "routing" | "tool_execution" | "resolved";
@@ -42,12 +28,13 @@ interface InteractiveMapProps {
   setIsZoomed: (zoom: boolean) => void;
   roomHealthData: Record<string, RoomHealth>;
   roomArtifacts: Record<string, any>;
-  allArtifacts?: Record<string, Record<string, any>>; 
+  allArtifacts?: Record<string, Record<string, any>>;
+  timeframe: string; // <-- NEW PROP
 }
 
 export default function InteractiveMap(props: InteractiveMapProps) {
   const {
-    activeLevel, setActiveLevel,
+    activeLevel,
     selectedRooms, onRoomToggle,
     viewMode,
     roomHealthData,
@@ -62,9 +49,6 @@ export default function InteractiveMap(props: InteractiveMapProps) {
 
   return (
     <div className="w-full h-full relative overflow-hidden flex items-center justify-center">
-
-      {/* The old vertical bar has been completely removed from here! */}
-
       <AnimatePresence mode="wait">
         {viewMode === "map" ? (
           <TransformWrapper
@@ -186,11 +170,17 @@ export default function InteractiveMap(props: InteractiveMapProps) {
             key="graph"
             initial={{ opacity: 0, rotateY: -90 }}
             animate={{ opacity: 1, rotateY: 0 }}
-            className="w-full h-full flex items-center justify-center p-20"
+            exit={{ opacity: 0, rotateY: 90 }}
+            transition={{ duration: 0.5, ease: [0.34, 1.56, 0.64, 1] }}
+            className="w-full h-full flex items-center justify-center p-4"
           >
-            <div className="w-full h-64 border border-dashed border-[#14C89B]/40 rounded-2xl flex items-center justify-center text-[#14C89B]">
-              [Historical Graph View Placeholder]
-            </div>
+            <GraphView
+              activeTools={props.activeTools}
+              selectedRooms={selectedRooms}
+              roomArtifacts={roomArtifacts}
+              allArtifacts={allArtifacts || {}}
+              timeframe={props.timeframe}
+            />
           </motion.div>
         )}
       </AnimatePresence>

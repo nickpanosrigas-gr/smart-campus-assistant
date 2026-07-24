@@ -1,12 +1,14 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import ChatPanel from "@/components/desktop/ChatPanel";
 import MapStage from "@/components/desktop/MapStage";
 import { RoomHealth } from "@/components/map/constants";
 import Sidebar from "@/components/desktop/Sidebar";
 
+export type Timeframe = "now" | "2h" | "24h" | "7d" | "30d" | "90d";
+export type HistoricalTimeframe = "2h" | "24h" | "7d" | "30d" | "90d";
 export type AppState = "idle" | "routing" | "tool_execution" | "resolved";
-export type ViewType = "snapshot" | "graph" | "schedule"; 
+export type ViewType = "snapshot" | "graph" | "schedule";
 
 export interface LLMStatus {
   state: "thinking" | "tool_use" | "transcribing";
@@ -14,10 +16,15 @@ export interface LLMStatus {
   tool_name?: string;
 }
 
-interface FloorState {
+interface MapSandboxState {
   selectedRooms: string[];
   activeTools: string[];
   isZoomed: boolean;
+}
+
+interface GraphSandboxState {
+  selectedRoom: string | null;
+  activeTool: string | null;
 }
 
 const getRoomsForFloor = (floor: string) => {
@@ -48,16 +55,29 @@ const getFloorForRoom = (roomId: string) => {
   return null;
 };
 
+const INITIAL_GRAPH_SANDBOXES: Record<HistoricalTimeframe, GraphSandboxState> = {
+  "2h": { selectedRoom: null, activeTool: null },
+  "24h": { selectedRoom: null, activeTool: null },
+  "7d": { selectedRoom: null, activeTool: null },
+  "30d": { selectedRoom: null, activeTool: null },
+  "90d": { selectedRoom: null, activeTool: null },
+};
+
 export default function DesktopDashboard() {
   const [appState, setAppState] = useState<AppState>("idle");
   const [llmStatus, setLlmStatus] = useState<LLMStatus | null>(null);
   
-  // CACHING ARCHITECTURE: Maps roomId -> domain -> artifact
-  const [roomArtifacts, setRoomArtifacts] = useState<Record<string, Record<string, any>>>({});
+  const [timeframe, setTimeframe] = useState<Timeframe>("now");
+  const [lastHistoricalTimeframe, setLastHistoricalTimeframe] = useState<HistoricalTimeframe>("24h");
   const [currentViewType, setCurrentViewType] = useState<ViewType>("snapshot");
-  
-  const [floorStates, setFloorStates] = useState<Record<string, FloorState>>({});
   const [activeLevel, setActiveLevel] = useState<string>("B"); 
+
+  const [artifactCache, setArtifactCache] = useState<
+    Record<string, Record<string, Record<string, any>>>
+  >({});
+  
+  const [mapSandbox, setMapSandbox] = useState<Record<string, MapSandboxState>>({});
+  const [graphSandboxes, setGraphSandboxes] = useState<Record<HistoricalTimeframe, GraphSandboxState>>(INITIAL_GRAPH_SANDBOXES);
 
   const [contextData, setContextData] = useState({ tokens: 0 });
   const [sessionTools, setSessionTools] = useState<{tool: string, room: string}[]>([]);
@@ -67,29 +87,53 @@ export default function DesktopDashboard() {
   const ws = useRef<WebSocket | null>(null);
   const activeLevelRef = useRef(activeLevel);
 
-  const currentFloor = floorStates[activeLevel] || { selectedRooms: [], activeTools: [], isZoomed: false };
-  const { selectedRooms, activeTools, isZoomed } = currentFloor;
+  const isGraphMode = currentViewType === "graph" && timeframe !== "now";
+  const currentGraphBox = isGraphMode ? graphSandboxes[timeframe as HistoricalTimeframe] : { selectedRoom: null, activeTool: null };
+  const currentMapFloor = mapSandbox[activeLevel] || { selectedRooms: [], activeTools: [], isZoomed: false };
 
-  const updateFloor = (level: string, updates: Partial<FloorState>) => {
-    setFloorStates(prev => ({
+  const selectedRooms = useMemo(() => {
+    return isGraphMode 
+      ? (currentGraphBox.selectedRoom ? [currentGraphBox.selectedRoom] : []) 
+      : currentMapFloor.selectedRooms;
+  }, [isGraphMode, currentGraphBox.selectedRoom, currentMapFloor.selectedRooms]);
+
+  const activeTools = useMemo(() => {
+    return isGraphMode 
+      ? (currentGraphBox.activeTool ? [currentGraphBox.activeTool] : []) 
+      : currentMapFloor.activeTools;
+  }, [isGraphMode, currentGraphBox.activeTool, currentMapFloor.activeTools]);
+
+  const isZoomed = isGraphMode ? false : currentMapFloor.isZoomed;
+
+  const updateMapFloor = (level: string, updates: Partial<MapSandboxState>) => {
+    setMapSandbox(prev => ({
       ...prev,
       [level]: { ...(prev[level] || { selectedRooms: [], activeTools: [], isZoomed: false }), ...updates }
     }));
   };
 
-  // --- BROWSER CACHING LOGIC ---
+  const updateGraphSandbox = (tf: HistoricalTimeframe, updates: Partial<GraphSandboxState>) => {
+    setGraphSandboxes(prev => ({
+      ...prev,
+      [tf]: { ...prev[tf], ...updates }
+    }));
+  };
+
   useEffect(() => {
-    const cachedFloors = sessionStorage.getItem("floorStates");
-    if (cachedFloors) setFloorStates(JSON.parse(cachedFloors));
+    const cachedMap = sessionStorage.getItem("mapSandbox");
+    if (cachedMap) setMapSandbox(JSON.parse(cachedMap));
     
+    const cachedGraph = sessionStorage.getItem("graphSandboxes");
+    if (cachedGraph) setGraphSandboxes(JSON.parse(cachedGraph));
+
     const cachedLevel = sessionStorage.getItem("activeLevel");
     if (cachedLevel) setActiveLevel(cachedLevel);
 
     const cachedMessages = sessionStorage.getItem("chatMessages");
     if (cachedMessages) setMessages(JSON.parse(cachedMessages));
 
-    const cachedArtifacts = sessionStorage.getItem("roomArtifacts");
-    if (cachedArtifacts) setRoomArtifacts(JSON.parse(cachedArtifacts));
+    const cached3DCache = sessionStorage.getItem("artifactCache");
+    if (cached3DCache) setArtifactCache(JSON.parse(cached3DCache));
 
     const cachedTools = sessionStorage.getItem("sessionTools");
     if (cachedTools) setSessionTools(JSON.parse(cachedTools));
@@ -102,21 +146,56 @@ export default function DesktopDashboard() {
 
     const cachedViewType = sessionStorage.getItem("currentViewType");
     if (cachedViewType) setCurrentViewType(cachedViewType as ViewType);
+
+    const cachedTimeframe = sessionStorage.getItem("timeframe");
+    if (cachedTimeframe) setTimeframe(cachedTimeframe as Timeframe);
+
+    const cachedLastHistTf = sessionStorage.getItem("lastHistoricalTimeframe");
+    if (cachedLastHistTf) setLastHistoricalTimeframe(cachedLastHistTf as HistoricalTimeframe);
   }, []);
 
-  useEffect(() => { sessionStorage.setItem("floorStates", JSON.stringify(floorStates)); }, [floorStates]);
+  useEffect(() => { sessionStorage.setItem("mapSandbox", JSON.stringify(mapSandbox)); }, [mapSandbox]);
+  useEffect(() => { sessionStorage.setItem("graphSandboxes", JSON.stringify(graphSandboxes)); }, [graphSandboxes]);
   useEffect(() => { 
     sessionStorage.setItem("activeLevel", activeLevel);
     activeLevelRef.current = activeLevel; 
   }, [activeLevel]);
   useEffect(() => { sessionStorage.setItem("chatMessages", JSON.stringify(messages)); }, [messages]);
-  useEffect(() => { sessionStorage.setItem("roomArtifacts", JSON.stringify(roomArtifacts)); }, [roomArtifacts]);
+  useEffect(() => { sessionStorage.setItem("artifactCache", JSON.stringify(artifactCache)); }, [artifactCache]);
   useEffect(() => { sessionStorage.setItem("sessionTools", JSON.stringify(sessionTools)); }, [sessionTools]);
   useEffect(() => { sessionStorage.setItem("contextData", JSON.stringify(contextData)); }, [contextData]);
   useEffect(() => { sessionStorage.setItem("llmStatus", JSON.stringify(llmStatus)); }, [llmStatus]);
   useEffect(() => { sessionStorage.setItem("currentViewType", currentViewType); }, [currentViewType]);
+  useEffect(() => { sessionStorage.setItem("timeframe", timeframe); }, [timeframe]);
+  useEffect(() => { sessionStorage.setItem("lastHistoricalTimeframe", lastHistoricalTimeframe); }, [lastHistoricalTimeframe]);
 
-  // --- WEBSOCKET CONNECTION ---
+  // ---> NEW: SELF-HEALING TELEMETRY FETCH <---
+  // Automatically fetches data if the UI lands on a room/tool/timeframe that isn't cached yet!
+  useEffect(() => {
+    if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
+    if (activeTools.length === 0 || selectedRooms.length === 0) return;
+
+    activeTools.forEach(tool => {
+      selectedRooms.forEach(room => {
+        const roomMap = artifactCache[room] || {};
+        const hasData = Object.keys(roomMap).some(
+          k => k.toLowerCase() === tool.toLowerCase() && !!roomMap[k]?.[timeframe]
+        );
+
+        if (!hasData) {
+          console.log(`[SELF-HEALING FETCH] Requesting missing telemetry: Room ${room} | Tool: ${tool} | TF: ${timeframe}`);
+          ws.current?.send(JSON.stringify({
+            type: "map_interaction",
+            rooms: [room],
+            floor: activeLevel,
+            domain: tool,
+            timeframe: timeframe
+          }));
+        }
+      });
+    });
+  }, [timeframe, selectedRooms, activeTools, activeLevel, artifactCache]);
+
   useEffect(() => {
     const getWsUrl = () => {
       if (typeof window === "undefined") return ""; 
@@ -133,19 +212,13 @@ export default function DesktopDashboard() {
     ws.current.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        console.log("📥 INCOMING WS PAYLOAD:", data);
-
         if (data.type === "llm_status") {
           setAppState(data.state === "thinking" || data.state === "transcribing" ? "routing" : "tool_execution");
           setLlmStatus({ state: data.state, message: data.message, tool_name: data.tool_name });
         }
-        
-        // Handles Voice Message Text Echo (when transcribing + sending to LLM)
         if (data.type === "transcription_result") {
           setMessages(prev => [...prev, { sender: "user", text: data.text }]);
         }
-
-        // Handles Transcribe Only mode
         if (data.type === "transcription_only_result") {
           setTranscribedText(data.text);
           setAppState("idle");
@@ -156,9 +229,9 @@ export default function DesktopDashboard() {
           const artifact = data.artifact;
           const roomId = artifact.room_id;
           const domain = artifact.domain || "Unknown";
+          const tf = (artifact.timeframe || "now") as Timeframe;
 
           let resolvedFloor = activeLevelRef.current;
-          
           if (artifact.floor !== undefined && artifact.floor !== null) {
             resolvedFloor = String(artifact.floor); 
           } else if (roomId) {
@@ -166,50 +239,64 @@ export default function DesktopDashboard() {
             if (derivedFloor) resolvedFloor = derivedFloor;
           }
 
-          const targetLevel = resolvedFloor;
-
+          const targetLevel = resolvedFloor || "B";
           if (targetLevel !== activeLevelRef.current) {
             setActiveLevel(targetLevel);
           }
           
-          if (artifact.view_type) {
-            if (artifact.view_type === "error") {
-              setCurrentViewType("snapshot");
-            } else {
-              setCurrentViewType(artifact.view_type as ViewType);
-            }
+          // 1. Sync View Type & Timeframe State automatically from LLM
+          setTimeframe(tf);
+          if (tf !== "now") {
+            setLastHistoricalTimeframe(tf as HistoricalTimeframe);
+            setCurrentViewType("graph");
+          } else {
+            setCurrentViewType(artifact.view_type === "error" ? "snapshot" : (artifact.view_type as ViewType));
           }
 
-          if (roomId) {
-            setRoomArtifacts(prev => ({
+          // 2. Store securely in 3D Cache
+          if (roomId && domain !== "Unknown") {
+            setArtifactCache(prev => {
+              const roomMap = prev[roomId] || {};
+              const domainMap = roomMap[domain] || {};
+              return {
+                ...prev,
+                [roomId]: {
+                  ...roomMap,
+                  [domain]: {
+                    ...domainMap,
+                    [tf]: artifact
+                  }
+                }
+              };
+            });
+          }
+
+          // 3. Update Sandbox state immediately so the UI switches cleanly
+          if (tf === "now") {
+            setMapSandbox(prev => {
+              const floor = prev[targetLevel] || { selectedRooms: [], activeTools: [], isZoomed: false };
+              const newZoom = roomId && roomId !== "building";
+              const newActiveTools = domain !== "Unknown" ? [domain] : floor.activeTools;
+              const newRooms = roomId ? [roomId] : floor.selectedRooms;
+              return {
+                ...prev,
+                [targetLevel]: {
+                  ...floor,
+                  selectedRooms: newRooms,
+                  isZoomed: newZoom,
+                  activeTools: newActiveTools
+                }
+              };
+            });
+          } else {
+            setGraphSandboxes(prev => ({
               ...prev,
-              [roomId]: {
-                ...(prev[roomId] || {}),
-                [domain]: artifact 
+              [tf]: {
+                selectedRoom: roomId || prev[tf as HistoricalTimeframe]?.selectedRoom || null,
+                activeTool: domain !== "Unknown" ? domain : (prev[tf as HistoricalTimeframe]?.activeTool || null)
               }
             }));
           }
-
-          setFloorStates(prev => {
-            const floor = prev[targetLevel] || { selectedRooms: [], activeTools: [], isZoomed: false };
-            const newZoom = roomId && roomId !== "building";
-            
-            const newActiveTools = [...floor.activeTools];
-            if (domain && domain !== "Unknown") {
-               const filteredTools = newActiveTools.filter(t => t !== domain);
-               newActiveTools.splice(0, newActiveTools.length, domain, ...filteredTools);
-            }
-
-            return {
-              ...prev,
-              [targetLevel]: {
-                ...floor,
-                selectedRooms: roomId && !floor.selectedRooms.includes(roomId) ? [...floor.selectedRooms, roomId] : floor.selectedRooms,
-                isZoomed: newZoom,
-                activeTools: newActiveTools
-              }
-            };
-          });
         }
 
         if (data.type === "text" && data.text) {
@@ -235,7 +322,6 @@ export default function DesktopDashboard() {
            setContextData({ tokens: data.tokens });
            setSessionTools(data.session_tools);
         }
-
       } catch (err) {
         console.error("❌ Error parsing websocket message:", err);
       }
@@ -248,7 +334,6 @@ export default function DesktopDashboard() {
     if (!msg.trim()) return;
     setMessages(prev => [...prev, { sender: "user", text: msg }]);
     setAppState("routing");
-
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
       ws.current?.send(JSON.stringify({
         type: "chat_message",
@@ -271,108 +356,124 @@ export default function DesktopDashboard() {
   };
 
   const handleToggleSelect = (toggle: string) => {
-    const isNewTool = !activeTools.includes(toggle);
-    const newTools = [toggle, ...activeTools.filter(t => t !== toggle)];
-    let roomsToFetch = selectedRooms;
-
-    if (isNewTool && selectedRooms.length === 0) {
-      roomsToFetch = getRoomsForFloor(activeLevel);
-      updateFloor(activeLevel, { activeTools: newTools, selectedRooms: roomsToFetch });
+    if (isGraphMode) {
+      const histTf = timeframe as HistoricalTimeframe;
+      updateGraphSandbox(histTf, { activeTool: toggle });
     } else {
-      updateFloor(activeLevel, { activeTools: newTools });
-    }
+      const isNewTool = !activeTools.includes(toggle);
+      const newTools = [toggle, ...activeTools.filter(t => t !== toggle)];
+      let roomsToFetch = selectedRooms;
 
-    const roomsRequiringFetch = roomsToFetch.filter(roomId => {
-      const roomData = roomArtifacts[roomId] || {};
-      const hasKey = Object.keys(roomData).some(k => k.toLowerCase() === toggle.toLowerCase());
-      return !hasKey;
-    });
-
-    if (roomsRequiringFetch.length > 0 && ws.current && ws.current.readyState === WebSocket.OPEN) {
-      const payload = {
-        type: "map_interaction",
-        rooms: roomsRequiringFetch,
-        floor: activeLevel,
-        domain: toggle
-      };
-      ws.current?.send(JSON.stringify(payload));
+      if (isNewTool && selectedRooms.length === 0) {
+        roomsToFetch = getRoomsForFloor(activeLevel);
+        updateMapFloor(activeLevel, { activeTools: newTools, selectedRooms: roomsToFetch });
+      } else {
+        updateMapFloor(activeLevel, { activeTools: newTools });
+      }
     }
   };
 
   const handleRoomSelect = (roomId: string) => {
-    const hasActiveTools = activeTools.length > 0;
-    const isCurrentlySelected = selectedRooms.includes(roomId);
-
-    if (isCurrentlySelected && hasActiveTools) return; 
-
-    let newSelection = [];
-    let newZoom = isZoomed;
-    let isSelecting = false;
-
-    if (isCurrentlySelected) {
-        newSelection = selectedRooms.filter(r => r !== roomId);
-        if (newSelection.length !== 1 && isZoomed) newZoom = false;
+    if (isGraphMode) {
+      const histTf = timeframe as HistoricalTimeframe;
+      if (currentGraphBox.selectedRoom === roomId) return; 
+      updateGraphSandbox(histTf, { selectedRoom: roomId });
     } else {
-        newSelection = [...selectedRooms, roomId];
-        isSelecting = true;
+      const hasActiveTools = activeTools.length > 0;
+      const isCurrentlySelected = selectedRooms.includes(roomId);
+      if (isCurrentlySelected && hasActiveTools) return; 
+
+      let newSelection = [];
+      let newZoom = isZoomed;
+
+      if (isCurrentlySelected) {
+          newSelection = selectedRooms.filter(r => r !== roomId);
+          if (newSelection.length !== 1 && isZoomed) newZoom = false;
+      } else {
+          newSelection = [...selectedRooms, roomId];
+      }
+
+      updateMapFloor(activeLevel, { selectedRooms: newSelection, isZoomed: newZoom });
     }
+  };
 
-    updateFloor(activeLevel, { selectedRooms: newSelection, isZoomed: newZoom });
+  const handleTimeframeChange = (newTf: Timeframe) => {
+    setTimeframe(newTf);
+    if (newTf === "now") {
+      setCurrentViewType("snapshot");
+    } else {
+      const histTf = newTf as HistoricalTimeframe;
+      setLastHistoricalTimeframe(histTf);
+      setCurrentViewType("graph");
+      
+      const targetBox = graphSandboxes[histTf];
+      
+      if (!targetBox.selectedRoom && !targetBox.activeTool) {
+        const prevHistTf = timeframe !== "now" ? (timeframe as HistoricalTimeframe) : lastHistoricalTimeframe;
+        const prevBox = graphSandboxes[prevHistTf] || { selectedRoom: null, activeTool: null };
+        
+        const room = prevBox.selectedRoom;
+        const tool = prevBox.activeTool;
 
-    if (isSelecting && ws.current && ws.current.readyState === WebSocket.OPEN && hasActiveTools) {
-        activeTools.forEach(tool => {
-            const roomData = roomArtifacts[roomId] || {};
-            const hasCachedData = Object.keys(roomData).some(k => k.toLowerCase() === tool.toLowerCase());
-            
-            if (!hasCachedData) {
-                const payload = {
-                    type: "map_interaction",
-                    rooms: [roomId], 
-                    floor: activeLevel,
-                    domain: tool
-                };
-                ws.current?.send(JSON.stringify(payload));
-            }
-        });
+        if (room && tool) {
+          const hasDataInNewTf = Object.keys(artifactCache[room] || {}).some(
+            k => k.toLowerCase() === tool.toLowerCase() && !!artifactCache[room][k]?.[newTf]
+          );
+          
+          if (hasDataInNewTf) {
+            setGraphSandboxes(prev => ({
+              ...prev,
+              [histTf]: {
+                selectedRoom: room,
+                activeTool: tool
+              }
+            }));
+          }
+        }
+      }
+    }
+  };
+
+  const handleViewModeChange = (newMode: ViewType) => {
+    setCurrentViewType(newMode);
+    if (newMode === "graph" && timeframe === "now") {
+      handleTimeframeChange(lastHistoricalTimeframe);
+    } else if (newMode === "snapshot") {
+      handleTimeframeChange("now");
     }
   };
 
   const handleResetSession = () => {
-    setFloorStates({});
+    setMapSandbox({});
+    setGraphSandboxes(INITIAL_GRAPH_SANDBOXES);
     setActiveLevel("B");
     setMessages([]);
     setSessionTools([]);
     setContextData({ tokens: 0 });
-    setRoomArtifacts({});
+    setArtifactCache({});
     setCurrentViewType("snapshot");
     setLlmStatus(null);
     setAppState("idle");
     setTranscribedText(null);
+    setTimeframe("now");
+    setLastHistoricalTimeframe("24h");
     sessionStorage.clear();
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({ type: "reset_session" }));
     }
   };
 
-  const visuallyActiveTool = activeTools[0]; 
   const activeViewArtifacts: Record<string, any> = {};
   const currentRoomHealthData: Record<string, RoomHealth> = {};
+  const visuallyActiveTool = activeTools[0]; 
 
   if (visuallyActiveTool) {
-    Object.keys(roomArtifacts).forEach(roomId => {
-      const toolKey = Object.keys(roomArtifacts[roomId]).find(
-          key => key.toLowerCase() === visuallyActiveTool.toLowerCase()
-      );
-
-      if (toolKey) {
-        const artifact = roomArtifacts[roomId][toolKey];
+    Object.keys(artifactCache).forEach(roomId => {
+      const toolKey = Object.keys(artifactCache[roomId] || {}).find(k => k.toLowerCase() === visuallyActiveTool.toLowerCase());
+      const artifact = toolKey ? artifactCache[roomId]?.[toolKey]?.[timeframe] : undefined;
+      if (artifact) {
         activeViewArtifacts[roomId] = artifact;
-        
-        if (artifact.status) {
-          currentRoomHealthData[roomId] = artifact.status.toLowerCase() as RoomHealth;
-        } else if (artifact.view_type === "error") {
-          currentRoomHealthData[roomId] = "error";
-        }
+        currentRoomHealthData[roomId] = (artifact.status?.toLowerCase() || "good") as RoomHealth;
       }
     });
   }
@@ -384,17 +485,21 @@ export default function DesktopDashboard() {
         background: "radial-gradient(circle at 30% 20%, #064E3B 0%, #020604 50%, #000000 100%)"
       }}
     >
-      {/* Sidebar sits completely flush to the left, top, and bottom edge */}
       <Sidebar 
         activeLevel={activeLevel}
         setActiveLevel={setActiveLevel}
         selectedRooms={selectedRooms}
         onRoomToggle={handleRoomSelect}
         activeTools={activeTools}
-        floorStates={floorStates}
+        floorStates={mapSandbox}
+        timeframe={timeframe}
+        onTimeframeChange={handleTimeframeChange}
+        viewMode={currentViewType}
+        onViewModeChange={handleViewModeChange}
+        artifactCache={artifactCache}
+        lastHistoricalTimeframe={lastHistoricalTimeframe}
       />
 
-      {/* MapStage Wrapper: Retains full 16px padding on all sides */}
       <div className="flex-1 flex flex-col min-w-0 relative overflow-hidden h-full py-4 pl-4 pr-2">
         <div className="flex-1 flex flex-col min-w-0 relative overflow-hidden h-full rounded-3xl">
           <MapStage 
@@ -405,18 +510,18 @@ export default function DesktopDashboard() {
             selectedRooms={selectedRooms}
             onRoomToggle={handleRoomSelect}
             viewMode={currentViewType} 
-            setViewMode={setCurrentViewType}
+            setViewMode={handleViewModeChange}
             isZoomed={isZoomed}
-            setIsZoomed={(z) => updateFloor(activeLevel, { isZoomed: z })}
+            setIsZoomed={(z) => updateMapFloor(activeLevel, { isZoomed: z })}
             onToggleSelect={handleToggleSelect}
             roomHealthData={currentRoomHealthData}
             roomArtifacts={activeViewArtifacts} 
-            allArtifacts={roomArtifacts}
+            allArtifacts={artifactCache}
+            timeframe={timeframe}
           />
         </div>
       </div>
 
-      {/* ChatPanel Wrapper: Retains top and right padding (pt-4 pr-4), but sits flush at pb-0! */}
       <div className="w-[clamp(380px,30vw,630px)] flex-shrink-0 h-full pt-4 pr-4 pb-0 pl-2 transition-all duration-500 ease-in-out flex flex-col justify-end">
         <ChatPanel 
           appState={appState} 

@@ -330,7 +330,7 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
     await websocket.send_json({"type": "resolved"})
 
 
-async def handle_map_interaction(rooms: list, floor: str, domain: str, thread_id: str, websocket):
+async def handle_map_interaction(rooms: list, floor: str, domain: str, timeframe: str, thread_id: str, websocket):
     """Bypasses LLM, runs tool directly for multiple rooms, and silently updates graph memory."""
     import ast
     
@@ -354,7 +354,7 @@ async def handle_map_interaction(rooms: list, floor: str, domain: str, thread_id
     if "ALL" in rooms:
         if floor == "-3": target_rooms = ["parkin.c"]
         elif floor == "-2": target_rooms = ["parkin.b"]
-        elif floor == "-1": target_rooms = ["data_center"]
+        elif floor == "-1": target_rooms = ["data_center", "kitchen"]
         elif floor == "0": target_rooms = ["entrance", "restaurant"]
         elif floor == "1": target_rooms = ["1.1", "1.2", "kitchen"]
         elif floor == "2": target_rooms = ["2.1", "2.2", "2.3", "2.4"]
@@ -366,7 +366,7 @@ async def handle_map_interaction(rooms: list, floor: str, domain: str, thread_id
     else:
         target_rooms = rooms
 
-    logger.info(f"[USER TOOL] Map Clicked: {tool_name} | Target Rooms: {target_rooms}")
+    logger.info(f"[USER TOOL] Map Clicked: {tool_name} | Target Rooms: {target_rooms} | Timeframe: {timeframe}")
 
     combined_logs = []
     
@@ -377,15 +377,13 @@ async def handle_map_interaction(rooms: list, floor: str, domain: str, thread_id
             try:
                 schema_props = target_tool.args_schema.schema().get("properties", {}) if target_tool.args_schema else {}
                 
-                # UPDATED: Add 'target' parameter support for diagnostics tool
                 if "room_id" in schema_props: tool_args["room_id"] = room
                 elif "room" in schema_props: tool_args["room"] = room
                 elif "target" in schema_props: tool_args["target"] = room
-                
-                if "timeframe" in schema_props: tool_args["timeframe"] = "now"
-                if "query" in schema_props: tool_args["query"] = f"status of {room}"
+                if "timeframe" in schema_props: tool_args["timeframe"] = timeframe
+                if "query" in schema_props: tool_args["query"] = f"status of {room} for {timeframe}"
             except Exception:
-                tool_args = {"room": room, "target": room, "timeframe": "now"} # Safe fallback
+                tool_args = {"room": room, "target": room, "timeframe": timeframe} # Safe fallback
 
             # 2. SMART INVOKE: Force LangChain to return the Artifact by wrapping in a ToolCall
             tool_call = {
@@ -449,7 +447,7 @@ async def handle_map_interaction(rooms: list, floor: str, domain: str, thread_id
         config = {"configurable": {"thread_id": thread_id}}
         full_log = "\n".join(combined_logs)
         context_msg = SystemMessage(
-            content=f"[SYSTEM LOG]: The user clicked on the map to view {domain} for rooms: {', '.join(target_rooms)}. Current data:\n{full_log}"
+            content=f"[SYSTEM LOG]: The user clicked on the map to view {domain} (timeframe: {timeframe}) for rooms: {', '.join(target_rooms)}. Current data:\n{full_log}"
         )
         app.update_state(config, {"messages": [context_msg]})
         

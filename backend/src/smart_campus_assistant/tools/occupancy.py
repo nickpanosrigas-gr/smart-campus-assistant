@@ -705,11 +705,14 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
 
     df.fillna(0, inplace=True)
     
-    # --- BUILD THE GRAPH ARTIFACT (WITH DELTA-ONLY LOGIC) ---
+    # --- BUILD THE GRAPH ARTIFACT ---
+    # For 30d and 90d, resample to daily maximums (1 timestamp per day, matching LLM statistics)
+    df_artifact = df.resample('D').max() if timeframe in ["30d", "90d"] else df
+    
     series_data = []
     last_sent_values = {"Occupancy": None, "Motion": None}
     
-    for dt, row in df.iterrows():
+    for dt, row in df_artifact.iterrows():
         point = {"timestamp": dt.isoformat()}
         changed = False
         
@@ -731,7 +734,8 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             if last_sent_values["Motion"] is None or mot_val != last_sent_values["Motion"]:
                 changed = True
 
-        if changed:
+        # For 30d and 90d, always append the daily timestamp; otherwise use delta-only compression
+        if timeframe in ["30d", "90d"] or changed:
             if occ_val is not None:
                 point['Occupancy'] = occ_val
                 last_sent_values["Occupancy"] = occ_val
@@ -754,7 +758,7 @@ def get_occupancy(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         metadata["Occupancy"] = "Count"
     
     if sensor_category == "motion" or has_active_motion:
-        metadata["Motion"] = "Active (1/0)"
+        metadata["Motion"] = "1 for active and 0 for idle"
         
     if capacity:
         metadata["capacity"] = capacity
@@ -1077,28 +1081,35 @@ if __name__ == "__main__":
     print("-" * 50)
     try:
         print("\n[Testing]")
-        summary, raw_data = get_occupancy.func(room="2.1", timeframe="now")
+        summary, raw_data = get_occupancy.func(room="5.7", timeframe="2h")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("-" * 50)
         
         print("\n[Testing]")
-        summary, raw_data = get_occupancy.func(room="1.2", timeframe="24h")
+        summary, raw_data = get_occupancy.func(room="5.7", timeframe="24h")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("-" * 50)
         
         print("\n[Testing]")
-        summary, raw_data = get_occupancy.func(room="restaurant", timeframe="now")
+        summary, raw_data = get_occupancy.func(room="5.7", timeframe="7d")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("-" * 50)
         
         print("\n[Testing]")
-        summary, raw_data = get_occupancy.func(room="restaurant", timeframe="24h")
+        summary, raw_data = get_occupancy.func(room="5.7", timeframe="30d")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("-" * 50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_occupancy.func(room="5.7", timeframe="90d")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)

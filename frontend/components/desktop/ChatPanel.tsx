@@ -234,7 +234,7 @@ export default function ChatPanel({
     <div className="flex justify-start w-full">
       <div 
         onClick={() => setIsStatusLogExpanded(!isStatusLogExpanded)}
-        className="max-w-[90%] p-3.5 rounded-2xl rounded-tl-sm cursor-pointer transition-all duration-300 flex flex-col shadow-sm border border-white/5 bg-white/5 hover:bg-white/10 text-[#A3B8B2] hover:text-white"
+        className="max-w-[90%] p-3.5 rounded-2xl rounded-tl-sm cursor-pointer transition-all duration-300 flex flex-col shadow-sm border border-white/5 bg-white/5 hover:bg-white/10 text-[#14C89B] hover:text-[#14C89B]"
       >
         <div className="flex items-center gap-3">
           {isWorking ? (
@@ -243,7 +243,7 @@ export default function ChatPanel({
             <CheckCircle2 size={16} className="text-[#14C89B] flex-shrink-0" />
           )}
           
-          <span className={`text-sm font-medium ${isWorking ? 'animate-pulse text-white' : 'text-white/80'}`}>
+          <span className={`text-sm font-medium ${isWorking ? 'animate-pulse text-[#14C89B]' : 'text-[#14C89B]'}`}>
             {isWorking ? (llmStatus?.message || statusHistory[statusHistory.length - 1]) : "Finished running diagnostics"}
           </span>
           <ChevronDown 
@@ -254,7 +254,7 @@ export default function ChatPanel({
 
         <div className={`grid transition-[grid-template-rows,opacity] duration-300 ease-in-out ${isStatusLogExpanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
           <div className="overflow-hidden">
-            <div className="pt-3 pb-1 text-xs font-mono space-y-2 text-white/70 pl-7">
+            <div className="pt-3 pb-1 text-xs font-mono space-y-2 text-[#14C89B] pl-7">
               {statusHistory.map((status, i) => (
                 <div key={i} className="flex items-center gap-2">
                   <span className="w-1.5 h-1.5 rounded-full bg-[#14C89B] flex-shrink-0"></span>
@@ -280,7 +280,7 @@ export default function ChatPanel({
               {/* Header Logo & Name */}
               <div className="flex items-center gap-3">
                 <img src="/icon.png" alt="HUAssistant Logo" className="w-8 h-8 rounded-xl shrink-0 object-contain" />
-                <span className="font-bold text-white text-base tracking-wide">
+                <span className="font-bold text-[#14C89B] text-base tracking-wide">
                   HUAssistant
                 </span>
                 <span 
@@ -293,7 +293,7 @@ export default function ChatPanel({
               
               {/* Token Counter & Reset Session Squircle */}
               <div className="flex items-center gap-3">
-                 <span className="text-xs font-mono text-white/90 bg-black/20 px-3 py-2 rounded-full shadow-inner">
+                 <span className="text-xs font-mono text-[#14C89B] bg-black/20 px-3 py-2 rounded-full shadow-inner">
                    {tokens.toLocaleString("en-US")} / {MAX_TOKENS.toLocaleString("en-US")} ctx
                  </span>
                  
@@ -339,10 +339,10 @@ export default function ChatPanel({
                   <div className={`max-w-[90%] p-4 rounded-3xl shadow-md transition-all duration-200 ${
                     msg.sender === 'user' 
                       ? 'bg-[#0A664F] text-[#0A0A0A] rounded-tr-sm font-bold' 
-                      : 'bg-white/5 text-white/90 border border-white/5 rounded-tl-sm font-normal'
+                      : 'bg-white/5 text-[#14C89B] border border-white/5 rounded-tl-sm font-normal'
                   }`}>
                     {msg.sender === 'agent' ? (
-                      <div className="text-sm space-y-2 prose prose-invert prose-p:leading-relaxed prose-strong:text-white prose-td:border-gray-700 prose-th:border-gray-700 max-w-none">
+                      <div className="text-sm space-y-2 text-[#14C89B] prose prose-p:text-[#14C89B] prose-strong:text-[#14C89B] prose-li:text-[#14C89B] prose-headings:text-[#14C89B] prose-a:text-[#14C89B] prose-code:text-[#14C89B] prose-td:text-[#14C89B] prose-th:text-[#14C89B] prose-p:leading-relaxed prose-td:border-gray-700 prose-th:border-gray-700 max-w-none">
                         <ReactMarkdown 
                           remarkPlugins={[remarkGfm]}
                           components={{
@@ -385,7 +385,6 @@ export default function ChatPanel({
                 className="w-full bg-transparent border-none py-3 px-4 pr-28 text-sm text-[#0A0A0A] placeholder-[#0A0A0A] focus:outline-none focus:ring-0 transition-colors font-normal h-full"
                 disabled={isWorking}
               />
-              {/* UPDATED: Changed right-2 to right-1.5 to align identically with p-1.5 parent padding */}
               <div className="absolute right-1.5 flex items-center gap-1.5">
                 <button 
                   type="button" 
@@ -412,7 +411,6 @@ export default function ChatPanel({
               </div>
             </form>
           ) : (
-            /* UPDATED: Removed horizontal px-1.5 padding so rightmost buttons align 100% to the same boundary */
             <div className="flex w-full items-center gap-1.5 h-full">
               <button 
                 type="button" 
