@@ -322,7 +322,7 @@ export default function Sidebar({
                   mode === "map" ? "bg-[#14C89B] text-[#0A0A0A] shadow-md" : "text-white/90 hover:bg-[#14C89B] hover:text-[#0A0A0A]"
                 }`}
               >
-                Map
+                Map (Now)
               </button>
             </div>
 
