@@ -1,6 +1,7 @@
 "use client";
 import React from "react";
 import OccupancyGraph from "./OccupancyGraph";
+import DoorsWindowsGraph from "./DoorsWindowsGraph";
 import { BarChart3, MousePointerClick, Loader2 } from "lucide-react";
 
 interface GraphViewProps {
@@ -19,7 +20,6 @@ export default function GraphView({
   timeframe
 }: GraphViewProps) {
   
-  // ---> UPDATED: Removed background/border, removed bounce animation, updated copy <---
   if (!selectedRooms || selectedRooms.length === 0) {
     return (
       <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center bg-transparent text-[#A3B8B2] select-none">
@@ -32,7 +32,6 @@ export default function GraphView({
     );
   }
 
-  // ---> UPDATED: Removed background/border, renamed title, updated copy <---
   if (!activeTools || activeTools.length === 0) {
     return (
       <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center bg-transparent text-[#A3B8B2] select-none">
@@ -74,7 +73,6 @@ export default function GraphView({
     }
   }
 
-  // ---> UPDATED: Removed background/border on loading state for visual consistency <---
   if (!artifact) {
     return (
       <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center bg-transparent text-[#A3B8B2] select-none">
@@ -88,10 +86,14 @@ export default function GraphView({
     case "occupancy":
       return <OccupancyGraph artifact={artifact} />;
 
+    // ---> NEW: Route Doors/Windows directly to our dedicated component! <---
+    case "doors/windows":
+    case "doors & windows":
+      return <DoorsWindowsGraph artifact={artifact} />;
+
     case "air quality":
     case "climate":
     case "lights":
-    case "doors/windows":
     case "diagnostics":
       return (
         <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center bg-[#061C16]/40 rounded-3xl border border-[#0A664F]/50 text-[#A3B8B2]">

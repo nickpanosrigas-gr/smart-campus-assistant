@@ -96,17 +96,64 @@ def get_doors_windows_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, d
         all_mc_devices = registry.get_devices_by_room_and_type(room, "MC")
     
     if not all_mc_devices:
-        error_msg = f"Query_Context:\n  Room: {room}\nError: No MC (Door/Window) sensors found in this target."
-        return error_msg, {
-            "type": "map_update",
-            "artifact": {
-                "view_type": "error",
-                "domain": "Doors/Windows",
-                "floor": floor_val,
-                "room_id": str(room),
-                "message": "No MC sensors found"
+        now_ts_for_ctx = pd.Timestamp.now(tz=settings.TIMEZONE)
+        
+        # 1. Build normal Query_Context without Statistical_Baseline
+        header_lines = [
+            "Query_Context:",
+            "  Domain: Door & Window Access State (Open/Closed)",
+            f"  Room: {room.upper()}",
+        ]
+        
+        if timeframe == "now": 
+            header_lines.append("  Timeframe: Now (Snapshot)")
+        elif timeframe in ["30d", "90d"]: 
+            header_lines.append(f"  Timeframe: {timeframe} (Long-Term Statistical Profile)")
+        else: 
+            header_lines.append(f"  Timeframe: {timeframe} ({TIMEFRAME_CONFIG[timeframe]['bin_size']} intervals)")
+
+        header_lines.append(f"  Current_Time: {now_ts_for_ctx.strftime('%A, %Y-%m-%d %H:%M:%S')}")
+        header_lines.append(f"  Active_Context: {get_time_context(now_ts_for_ctx)}")
+        header_lines.append("  Active_Sensors: -/- Online")
+        header_lines.append("")
+        header_lines.append("Current_State:")
+        header_lines.append("  Status: This room has no Magnetic Contact (MC) sensors installed for doors or windows.")
+        
+        llm_msg = "\n".join(header_lines)
+        
+        # 2. Return clean 'unavailable' artifacts based on timeframe
+        if timeframe == "now":
+            artifact = {
+                "type": "map_update",
+                "artifact": {
+                    "view_type": "snapshot",
+                    "domain": "Doors/Windows",
+                    "floor": floor_val,
+                    "room_id": str(room),
+                    "status": "unavailable",
+                    "message": "No MC Sensors"
+                }
             }
-        }
+        else:
+            # For 2h - 90d, return a clean graph artifact with the unavailable status and message
+            artifact = {
+                "type": "map_update",
+                "artifact": {
+                    "view_type": "graph",
+                    "domain": "Doors/Windows",
+                    "floor": floor_val,
+                    "room_id": str(room),
+                    "timeframe": timeframe,
+                    "status": "unavailable",
+                    "message": "No MC Sensors",
+                    "online_sensors": [],
+                    "offline_sensors": [],
+                    "series": [],
+                    "metadata": {}
+                }
+            }
+            
+        return llm_msg, artifact
 
     active_mc_devices = {}
     offline_sensors = []
@@ -391,7 +438,6 @@ def get_doors_windows_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, d
     # Drop calculated groups for the pure visual payload, only keep sensor columns
     ui_df = combined_df[[col for col in combined_df.columns if col in active_mc_devices.keys()]].copy()
     
-    # --- NEW: Binning & Delta (Change-Only) logic for the graph artifact ---
     if room_str == 'building':
         artifact_df = pd.DataFrame(index=ui_df.index)
         d_cols = [c for c in doors if c in ui_df.columns]
@@ -403,16 +449,26 @@ def get_doors_windows_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, d
         if timeframe in ["30d", "90d"]:
             artifact_df = artifact_df.resample('1D').max()
             
-        metadata = {"open_doors": "Open Doors Count", "open_windows": "Open Windows Count"}
+        metadata = {
+            "open_doors": {"label": "Open Doors Count", "type": "Door", "description": "Count"},
+            "open_windows": {"label": "Open Windows Count", "type": "Window", "description": "Count"}
+        }
     else:
         if timeframe in ["30d", "90d"]:
-            # For 30d/90d, show 1 if it was opened at any point during that day
             artifact_df = ui_df.resample('1D').max()
         else:
-            # Use the base DataFrame for short timeframes to preserve exact minute changes
             artifact_df = ui_df
             
-        metadata = {col: "State (1=Open, 0=Closed)" for col in artifact_df.columns}
+        metadata = {}
+        for col in artifact_df.columns:
+            dev_data = active_mc_devices.get(col, {})
+            tag = dev_data.get("tag", col)
+            dev_type = "Door" if col in doors else "Window" if col in windows else "Sensor"
+            metadata[col] = {
+                "label": tag,
+                "type": dev_type,
+                "description": "State (1=Open, 0=Closed)"
+            }
         
     series_data = []
     # Track the last value sent to the frontend for each sensor/aggregate to apply delta logic
@@ -677,21 +733,42 @@ if __name__ == "__main__":
     print("-" * 50)
     try:
         print("\n[Testing]")
-        summary, raw_data = get_doors_windows_status.func(room="2.3", timeframe="now")
+        summary, raw_data = get_doors_windows_status.func(room="2.4", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("-" * 50)
         
         print("\n[Testing]")
-        summary, raw_data = get_doors_windows_status.func(room="2.3", timeframe="24h")
+        summary, raw_data = get_doors_windows_status.func(room="2.4", timeframe="2h")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("-" * 50)
         
         print("\n[Testing]")
-        summary, raw_data = get_doors_windows_status.func(room="2.3", timeframe="30d")
+        summary, raw_data = get_doors_windows_status.func(room="2.4", timeframe="24h")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("-" * 50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_doors_windows_status.func(room="2.4", timeframe="7d")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("-" * 50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_doors_windows_status.func(room="2.4", timeframe="30d")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("-" * 50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_doors_windows_status.func(room="2.4", timeframe="90d")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)

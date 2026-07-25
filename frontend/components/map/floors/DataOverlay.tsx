@@ -34,11 +34,20 @@ export default function DataOverlay({ artifact, roomId }: DataOverlayProps) {
   const aggs = artifact.building_aggregates || artifact.room_aggregates; 
   const results = artifact.results;
   const status = (artifact.status as RoomHealth) || "good";
+  const textColor = SENSOR_COLORS[status] || SENSOR_COLORS.good;
+
+  if (status === "unavailable") {
+    return (
+      <div className="flex flex-col items-center justify-center gap-1 p-2 text-center font-sans">
+        <span className="text-sm font-light tracking-tight leading-snug" style={{ color: textColor }}>
+          {artifact.message || "Unavailable"}
+        </span>
+      </div>
+    );
+  }
 
   // If there are no aggregates/results and it's not a schedule tool, don't render
   if (!aggs && !results && domain !== "Schedule") return null;
-
-  const textColor = SENSOR_COLORS[status] || SENSOR_COLORS.good;
 
   // Render a clean, borderless, typography-focused UI
   const renderContent = () => {

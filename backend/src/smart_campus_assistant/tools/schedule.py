@@ -212,7 +212,7 @@ if __name__ == "__main__":
     
     try:
         print("\n[Testing...]")
-        summary, raw_data = get_room_schedule.func(room="1.2", timeframe="now")
+        summary, raw_data = get_room_schedule.func(room="1.1", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)

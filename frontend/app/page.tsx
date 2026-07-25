@@ -22,9 +22,10 @@ interface MapSandboxState {
   isZoomed: boolean;
 }
 
+// ---> UPGRADED: Separates tool memory for every single room in each timeframe! <---
 interface GraphSandboxState {
   selectedRoom: string | null;
-  activeTool: string | null;
+  roomTools: Record<string, string[]>; 
 }
 
 const getRoomsForFloor = (floor: string) => {
@@ -55,12 +56,13 @@ const getFloorForRoom = (roomId: string) => {
   return null;
 };
 
+// ---> UPGRADED: Initialized with empty roomTools objects <---
 const INITIAL_GRAPH_SANDBOXES: Record<HistoricalTimeframe, GraphSandboxState> = {
-  "2h": { selectedRoom: null, activeTool: null },
-  "24h": { selectedRoom: null, activeTool: null },
-  "7d": { selectedRoom: null, activeTool: null },
-  "30d": { selectedRoom: null, activeTool: null },
-  "90d": { selectedRoom: null, activeTool: null },
+  "2h": { selectedRoom: null, roomTools: {} },
+  "24h": { selectedRoom: null, roomTools: {} },
+  "7d": { selectedRoom: null, roomTools: {} },
+  "30d": { selectedRoom: null, roomTools: {} },
+  "90d": { selectedRoom: null, roomTools: {} },
 };
 
 export default function DesktopDashboard() {
@@ -86,9 +88,10 @@ export default function DesktopDashboard() {
   
   const ws = useRef<WebSocket | null>(null);
   const activeLevelRef = useRef(activeLevel);
+  const inFlightRequests = useRef<Set<string>>(new Set());
 
   const isGraphMode = currentViewType === "graph" && timeframe !== "now";
-  const currentGraphBox = isGraphMode ? graphSandboxes[timeframe as HistoricalTimeframe] : { selectedRoom: null, activeTool: null };
+  const currentGraphBox = isGraphMode ? graphSandboxes[timeframe as HistoricalTimeframe] : { selectedRoom: null, roomTools: {} };
   const currentMapFloor = mapSandbox[activeLevel] || { selectedRooms: [], activeTools: [], isZoomed: false };
 
   const selectedRooms = useMemo(() => {
@@ -97,11 +100,22 @@ export default function DesktopDashboard() {
       : currentMapFloor.selectedRooms;
   }, [isGraphMode, currentGraphBox.selectedRoom, currentMapFloor.selectedRooms]);
 
+  // ---> UPGRADED: Pulls active tools from roomTools memory per selected room <---
   const activeTools = useMemo(() => {
-    return isGraphMode 
-      ? (currentGraphBox.activeTool ? [currentGraphBox.activeTool] : []) 
-      : currentMapFloor.activeTools;
-  }, [isGraphMode, currentGraphBox.activeTool, currentMapFloor.activeTools]);
+    if (isGraphMode) {
+      const room = currentGraphBox.selectedRoom;
+      if (!room) return [];
+      if (currentGraphBox.roomTools && currentGraphBox.roomTools[room]) {
+        return currentGraphBox.roomTools[room];
+      }
+      // Backwards compatibility fallback for old sessionStorage formats
+      if ((currentGraphBox as any).activeTool) {
+        return [(currentGraphBox as any).activeTool];
+      }
+      return [];
+    }
+    return currentMapFloor.activeTools;
+  }, [isGraphMode, currentGraphBox, currentMapFloor.activeTools]);
 
   const isZoomed = isGraphMode ? false : currentMapFloor.isZoomed;
 
@@ -169,8 +183,7 @@ export default function DesktopDashboard() {
   useEffect(() => { sessionStorage.setItem("timeframe", timeframe); }, [timeframe]);
   useEffect(() => { sessionStorage.setItem("lastHistoricalTimeframe", lastHistoricalTimeframe); }, [lastHistoricalTimeframe]);
 
-  // ---> NEW: SELF-HEALING TELEMETRY FETCH <---
-  // Automatically fetches data if the UI lands on a room/tool/timeframe that isn't cached yet!
+  // ---> SELF-HEALING TELEMETRY FETCH <---
   useEffect(() => {
     if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
     if (activeTools.length === 0 || selectedRooms.length === 0) return;
@@ -182,8 +195,16 @@ export default function DesktopDashboard() {
           k => k.toLowerCase() === tool.toLowerCase() && !!roomMap[k]?.[timeframe]
         );
 
-        if (!hasData) {
+        // Create a unique identifier for this exact network request
+        const requestKey = `${room}-${tool}-${timeframe}`.toLowerCase();
+
+        // ---> FIX: Only fetch if we lack data AND the request is not already in-flight! <---
+        if (!hasData && !inFlightRequests.current.has(requestKey)) {
           console.log(`[SELF-HEALING FETCH] Requesting missing telemetry: Room ${room} | Tool: ${tool} | TF: ${timeframe}`);
+          
+          // Mark this request as in-flight before sending
+          inFlightRequests.current.add(requestKey);
+
           ws.current?.send(JSON.stringify({
             type: "map_interaction",
             rooms: [room],
@@ -231,6 +252,10 @@ export default function DesktopDashboard() {
           const domain = artifact.domain || "Unknown";
           const tf = (artifact.timeframe || "now") as Timeframe;
 
+          // ---> FIX: Clear the request from in-flight memory as soon as data arrives! <---
+          const requestKey = `${roomId}-${domain}-${tf}`.toLowerCase();
+          inFlightRequests.current.delete(requestKey);
+
           let resolvedFloor = activeLevelRef.current;
           if (artifact.floor !== undefined && artifact.floor !== null) {
             resolvedFloor = String(artifact.floor); 
@@ -276,8 +301,40 @@ export default function DesktopDashboard() {
             setMapSandbox(prev => {
               const floor = prev[targetLevel] || { selectedRooms: [], activeTools: [], isZoomed: false };
               const newZoom = roomId && roomId !== "building";
-              const newActiveTools = domain !== "Unknown" ? [domain] : floor.activeTools;
-              const newRooms = roomId ? [roomId] : floor.selectedRooms;
+              
+              // ---> FLICKER FIX: Case-insensitive check prevents background tools from jumping to index 0! <---
+              let newActiveTools = floor.activeTools;
+              if (domain !== "Unknown") {
+                const existingIndex = floor.activeTools.findIndex(
+                  t => t.toLowerCase() === domain.toLowerCase()
+                );
+                // Only if it is a completely NEW tool (not in activeTools at all), add it to index 0
+                if (existingIndex === -1) {
+                  newActiveTools = [domain, ...floor.activeTools];
+                }
+                // If it IS already in activeTools (even at index 1 or 2), leave the array untouched!
+              }
+
+              // ---> MAP MODE FIX: Append/preserve rooms instead of overwriting! <---
+              let newRooms = floor.selectedRooms;
+              if (roomId) {
+                if (roomId === "building" || roomId === "ALL") {
+                  newRooms = [roomId];
+                } else if (!floor.selectedRooms.includes(roomId)) {
+                  const currentSpecifics = floor.selectedRooms.filter(r => r !== "building" && r !== "ALL");
+                  newRooms = [...currentSpecifics, roomId];
+                }
+              }
+
+              // ---> SILENT CACHING BAILOUT: If state didn't change, abort re-render! <---
+              if (
+                newActiveTools === floor.activeTools &&
+                newRooms === floor.selectedRooms &&
+                newZoom === floor.isZoomed
+              ) {
+                return prev; // Data sits quietly in artifactCache without flickering the map UI!
+              }
+
               return {
                 ...prev,
                 [targetLevel]: {
@@ -289,13 +346,30 @@ export default function DesktopDashboard() {
               };
             });
           } else {
-            setGraphSandboxes(prev => ({
-              ...prev,
-              [tf]: {
-                selectedRoom: roomId || prev[tf as HistoricalTimeframe]?.selectedRoom || null,
-                activeTool: domain !== "Unknown" ? domain : (prev[tf as HistoricalTimeframe]?.activeTool || null)
+            // ---> GRAPH MODE FIX: Appends tool to the specific room's memory! <---
+            setGraphSandboxes(prev => {
+              const box = prev[tf as HistoricalTimeframe] || { selectedRoom: null, roomTools: {} };
+              const targetRoom = roomId || box.selectedRoom;
+              if (!targetRoom) return prev;
+
+              const currentRoomTools = box.roomTools?.[targetRoom] || [];
+              let newRoomTools = currentRoomTools;
+              if (domain !== "Unknown" && !currentRoomTools.includes(domain)) {
+                newRoomTools = [domain, ...currentRoomTools];
               }
-            }));
+
+              return {
+                ...prev,
+                [tf]: {
+                  ...box,
+                  selectedRoom: targetRoom,
+                  roomTools: {
+                    ...(box.roomTools || {}),
+                    [targetRoom]: newRoomTools
+                  }
+                }
+              };
+            });
           }
         }
 
@@ -355,10 +429,28 @@ export default function DesktopDashboard() {
     }
   };
 
+  // ---> UPGRADED: Handles tool toggling safely for both Map and Graph modes <---
   const handleToggleSelect = (toggle: string) => {
     if (isGraphMode) {
       const histTf = timeframe as HistoricalTimeframe;
-      updateGraphSandbox(histTf, { activeTool: toggle });
+      let room = currentGraphBox.selectedRoom;
+      // Auto-select first room on the active floor if none selected yet
+      if (!room) {
+        const floorRooms = getRoomsForFloor(activeLevel);
+        if (floorRooms.length > 0) room = floorRooms[0];
+      }
+      if (!room) return;
+
+      const currentTools = currentGraphBox.roomTools?.[room] || [];
+      const newTools = [toggle, ...currentTools.filter(t => t !== toggle)];
+
+      updateGraphSandbox(histTf, {
+        selectedRoom: room,
+        roomTools: {
+          ...(currentGraphBox.roomTools || {}),
+          [room]: newTools
+        }
+      });
     } else {
       const isNewTool = !activeTools.includes(toggle);
       const newTools = [toggle, ...activeTools.filter(t => t !== toggle)];
@@ -373,11 +465,24 @@ export default function DesktopDashboard() {
     }
   };
 
+  // ---> UPGRADED: Smart tool inheritance when opening a room for the first time in Graph mode <---
   const handleRoomSelect = (roomId: string) => {
     if (isGraphMode) {
       const histTf = timeframe as HistoricalTimeframe;
       if (currentGraphBox.selectedRoom === roomId) return; 
-      updateGraphSandbox(histTf, { selectedRoom: roomId });
+
+      let existingTools = currentGraphBox.roomTools?.[roomId] || [];
+      if (existingTools.length === 0 && activeTools.length > 0) {
+        existingTools = [activeTools[0]];
+      }
+
+      updateGraphSandbox(histTf, { 
+        selectedRoom: roomId,
+        roomTools: {
+          ...(currentGraphBox.roomTools || {}),
+          [roomId]: existingTools
+        }
+      });
     } else {
       const hasActiveTools = activeTools.length > 0;
       const isCurrentlySelected = selectedRooms.includes(roomId);
@@ -397,6 +502,7 @@ export default function DesktopDashboard() {
     }
   };
 
+  // ---> UPGRADED: Seamlessly inherits room & tools when exploring a new timeframe <---
   const handleTimeframeChange = (newTf: Timeframe) => {
     setTimeframe(newTf);
     if (newTf === "now") {
@@ -406,26 +512,24 @@ export default function DesktopDashboard() {
       setLastHistoricalTimeframe(histTf);
       setCurrentViewType("graph");
       
-      const targetBox = graphSandboxes[histTf];
+      const targetBox = graphSandboxes[histTf] || { selectedRoom: null, roomTools: {} };
       
-      if (!targetBox.selectedRoom && !targetBox.activeTool) {
+      if (!targetBox.selectedRoom) {
         const prevHistTf = timeframe !== "now" ? (timeframe as HistoricalTimeframe) : lastHistoricalTimeframe;
-        const prevBox = graphSandboxes[prevHistTf] || { selectedRoom: null, activeTool: null };
+        const prevBox = graphSandboxes[prevHistTf] || { selectedRoom: null, roomTools: {} };
         
         const room = prevBox.selectedRoom;
-        const tool = prevBox.activeTool;
-
-        if (room && tool) {
-          const hasDataInNewTf = Object.keys(artifactCache[room] || {}).some(
-            k => k.toLowerCase() === tool.toLowerCase() && !!artifactCache[room][k]?.[newTf]
-          );
-          
-          if (hasDataInNewTf) {
+        if (room) {
+          const prevTools = prevBox.roomTools?.[room] || [];
+          if (prevTools.length > 0) {
             setGraphSandboxes(prev => ({
               ...prev,
               [histTf]: {
                 selectedRoom: room,
-                activeTool: tool
+                roomTools: {
+                  ...(prev[histTf]?.roomTools || {}),
+                  [room]: prevTools
+                }
               }
             }));
           }
