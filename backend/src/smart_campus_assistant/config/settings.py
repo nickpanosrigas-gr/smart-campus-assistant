@@ -1,4 +1,6 @@
+from typing import List
 from pathlib import Path
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent.parent
@@ -36,6 +38,12 @@ class Settings(BaseSettings):
     LONGITUDE: float
     TIMEZONE: str
     
+    # Auth Settings
+    GOOGLE_CLIENT_ID: str
+    JWT_SECRET_KEY: str
+    JWT_ALGORITHM: str
+    ALLOWED_EMAILS: str
+
     # Defaults to the root /data directory for local development
     DATA_DIR: str = str(ROOT_DIR.parent / "data")
     
@@ -45,5 +53,6 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8", 
         extra="ignore"
     )
+    
 # Instantiate settings to be imported across the project
 settings = Settings()

@@ -25,6 +25,8 @@ dependencies = [
     "uvicorn>=0.47.0",
     "transformers>=5.9.0",
     "tiktoken>=0.13.0",
+    "google-auth>=2.49.2",
+    "pyjwt>=2.13.0",
 ]
 
 [build-system]

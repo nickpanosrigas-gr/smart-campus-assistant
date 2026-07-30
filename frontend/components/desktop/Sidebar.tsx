@@ -17,6 +17,9 @@ interface SidebarProps {
   onViewModeChange: (mode: ViewType) => void;
   artifactCache: Record<string, Record<string, Record<string, any>>>;
   lastHistoricalTimeframe: Timeframe;
+  userEmail?: string;
+  userPicture?: string;
+  onLogout?: () => void;
 }
 
 const FLOORS = [
@@ -34,7 +37,6 @@ const FLOORS = [
 
 const TIMEFRAMES: Timeframe[] = ["2h", "24h", "7d", "30d", "90d"];
 
-// ---> Human-Readable Timeframe Labels <---
 const TIMEFRAME_LABELS: Record<Timeframe, string> = {
   "now": "Now",
   "2h": "2 Hours",
@@ -56,7 +58,10 @@ export default function Sidebar({
   viewMode,
   onViewModeChange,
   artifactCache,
-  lastHistoricalTimeframe
+  lastHistoricalTimeframe,
+  userEmail,
+  userPicture,
+  onLogout
 }: SidebarProps) {
   const [isTimeframeMenuOpen, setIsTimeframeMenuOpen] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(true);
@@ -247,22 +252,28 @@ export default function Sidebar({
               </AnimatePresence>
             </motion.button>
 
-            <div className="w-10 h-10 rounded-xl bg-black/20 flex items-center justify-center shrink-0 text-white shadow-md cursor-default">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            <div 
+              onClick={() => setIsCollapsed(false)}
+              title="Expand Sidebar"
+              className="w-10 h-10 rounded-xl bg-black/20 flex items-center justify-center shrink-0 text-white shadow-md cursor-pointer hover:ring-2 hover:ring-[#14C89B] transition-all overflow-hidden"
+            >
+              {userPicture ? (
+                <img src={userPicture} alt="User" className="w-full h-full object-cover" />
+              ) : (
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              )}
             </div>
           </div>
         ) : (
           <>
             <div className="relative grid grid-cols-2 bg-black/20 p-1 rounded-full gap-1 shadow-inner mx-1 h-10">
               
-              {/* TIMEFRAME DROP-UP MENU WITH GREY TYPOGRAPHY & DESCRIPTIVE LABELS */}
               {isTimeframeMenuOpen && (
                 <div className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 w-48 bg-[#0A664F] border border-[#14C89B]/30 rounded-2xl shadow-[0_-10px_30px_rgba(0,0,0,0.5)] p-2 flex flex-col gap-1.5 z-50">
                   {TIMEFRAMES.map(tf => {
                     const isSelected = timeframe === tf;
                     const isCached = !isSelected && hasCachedDataForTimeframe(tf);
 
-                    // ---> UPDATED: Replaced text-white with text-[#A3B8B2] for never selected items <---
                     let buttonStyle = "bg-black/20 text-[#A3B8B2] font-medium border border-transparent hover:bg-[#14C89B] hover:text-[#0A0A0A]";
                     if (isSelected) {
                       buttonStyle = "bg-[#14C89B] text-[#0A0A0A] font-bold shadow-[0_0_12px_rgba(20,200,155,0.4)] border border-transparent";
@@ -279,7 +290,6 @@ export default function Sidebar({
                         }}
                         className={`w-full text-left px-3.5 py-2 rounded-full text-xs transition-all flex items-center justify-between ${buttonStyle}`}
                       >
-                        {/* ---> UPDATED: Explicit human-readable labels ("2 Hours", "7 Days", etc.) <--- */}
                         <span>{TIMEFRAME_LABELS[tf]}</span>
                       </button>
                     );
@@ -327,15 +337,23 @@ export default function Sidebar({
             </div>
 
             <div className="flex items-center gap-2.5 bg-transparent h-10">
-              <div className="w-10 h-10 rounded-xl bg-black/20 flex items-center justify-center shrink-0 shadow-sm">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              <div 
+                onClick={() => setIsCollapsed(false)} // Ensures clicking it while expanded does nothing harmful
+                className="w-10 h-10 rounded-xl bg-black/20 flex items-center justify-center shrink-0 shadow-sm overflow-hidden"
+              >
+                {userPicture ? (
+                  <img src={userPicture} alt="User" className="w-full h-full object-cover" />
+                ) : (
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                )}
               </div>
               
               <div className="flex-1 text-xs text-white font-medium line-clamp-2 break-all leading-tight">
-                it2022094@hua.gr
+                {userEmail || "Loading..."}
               </div>
 
               <button 
+                onClick={onLogout}
                 className="w-10 h-10 rounded-xl bg-[#8E2F3E] text-white flex items-center justify-center shrink-0 transition-all hover:bg-[#C84B5E] hover:text-[#0A0A0A] shadow-md"
                 title="Log Out"
               >

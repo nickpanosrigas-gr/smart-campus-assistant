@@ -14,6 +14,7 @@ const nextConfig: NextConfig = {
     API_URL: process.env.API_URL,
     OLLAMA_MODEL: process.env.OLLAMA_MODEL,
     OLLAMA_NUM_CTX: process.env.OLLAMA_NUM_CTX,
+    GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
   }
 };
 

@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useRef, useMemo } from "react";
+import { GoogleLogin } from "@react-oauth/google";
 import ChatPanel from "@/components/desktop/ChatPanel";
 import MapStage from "@/components/desktop/MapStage";
 import { RoomHealth } from "@/components/map/constants";
@@ -22,7 +23,6 @@ interface MapSandboxState {
   isZoomed: boolean;
 }
 
-// ---> UPGRADED: Separates tool memory for every single room in each timeframe! <---
 interface GraphSandboxState {
   selectedRoom: string | null;
   roomTools: Record<string, string[]>; 
@@ -56,7 +56,6 @@ const getFloorForRoom = (roomId: string) => {
   return null;
 };
 
-// ---> UPGRADED: Initialized with empty roomTools objects <---
 const INITIAL_GRAPH_SANDBOXES: Record<HistoricalTimeframe, GraphSandboxState> = {
   "2h": { selectedRoom: null, roomTools: {} },
   "24h": { selectedRoom: null, roomTools: {} },
@@ -65,7 +64,135 @@ const INITIAL_GRAPH_SANDBOXES: Record<HistoricalTimeframe, GraphSandboxState> = 
   "90d": { selectedRoom: null, roomTools: {} },
 };
 
-export default function DesktopDashboard() {
+// ==========================================
+// 1. LANDING PAGE COMPONENT
+// ==========================================
+function LandingPage({ onLoginSuccess }: { onLoginSuccess: () => void }) {
+  const [error, setError] = useState("");
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  const handleSuccess = async (credentialResponse: any) => {
+    setIsLoggingIn(true);
+    setError("");
+    try {
+      const res = await fetch("http://localhost:8000/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ credential: credentialResponse.credential }),
+        credentials: "include", 
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        setError(data.detail || "Authentication failed. Ensure you are using an authorized @hua.gr email.");
+        setIsLoggingIn(false);
+        return;
+      }
+      onLoginSuccess();
+    } catch (err) {
+      setError("Network error connecting to the authentication server.");
+      setIsLoggingIn(false);
+    }
+  };
+
+  return (
+    <div 
+      className="w-full h-screen flex items-center justify-center text-[#A3B8B2] font-sans"
+      style={{ background: "radial-gradient(circle at 30% 20%, #064E3B 0%, #020604 50%, #000000 100%)" }}
+    >
+      <div className="flex flex-col items-center bg-black/40 p-12 rounded-3xl border border-white/10 backdrop-blur-xl shadow-2xl max-w-md text-center transition-all duration-500">
+        
+        <div className="relative mb-6">
+          <div className="absolute inset-0 bg-emerald-500 blur-[30px] opacity-20 rounded-full"></div>
+          <img src="/icon.png" alt="HUA Logo" className="w-24 h-24 relative z-10 drop-shadow-xl" />
+        </div>
+        
+        <h2 className="text-xs uppercase tracking-[0.3em] text-[#020604] mb-3 font-bold bg-[#A3B8B2] px-4 py-1.5 rounded-full">
+          Omirou Building
+        </h2>
+        
+        <h1 className="text-3xl font-light text-white mb-4">
+          Smart Campus <span className="font-semibold text-emerald-500">Assistant</span>
+        </h1>
+        
+        <p className="text-sm mb-8 opacity-70 leading-relaxed">
+          Authenticate with your university <span className="font-semibold text-white">@hua.gr</span> account to access the secure telemetry dashboard and AI agent.
+        </p>
+        
+        {isLoggingIn ? (
+          <div className="w-full flex justify-center py-2">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-500"></div>
+          </div>
+        ) : (
+          <div className="hover:scale-105 transition-transform duration-300">
+            <GoogleLogin
+              onSuccess={handleSuccess}
+              onError={() => setError("Google Login popup failed or was closed.")}
+              hosted_domain="hua.gr"
+              theme="filled_black"
+              shape="pill"
+              text="continue_with"
+            />
+          </div>
+        )}
+        
+        {error && (
+          <div className="mt-6 text-red-400 text-xs bg-red-900/30 border border-red-500/20 px-4 py-3 rounded-xl w-full">
+            {error}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
+// 2. MAIN APP WRAPPER (Handles Auth State)
+// ==========================================
+export default function Page() {
+  const [user, setUser] = useState<{ sub: string; picture?: string } | null | undefined>(undefined);
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const res = await fetch("http://localhost:8000/api/auth/me", {
+          credentials: "include", 
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setUser(data);
+        } else {
+          setUser(null);
+        }
+      } catch (error) {
+        setUser(null);
+      }
+    };
+    checkAuth();
+  }, []);
+
+  if (user === undefined) {
+    return (
+      <div className="w-full h-screen flex items-center justify-center bg-[#020604]">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500"></div>
+      </div>
+    );
+  }
+
+  if (user === null) {
+    return <LandingPage onLoginSuccess={() => window.location.reload()} />;
+  }
+
+  return <DesktopDashboard user={user} />;
+}
+
+// ==========================================
+// 3. MAIN DASHBOARD COMPONENT
+// ==========================================
+function DesktopDashboard({ user }: { user: { sub: string; picture?: string } }) {
+  // ---> NEW: isMounted prevents React from overwriting localStorage on refresh <---
+  const [isMounted, setIsMounted] = useState(false);
+
   const [appState, setAppState] = useState<AppState>("idle");
   const [llmStatus, setLlmStatus] = useState<LLMStatus | null>(null);
   
@@ -100,7 +227,6 @@ export default function DesktopDashboard() {
       : currentMapFloor.selectedRooms;
   }, [isGraphMode, currentGraphBox.selectedRoom, currentMapFloor.selectedRooms]);
 
-  // ---> UPGRADED: Pulls active tools from roomTools memory per selected room <---
   const activeTools = useMemo(() => {
     if (isGraphMode) {
       const room = currentGraphBox.selectedRoom;
@@ -108,7 +234,6 @@ export default function DesktopDashboard() {
       if (currentGraphBox.roomTools && currentGraphBox.roomTools[room]) {
         return currentGraphBox.roomTools[room];
       }
-      // Backwards compatibility fallback for old sessionStorage formats
       if ((currentGraphBox as any).activeTool) {
         return [(currentGraphBox as any).activeTool];
       }
@@ -133,57 +258,87 @@ export default function DesktopDashboard() {
     }));
   };
 
+  // --- 1. INITIAL LOAD FROM LOCALSTORAGE ---
   useEffect(() => {
-    const cachedMap = sessionStorage.getItem("mapSandbox");
+    const cachedMap = localStorage.getItem("mapSandbox");
     if (cachedMap) setMapSandbox(JSON.parse(cachedMap));
     
-    const cachedGraph = sessionStorage.getItem("graphSandboxes");
+    const cachedGraph = localStorage.getItem("graphSandboxes");
     if (cachedGraph) setGraphSandboxes(JSON.parse(cachedGraph));
 
-    const cachedLevel = sessionStorage.getItem("activeLevel");
+    const cachedLevel = localStorage.getItem("activeLevel");
     if (cachedLevel) setActiveLevel(cachedLevel);
 
-    const cachedMessages = sessionStorage.getItem("chatMessages");
+    const cachedMessages = localStorage.getItem("chatMessages");
     if (cachedMessages) setMessages(JSON.parse(cachedMessages));
 
-    const cached3DCache = sessionStorage.getItem("artifactCache");
+    const cached3DCache = localStorage.getItem("artifactCache");
     if (cached3DCache) setArtifactCache(JSON.parse(cached3DCache));
 
-    const cachedTools = sessionStorage.getItem("sessionTools");
+    const cachedTools = localStorage.getItem("sessionTools");
     if (cachedTools) setSessionTools(JSON.parse(cachedTools));
 
-    const cachedContext = sessionStorage.getItem("contextData");
+    const cachedContext = localStorage.getItem("contextData");
     if (cachedContext) setContextData(JSON.parse(cachedContext));
     
-    const cachedStatus = sessionStorage.getItem("llmStatus");
+    const cachedStatus = localStorage.getItem("llmStatus");
     if (cachedStatus && cachedStatus !== "null") setLlmStatus(JSON.parse(cachedStatus));
 
-    const cachedViewType = sessionStorage.getItem("currentViewType");
+    const cachedViewType = localStorage.getItem("currentViewType");
     if (cachedViewType) setCurrentViewType(cachedViewType as ViewType);
 
-    const cachedTimeframe = sessionStorage.getItem("timeframe");
+    const cachedTimeframe = localStorage.getItem("timeframe");
     if (cachedTimeframe) setTimeframe(cachedTimeframe as Timeframe);
 
-    const cachedLastHistTf = sessionStorage.getItem("lastHistoricalTimeframe");
+    const cachedLastHistTf = localStorage.getItem("lastHistoricalTimeframe");
     if (cachedLastHistTf) setLastHistoricalTimeframe(cachedLastHistTf as HistoricalTimeframe);
+
+    // ---> IMPORTANT: Mark component as mounted AFTER loading state <---
+    setIsMounted(true); 
   }, []);
 
-  useEffect(() => { sessionStorage.setItem("mapSandbox", JSON.stringify(mapSandbox)); }, [mapSandbox]);
-  useEffect(() => { sessionStorage.setItem("graphSandboxes", JSON.stringify(graphSandboxes)); }, [graphSandboxes]);
-  useEffect(() => { 
-    sessionStorage.setItem("activeLevel", activeLevel);
-    activeLevelRef.current = activeLevel; 
-  }, [activeLevel]);
-  useEffect(() => { sessionStorage.setItem("chatMessages", JSON.stringify(messages)); }, [messages]);
-  useEffect(() => { sessionStorage.setItem("artifactCache", JSON.stringify(artifactCache)); }, [artifactCache]);
-  useEffect(() => { sessionStorage.setItem("sessionTools", JSON.stringify(sessionTools)); }, [sessionTools]);
-  useEffect(() => { sessionStorage.setItem("contextData", JSON.stringify(contextData)); }, [contextData]);
-  useEffect(() => { sessionStorage.setItem("llmStatus", JSON.stringify(llmStatus)); }, [llmStatus]);
-  useEffect(() => { sessionStorage.setItem("currentViewType", currentViewType); }, [currentViewType]);
-  useEffect(() => { sessionStorage.setItem("timeframe", timeframe); }, [timeframe]);
-  useEffect(() => { sessionStorage.setItem("lastHistoricalTimeframe", lastHistoricalTimeframe); }, [lastHistoricalTimeframe]);
+  // --- 2. MULTI-TAB CROSS-SYNC EVENT LISTENER ---
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      try {
+        if (e.key === "mapSandbox") setMapSandbox(e.newValue ? JSON.parse(e.newValue) : {});
+        if (e.key === "graphSandboxes") setGraphSandboxes(e.newValue ? JSON.parse(e.newValue) : INITIAL_GRAPH_SANDBOXES);
+        if (e.key === "activeLevel") setActiveLevel(e.newValue || "B");
+        if (e.key === "chatMessages") setMessages(e.newValue ? JSON.parse(e.newValue) : []);
+        if (e.key === "artifactCache") setArtifactCache(e.newValue ? JSON.parse(e.newValue) : {});
+        if (e.key === "sessionTools") setSessionTools(e.newValue ? JSON.parse(e.newValue) : []);
+        if (e.key === "contextData") setContextData(e.newValue ? JSON.parse(e.newValue) : { tokens: 0 });
+        if (e.key === "llmStatus") setLlmStatus(e.newValue && e.newValue !== "null" ? JSON.parse(e.newValue) : null);
+        if (e.key === "currentViewType") setCurrentViewType((e.newValue as ViewType) || "snapshot");
+        if (e.key === "timeframe") setTimeframe((e.newValue as Timeframe) || "now");
+        if (e.key === "lastHistoricalTimeframe") setLastHistoricalTimeframe((e.newValue as HistoricalTimeframe) || "24h");
+      } catch (err) {
+        console.error("Multi-tab sync error:", err);
+      }
+    };
 
-  // ---> SELF-HEALING TELEMETRY FETCH <---
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
+  }, []);
+
+  // --- 3. PERSIST STATE WRITES TO LOCALSTORAGE (ONLY IF MOUNTED) ---
+  useEffect(() => { if (isMounted) localStorage.setItem("mapSandbox", JSON.stringify(mapSandbox)); }, [mapSandbox, isMounted]);
+  useEffect(() => { if (isMounted) localStorage.setItem("graphSandboxes", JSON.stringify(graphSandboxes)); }, [graphSandboxes, isMounted]);
+  useEffect(() => { 
+    if (isMounted) {
+      localStorage.setItem("activeLevel", activeLevel);
+      activeLevelRef.current = activeLevel; 
+    }
+  }, [activeLevel, isMounted]);
+  useEffect(() => { if (isMounted) localStorage.setItem("chatMessages", JSON.stringify(messages)); }, [messages, isMounted]);
+  useEffect(() => { if (isMounted) localStorage.setItem("artifactCache", JSON.stringify(artifactCache)); }, [artifactCache, isMounted]);
+  useEffect(() => { if (isMounted) localStorage.setItem("sessionTools", JSON.stringify(sessionTools)); }, [sessionTools, isMounted]);
+  useEffect(() => { if (isMounted) localStorage.setItem("contextData", JSON.stringify(contextData)); }, [contextData, isMounted]);
+  useEffect(() => { if (isMounted) localStorage.setItem("llmStatus", JSON.stringify(llmStatus)); }, [llmStatus, isMounted]);
+  useEffect(() => { if (isMounted) localStorage.setItem("currentViewType", currentViewType); }, [currentViewType, isMounted]);
+  useEffect(() => { if (isMounted) localStorage.setItem("timeframe", timeframe); }, [timeframe, isMounted]);
+  useEffect(() => { if (isMounted) localStorage.setItem("lastHistoricalTimeframe", lastHistoricalTimeframe); }, [lastHistoricalTimeframe, isMounted]);
+
   useEffect(() => {
     if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
     if (activeTools.length === 0 || selectedRooms.length === 0) return;
@@ -195,14 +350,11 @@ export default function DesktopDashboard() {
           k => k.toLowerCase() === tool.toLowerCase() && !!roomMap[k]?.[timeframe]
         );
 
-        // Create a unique identifier for this exact network request
         const requestKey = `${room}-${tool}-${timeframe}`.toLowerCase();
 
-        // ---> FIX: Only fetch if we lack data AND the request is not already in-flight! <---
         if (!hasData && !inFlightRequests.current.has(requestKey)) {
           console.log(`[SELF-HEALING FETCH] Requesting missing telemetry: Room ${room} | Tool: ${tool} | TF: ${timeframe}`);
           
-          // Mark this request as in-flight before sending
           inFlightRequests.current.add(requestKey);
 
           ws.current?.send(JSON.stringify({
@@ -217,6 +369,7 @@ export default function DesktopDashboard() {
     });
   }, [timeframe, selectedRooms, activeTools, activeLevel, artifactCache]);
 
+  // --- WEBSOCKET CONNECTION & EVENT HANDLER ---
   useEffect(() => {
     const getWsUrl = () => {
       if (typeof window === "undefined") return ""; 
@@ -233,6 +386,14 @@ export default function DesktopDashboard() {
     ws.current.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+
+        // --- SESSION TIMEOUT HANDLER (Resets State Without Logging Out) ---
+        if (data.type === "session_expired") {
+          console.log("⏱️ Backend session expired due to inactivity. Resetting dashboard to default state...");
+          handleResetSession(false);
+          return;
+        }
+
         if (data.type === "llm_status") {
           setAppState(data.state === "thinking" || data.state === "transcribing" ? "routing" : "tool_execution");
           setLlmStatus({ state: data.state, message: data.message, tool_name: data.tool_name });
@@ -252,7 +413,6 @@ export default function DesktopDashboard() {
           const domain = artifact.domain || "Unknown";
           const tf = (artifact.timeframe || "now") as Timeframe;
 
-          // ---> FIX: Clear the request from in-flight memory as soon as data arrives! <---
           const requestKey = `${roomId}-${domain}-${tf}`.toLowerCase();
           inFlightRequests.current.delete(requestKey);
 
@@ -269,7 +429,6 @@ export default function DesktopDashboard() {
             setActiveLevel(targetLevel);
           }
           
-          // 1. Sync View Type & Timeframe State automatically from LLM
           setTimeframe(tf);
           if (tf !== "now") {
             setLastHistoricalTimeframe(tf as HistoricalTimeframe);
@@ -278,7 +437,6 @@ export default function DesktopDashboard() {
             setCurrentViewType(artifact.view_type === "error" ? "snapshot" : (artifact.view_type as ViewType));
           }
 
-          // 2. Store securely in 3D Cache
           if (roomId && domain !== "Unknown") {
             setArtifactCache(prev => {
               const roomMap = prev[roomId] || {};
@@ -296,26 +454,21 @@ export default function DesktopDashboard() {
             });
           }
 
-          // 3. Update Sandbox state immediately so the UI switches cleanly
           if (tf === "now") {
             setMapSandbox(prev => {
               const floor = prev[targetLevel] || { selectedRooms: [], activeTools: [], isZoomed: false };
               const newZoom = roomId && roomId !== "building";
               
-              // ---> FLICKER FIX: Case-insensitive check prevents background tools from jumping to index 0! <---
               let newActiveTools = floor.activeTools;
               if (domain !== "Unknown") {
                 const existingIndex = floor.activeTools.findIndex(
                   t => t.toLowerCase() === domain.toLowerCase()
                 );
-                // Only if it is a completely NEW tool (not in activeTools at all), add it to index 0
                 if (existingIndex === -1) {
                   newActiveTools = [domain, ...floor.activeTools];
                 }
-                // If it IS already in activeTools (even at index 1 or 2), leave the array untouched!
               }
 
-              // ---> MAP MODE FIX: Append/preserve rooms instead of overwriting! <---
               let newRooms = floor.selectedRooms;
               if (roomId) {
                 if (roomId === "building" || roomId === "ALL") {
@@ -326,13 +479,12 @@ export default function DesktopDashboard() {
                 }
               }
 
-              // ---> SILENT CACHING BAILOUT: If state didn't change, abort re-render! <---
               if (
                 newActiveTools === floor.activeTools &&
                 newRooms === floor.selectedRooms &&
                 newZoom === floor.isZoomed
               ) {
-                return prev; // Data sits quietly in artifactCache without flickering the map UI!
+                return prev; 
               }
 
               return {
@@ -346,7 +498,6 @@ export default function DesktopDashboard() {
               };
             });
           } else {
-            // ---> GRAPH MODE FIX: Appends tool to the specific room's memory! <---
             setGraphSandboxes(prev => {
               const box = prev[tf as HistoricalTimeframe] || { selectedRoom: null, roomTools: {} };
               const targetRoom = roomId || box.selectedRoom;
@@ -429,12 +580,10 @@ export default function DesktopDashboard() {
     }
   };
 
-  // ---> UPGRADED: Handles tool toggling safely for both Map and Graph modes <---
   const handleToggleSelect = (toggle: string) => {
     if (isGraphMode) {
       const histTf = timeframe as HistoricalTimeframe;
       let room = currentGraphBox.selectedRoom;
-      // Auto-select first room on the active floor if none selected yet
       if (!room) {
         const floorRooms = getRoomsForFloor(activeLevel);
         if (floorRooms.length > 0) room = floorRooms[0];
@@ -465,7 +614,6 @@ export default function DesktopDashboard() {
     }
   };
 
-  // ---> UPGRADED: Smart tool inheritance when opening a room for the first time in Graph mode <---
   const handleRoomSelect = (roomId: string) => {
     if (isGraphMode) {
       const histTf = timeframe as HistoricalTimeframe;
@@ -502,7 +650,6 @@ export default function DesktopDashboard() {
     }
   };
 
-  // ---> UPGRADED: Seamlessly inherits room & tools when exploring a new timeframe <---
   const handleTimeframeChange = (newTf: Timeframe) => {
     setTimeframe(newTf);
     if (newTf === "now") {
@@ -547,7 +694,7 @@ export default function DesktopDashboard() {
     }
   };
 
-  const handleResetSession = () => {
+  const handleResetSession = (notifyBackend: boolean = true) => {
     setMapSandbox({});
     setGraphSandboxes(INITIAL_GRAPH_SANDBOXES);
     setActiveLevel("B");
@@ -561,8 +708,21 @@ export default function DesktopDashboard() {
     setTranscribedText(null);
     setTimeframe("now");
     setLastHistoricalTimeframe("24h");
-    sessionStorage.clear();
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+    
+    // Clear state items from localStorage
+    localStorage.removeItem("mapSandbox");
+    localStorage.removeItem("graphSandboxes");
+    localStorage.removeItem("activeLevel");
+    localStorage.removeItem("chatMessages");
+    localStorage.removeItem("artifactCache");
+    localStorage.removeItem("sessionTools");
+    localStorage.removeItem("contextData");
+    localStorage.removeItem("llmStatus");
+    localStorage.removeItem("currentViewType");
+    localStorage.removeItem("timeframe");
+    localStorage.removeItem("lastHistoricalTimeframe");
+
+    if (notifyBackend && ws.current && ws.current.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({ type: "reset_session" }));
     }
   };
@@ -580,6 +740,15 @@ export default function DesktopDashboard() {
         currentRoomHealthData[roomId] = (artifact.status?.toLowerCase() || "good") as RoomHealth;
       }
     });
+  }
+
+  // ---> Wait for localStorage to finish hydrating before rendering the Dashboard <---
+  if (!isMounted) {
+    return (
+      <div className="w-full h-screen flex items-center justify-center bg-[#020604]">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500"></div>
+      </div>
+    );
   }
 
   return (
@@ -602,8 +771,18 @@ export default function DesktopDashboard() {
         onViewModeChange={handleViewModeChange}
         artifactCache={artifactCache}
         lastHistoricalTimeframe={lastHistoricalTimeframe}
+        userEmail={user.sub} 
+        userPicture={user.picture}
+        onLogout={async () => {
+          localStorage.clear();
+          try {
+            await fetch("http://localhost:8000/api/auth/logout", { method: "POST", credentials: "include" });
+            window.location.reload();
+          } catch (err) {
+            console.error("Failed to logout:", err);
+          }
+        }}
       />
-
       <div className="flex-1 flex flex-col min-w-0 relative overflow-hidden h-full py-4 pl-4 pr-2">
         <div className="flex-1 flex flex-col min-w-0 relative overflow-hidden h-full rounded-3xl">
           <MapStage 
@@ -636,7 +815,7 @@ export default function DesktopDashboard() {
           messages={messages}
           contextData={contextData}  
           sessionTools={sessionTools} 
-          onResetSession={handleResetSession}
+          onResetSession={() => handleResetSession(true)}
           transcribedText={transcribedText}
           onClearTranscribedText={() => setTranscribedText(null)}
         />
