@@ -73,7 +73,7 @@ export default function Page() {
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const res = await fetch("http://localhost:8000/api/auth/me", {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/me`, {
           credentials: "include", 
         });
         if (res.ok) {
@@ -694,7 +694,7 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
         onLogout={async () => {
           localStorage.clear();
           try {
-            await fetch("http://localhost:8000/api/auth/logout", { method: "POST", credentials: "include" });
+            await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/logout`, { method: "POST", credentials: "include" });
             window.location.reload();
           } catch (err) {
             console.error("Failed to logout:", err);
