@@ -35,6 +35,7 @@ services:
       - TELEGRAM_TOKEN
       - GOOGLE_CLIENT_ID
       - JWT_SECRET_KEY
+      - JWT_ALGORITHM 
       - ALLOWED_EMAILS
     restart: unless-stopped
 
