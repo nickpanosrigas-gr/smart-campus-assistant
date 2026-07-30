@@ -31,10 +31,11 @@ services:
       - LATITUDE
       - LONGITUDE
       - TIMEZONE
-      - OLLAMA_MODEL
-      - OLLAMA_NUM_CTX
       - QDRANT_HOST
       - TELEGRAM_TOKEN
+      - GOOGLE_CLIENT_ID
+      - JWT_SECRET_KEY
+      - ALLOWED_EMAILS
     restart: unless-stopped
 
   frontend:
@@ -46,6 +47,7 @@ services:
         - API_URL=${API_URL}
         - OLLAMA_MODEL=${OLLAMA_MODEL}
         - OLLAMA_NUM_CTX=${OLLAMA_NUM_CTX}
+        - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
     container_name: smart_campus_frontend
     ports:
       - "${FRONTEND_PORT}:3000"

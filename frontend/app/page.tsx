@@ -1,6 +1,6 @@
 "use client";
 import { useState, useEffect, useRef, useMemo } from "react";
-import { GoogleLogin } from "@react-oauth/google";
+import LandingPage from "@/components/LandingPage";
 import ChatPanel from "@/components/desktop/ChatPanel";
 import MapStage from "@/components/desktop/MapStage";
 import { RoomHealth } from "@/components/map/constants";
@@ -65,89 +65,7 @@ const INITIAL_GRAPH_SANDBOXES: Record<HistoricalTimeframe, GraphSandboxState> = 
 };
 
 // ==========================================
-// 1. LANDING PAGE COMPONENT
-// ==========================================
-function LandingPage({ onLoginSuccess }: { onLoginSuccess: () => void }) {
-  const [error, setError] = useState("");
-  const [isLoggingIn, setIsLoggingIn] = useState(false);
-
-  const handleSuccess = async (credentialResponse: any) => {
-    setIsLoggingIn(true);
-    setError("");
-    try {
-      const res = await fetch("http://localhost:8000/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ credential: credentialResponse.credential }),
-        credentials: "include", 
-      });
-
-      if (!res.ok) {
-        const data = await res.json();
-        setError(data.detail || "Authentication failed. Ensure you are using an authorized @hua.gr email.");
-        setIsLoggingIn(false);
-        return;
-      }
-      onLoginSuccess();
-    } catch (err) {
-      setError("Network error connecting to the authentication server.");
-      setIsLoggingIn(false);
-    }
-  };
-
-  return (
-    <div 
-      className="w-full h-screen flex items-center justify-center text-[#A3B8B2] font-sans"
-      style={{ background: "radial-gradient(circle at 30% 20%, #064E3B 0%, #020604 50%, #000000 100%)" }}
-    >
-      <div className="flex flex-col items-center bg-black/40 p-12 rounded-3xl border border-white/10 backdrop-blur-xl shadow-2xl max-w-md text-center transition-all duration-500">
-        
-        <div className="relative mb-6">
-          <div className="absolute inset-0 bg-emerald-500 blur-[30px] opacity-20 rounded-full"></div>
-          <img src="/icon.png" alt="HUA Logo" className="w-24 h-24 relative z-10 drop-shadow-xl" />
-        </div>
-        
-        <h2 className="text-xs uppercase tracking-[0.3em] text-[#020604] mb-3 font-bold bg-[#A3B8B2] px-4 py-1.5 rounded-full">
-          Omirou Building
-        </h2>
-        
-        <h1 className="text-3xl font-light text-white mb-4">
-          Smart Campus <span className="font-semibold text-emerald-500">Assistant</span>
-        </h1>
-        
-        <p className="text-sm mb-8 opacity-70 leading-relaxed">
-          Authenticate with your university <span className="font-semibold text-white">@hua.gr</span> account to access the secure telemetry dashboard and AI agent.
-        </p>
-        
-        {isLoggingIn ? (
-          <div className="w-full flex justify-center py-2">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-emerald-500"></div>
-          </div>
-        ) : (
-          <div className="hover:scale-105 transition-transform duration-300">
-            <GoogleLogin
-              onSuccess={handleSuccess}
-              onError={() => setError("Google Login popup failed or was closed.")}
-              hosted_domain="hua.gr"
-              theme="filled_black"
-              shape="pill"
-              text="continue_with"
-            />
-          </div>
-        )}
-        
-        {error && (
-          <div className="mt-6 text-red-400 text-xs bg-red-900/30 border border-red-500/20 px-4 py-3 rounded-xl w-full">
-            {error}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ==========================================
-// 2. MAIN APP WRAPPER (Handles Auth State)
+// 1. MAIN APP WRAPPER (Handles Auth State)
 // ==========================================
 export default function Page() {
   const [user, setUser] = useState<{ sub: string; picture?: string } | null | undefined>(undefined);
@@ -187,7 +105,7 @@ export default function Page() {
 }
 
 // ==========================================
-// 3. MAIN DASHBOARD COMPONENT
+// 2. MAIN DASHBOARD COMPONENT
 // ==========================================
 function DesktopDashboard({ user }: { user: { sub: string; picture?: string } }) {
   // ---> NEW: isMounted prevents React from overwriting localStorage on refresh <---
