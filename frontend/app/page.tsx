@@ -6,6 +6,10 @@ import MapStage from "@/components/desktop/MapStage";
 import { RoomHealth } from "@/components/map/constants";
 import Sidebar from "@/components/desktop/Sidebar";
 
+// 1. Centralize the Base URL
+// Since Next.js maps API_URL in next.config.ts, this will work seamlessly in dev and prod
+const API_BASE_URL = process.env.API_URL || "http://localhost:8000";
+
 export type Timeframe = "now" | "2h" | "24h" | "7d" | "30d" | "90d";
 export type HistoricalTimeframe = "2h" | "24h" | "7d" | "30d" | "90d";
 export type AppState = "idle" | "routing" | "tool_execution" | "resolved";
@@ -73,7 +77,7 @@ export default function Page() {
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/me`, {
+        const res = await fetch(`${API_BASE_URL}/api/auth/me`, {
           credentials: "include", 
         });
         if (res.ok) {
@@ -108,27 +112,94 @@ export default function Page() {
 // 2. MAIN DASHBOARD COMPONENT
 // ==========================================
 function DesktopDashboard({ user }: { user: { sub: string; picture?: string } }) {
-  // ---> NEW: isMounted prevents React from overwriting localStorage on refresh <---
-  const [isMounted, setIsMounted] = useState(false);
 
+  // ---> FIX: Synchronous Lazy Initialization from localStorage <---
+  // This completely eliminates the "refresh overwrite" bug because the state 
+  // is instantly correct on the very first render.
+  
   const [appState, setAppState] = useState<AppState>("idle");
-  const [llmStatus, setLlmStatus] = useState<LLMStatus | null>(null);
+  const [llmStatus, setLlmStatus] = useState<LLMStatus | null>(() => {
+    if (typeof window !== "undefined") {
+      const cached = localStorage.getItem("llmStatus");
+      if (cached && cached !== "null") return JSON.parse(cached);
+    }
+    return null;
+  });
   
-  const [timeframe, setTimeframe] = useState<Timeframe>("now");
-  const [lastHistoricalTimeframe, setLastHistoricalTimeframe] = useState<HistoricalTimeframe>("24h");
-  const [currentViewType, setCurrentViewType] = useState<ViewType>("snapshot");
-  const [activeLevel, setActiveLevel] = useState<string>("B"); 
+  const [timeframe, setTimeframe] = useState<Timeframe>(() => {
+    if (typeof window !== "undefined") {
+      return (localStorage.getItem("timeframe") as Timeframe) || "now";
+    }
+    return "now";
+  });
 
-  const [artifactCache, setArtifactCache] = useState<
-    Record<string, Record<string, Record<string, any>>>
-  >({});
+  const [lastHistoricalTimeframe, setLastHistoricalTimeframe] = useState<HistoricalTimeframe>(() => {
+    if (typeof window !== "undefined") {
+      return (localStorage.getItem("lastHistoricalTimeframe") as HistoricalTimeframe) || "24h";
+    }
+    return "24h";
+  });
+
+  const [currentViewType, setCurrentViewType] = useState<ViewType>(() => {
+    if (typeof window !== "undefined") {
+      return (localStorage.getItem("currentViewType") as ViewType) || "snapshot";
+    }
+    return "snapshot";
+  });
+
+  const [activeLevel, setActiveLevel] = useState<string>(() => {
+    if (typeof window !== "undefined") return localStorage.getItem("activeLevel") || "B";
+    return "B";
+  }); 
+
+  const [artifactCache, setArtifactCache] = useState<Record<string, Record<string, Record<string, any>>>>(() => {
+    if (typeof window !== "undefined") {
+      const cached = localStorage.getItem("artifactCache");
+      if (cached) return JSON.parse(cached);
+    }
+    return {};
+  });
   
-  const [mapSandbox, setMapSandbox] = useState<Record<string, MapSandboxState>>({});
-  const [graphSandboxes, setGraphSandboxes] = useState<Record<HistoricalTimeframe, GraphSandboxState>>(INITIAL_GRAPH_SANDBOXES);
+  const [mapSandbox, setMapSandbox] = useState<Record<string, MapSandboxState>>(() => {
+    if (typeof window !== "undefined") {
+      const cached = localStorage.getItem("mapSandbox");
+      if (cached) return JSON.parse(cached);
+    }
+    return {};
+  });
 
-  const [contextData, setContextData] = useState({ tokens: 0 });
-  const [sessionTools, setSessionTools] = useState<{tool: string, room: string}[]>([]);
-  const [messages, setMessages] = useState<Array<{ sender: "user" | "agent"; text: string }>>([]);
+  const [graphSandboxes, setGraphSandboxes] = useState<Record<HistoricalTimeframe, GraphSandboxState>>(() => {
+    if (typeof window !== "undefined") {
+      const cached = localStorage.getItem("graphSandboxes");
+      if (cached) return JSON.parse(cached);
+    }
+    return INITIAL_GRAPH_SANDBOXES;
+  });
+
+  const [contextData, setContextData] = useState(() => {
+    if (typeof window !== "undefined") {
+      const cached = localStorage.getItem("contextData");
+      if (cached) return JSON.parse(cached);
+    }
+    return { tokens: 0 };
+  });
+
+  const [sessionTools, setSessionTools] = useState<{tool: string, room: string}[]>(() => {
+    if (typeof window !== "undefined") {
+      const cached = localStorage.getItem("sessionTools");
+      if (cached) return JSON.parse(cached);
+    }
+    return [];
+  });
+
+  const [messages, setMessages] = useState<Array<{ sender: "user" | "agent"; text: string }>>(() => {
+    if (typeof window !== "undefined") {
+      const cached = localStorage.getItem("chatMessages");
+      if (cached) return JSON.parse(cached);
+    }
+    return [];
+  });
+
   const [transcribedText, setTranscribedText] = useState<string | null>(null);
   
   const ws = useRef<WebSocket | null>(null);
@@ -176,46 +247,7 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
     }));
   };
 
-  // --- 1. INITIAL LOAD FROM LOCALSTORAGE ---
-  useEffect(() => {
-    const cachedMap = localStorage.getItem("mapSandbox");
-    if (cachedMap) setMapSandbox(JSON.parse(cachedMap));
-    
-    const cachedGraph = localStorage.getItem("graphSandboxes");
-    if (cachedGraph) setGraphSandboxes(JSON.parse(cachedGraph));
-
-    const cachedLevel = localStorage.getItem("activeLevel");
-    if (cachedLevel) setActiveLevel(cachedLevel);
-
-    const cachedMessages = localStorage.getItem("chatMessages");
-    if (cachedMessages) setMessages(JSON.parse(cachedMessages));
-
-    const cached3DCache = localStorage.getItem("artifactCache");
-    if (cached3DCache) setArtifactCache(JSON.parse(cached3DCache));
-
-    const cachedTools = localStorage.getItem("sessionTools");
-    if (cachedTools) setSessionTools(JSON.parse(cachedTools));
-
-    const cachedContext = localStorage.getItem("contextData");
-    if (cachedContext) setContextData(JSON.parse(cachedContext));
-    
-    const cachedStatus = localStorage.getItem("llmStatus");
-    if (cachedStatus && cachedStatus !== "null") setLlmStatus(JSON.parse(cachedStatus));
-
-    const cachedViewType = localStorage.getItem("currentViewType");
-    if (cachedViewType) setCurrentViewType(cachedViewType as ViewType);
-
-    const cachedTimeframe = localStorage.getItem("timeframe");
-    if (cachedTimeframe) setTimeframe(cachedTimeframe as Timeframe);
-
-    const cachedLastHistTf = localStorage.getItem("lastHistoricalTimeframe");
-    if (cachedLastHistTf) setLastHistoricalTimeframe(cachedLastHistTf as HistoricalTimeframe);
-
-    // ---> IMPORTANT: Mark component as mounted AFTER loading state <---
-    setIsMounted(true); 
-  }, []);
-
-  // --- 2. MULTI-TAB CROSS-SYNC EVENT LISTENER ---
+  // --- MULTI-TAB CROSS-SYNC EVENT LISTENER ---
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {
       try {
@@ -239,23 +271,21 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
     return () => window.removeEventListener("storage", handleStorageChange);
   }, []);
 
-  // --- 3. PERSIST STATE WRITES TO LOCALSTORAGE (ONLY IF MOUNTED) ---
-  useEffect(() => { if (isMounted) localStorage.setItem("mapSandbox", JSON.stringify(mapSandbox)); }, [mapSandbox, isMounted]);
-  useEffect(() => { if (isMounted) localStorage.setItem("graphSandboxes", JSON.stringify(graphSandboxes)); }, [graphSandboxes, isMounted]);
+  // --- PERSIST STATE WRITES TO LOCALSTORAGE ---
+  useEffect(() => { localStorage.setItem("mapSandbox", JSON.stringify(mapSandbox)); }, [mapSandbox]);
+  useEffect(() => { localStorage.setItem("graphSandboxes", JSON.stringify(graphSandboxes)); }, [graphSandboxes]);
   useEffect(() => { 
-    if (isMounted) {
-      localStorage.setItem("activeLevel", activeLevel);
-      activeLevelRef.current = activeLevel; 
-    }
-  }, [activeLevel, isMounted]);
-  useEffect(() => { if (isMounted) localStorage.setItem("chatMessages", JSON.stringify(messages)); }, [messages, isMounted]);
-  useEffect(() => { if (isMounted) localStorage.setItem("artifactCache", JSON.stringify(artifactCache)); }, [artifactCache, isMounted]);
-  useEffect(() => { if (isMounted) localStorage.setItem("sessionTools", JSON.stringify(sessionTools)); }, [sessionTools, isMounted]);
-  useEffect(() => { if (isMounted) localStorage.setItem("contextData", JSON.stringify(contextData)); }, [contextData, isMounted]);
-  useEffect(() => { if (isMounted) localStorage.setItem("llmStatus", JSON.stringify(llmStatus)); }, [llmStatus, isMounted]);
-  useEffect(() => { if (isMounted) localStorage.setItem("currentViewType", currentViewType); }, [currentViewType, isMounted]);
-  useEffect(() => { if (isMounted) localStorage.setItem("timeframe", timeframe); }, [timeframe, isMounted]);
-  useEffect(() => { if (isMounted) localStorage.setItem("lastHistoricalTimeframe", lastHistoricalTimeframe); }, [lastHistoricalTimeframe, isMounted]);
+    localStorage.setItem("activeLevel", activeLevel);
+    activeLevelRef.current = activeLevel; 
+  }, [activeLevel]);
+  useEffect(() => { localStorage.setItem("chatMessages", JSON.stringify(messages)); }, [messages]);
+  useEffect(() => { localStorage.setItem("artifactCache", JSON.stringify(artifactCache)); }, [artifactCache]);
+  useEffect(() => { localStorage.setItem("sessionTools", JSON.stringify(sessionTools)); }, [sessionTools]);
+  useEffect(() => { localStorage.setItem("contextData", JSON.stringify(contextData)); }, [contextData]);
+  useEffect(() => { localStorage.setItem("llmStatus", JSON.stringify(llmStatus)); }, [llmStatus]);
+  useEffect(() => { localStorage.setItem("currentViewType", currentViewType); }, [currentViewType]);
+  useEffect(() => { localStorage.setItem("timeframe", timeframe); }, [timeframe]);
+  useEffect(() => { localStorage.setItem("lastHistoricalTimeframe", lastHistoricalTimeframe); }, [lastHistoricalTimeframe]);
 
   useEffect(() => {
     if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
@@ -291,11 +321,9 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
   useEffect(() => {
     const getWsUrl = () => {
       if (typeof window === "undefined") return ""; 
-      if (window.location.hostname === "localhost") {
-        return "ws://localhost:8000/ws/chat"; 
-      }
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      return `${protocol}//${window.location.host}/ws/chat`;
+      // Safely convert http/https to ws/wss dynamically
+      const wsBase = API_BASE_URL.replace(/^http/, "ws");
+      return `${wsBase}/ws/chat`;
     };
 
     ws.current = new WebSocket(getWsUrl());
@@ -660,15 +688,6 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
     });
   }
 
-  // ---> Wait for localStorage to finish hydrating before rendering the Dashboard <---
-  if (!isMounted) {
-    return (
-      <div className="w-full h-screen flex items-center justify-center bg-[#020604]">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500"></div>
-      </div>
-    );
-  }
-
   return (
     <main 
       className="w-full h-screen flex overflow-hidden text-[#A3B8B2]"
@@ -694,7 +713,7 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
         onLogout={async () => {
           localStorage.clear();
           try {
-            await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/logout`, { method: "POST", credentials: "include" });
+            await fetch(`${API_BASE_URL}/api/auth/logout`, { method: "POST", credentials: "include" });
             window.location.reload();
           } catch (err) {
             console.error("Failed to logout:", err);
