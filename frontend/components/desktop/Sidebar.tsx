@@ -46,6 +46,8 @@ const TIMEFRAME_LABELS: Record<Timeframe, string> = {
   "90d": "90 Days",
 };
 
+const springTransition = { type: "spring" as const, bounce: 0, duration: 0.4 };
+
 export default function Sidebar({ 
   activeLevel, 
   setActiveLevel, 
@@ -121,27 +123,44 @@ export default function Sidebar({
   };
 
   return (
-    <div 
-      className={`h-full flex flex-col bg-[#0A0A0A] shrink-0 z-10 shadow-2xl transition-all duration-300 ease-in-out ${
+    <motion.div 
+      layout
+      transition={springTransition}
+      className={`h-full flex flex-col bg-[#0A0A0A] shrink-0 z-10 shadow-2xl overflow-hidden ${
         isCollapsed ? "w-[88px]" : "w-[clamp(260px,18vw,320px)]"
       }`}
     >
-      <div className="p-3 pt-4 pb-1 shrink-0">
-        <div
+      <motion.div layout transition={springTransition} className="p-3 pt-4 pb-1 shrink-0">
+        <motion.div
+          layout
+          transition={springTransition}
           onClick={() => setIsCollapsed(!isCollapsed)}
-          className={`w-full h-12 rounded-2xl bg-white/5 hover:bg-white/10 cursor-pointer flex items-center transition-all duration-300 shadow-sm border border-white/5 ${
-            isCollapsed ? "justify-center px-0" : "px-3.5 gap-3"
-          }`}
+          className="w-full h-12 rounded-2xl bg-white/5 hover:bg-white/10 cursor-pointer flex items-center shadow-sm border border-white/5 overflow-hidden transition-colors pl-[18px] pr-4 gap-3"
           title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
         >
-          <img src="/icon.png" alt="HUAssistant Logo" className="w-7 h-7 rounded-xl shrink-0 object-contain" />
-          {!isCollapsed && (
-            <span className="font-bold text-white text-base tracking-wide truncate">
-              HUAssistant
-            </span>
-          )}
-        </div>
-      </div>
+          <motion.img 
+            layout 
+            transition={springTransition}
+            src="/icon.png" 
+            alt="HUAssistant Logo" 
+            className="w-7 h-7 rounded-xl shrink-0 object-contain" 
+          />
+          <AnimatePresence>
+            {!isCollapsed && (
+              <motion.div 
+                layout
+                initial={{ opacity: 0, width: 0 }}
+                animate={{ opacity: 1, width: "auto" }}
+                exit={{ opacity: 0, width: 0 }}
+                transition={springTransition}
+                className="font-bold text-white text-base tracking-wide truncate whitespace-nowrap overflow-hidden"
+              >
+                HUAssistant
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.div>
+      </motion.div>
 
       <div className="flex-1 overflow-y-auto overflow-x-hidden chat-scrollbar pb-4 pt-2">
         {FLOORS.map((floor) => {
@@ -149,80 +168,100 @@ export default function Sidebar({
           const hasData = floorHasData(floor.id);
 
           return (
-            <div 
+            <motion.div 
+              layout
+              transition={springTransition}
               key={floor.id} 
               onClick={() => { if (!isActiveFloor) setActiveLevel(floor.id); }}
-              className={`flex py-2.5 transition-colors duration-300 group cursor-pointer rounded-3xl ${
-                isCollapsed ? "mx-2 justify-center" : "mx-3 mb-1"
-              } ${isActiveFloor ? "bg-[#0A664F]" : "hover:bg-[#0A664F]/40"}`}
+              className={`flex items-center py-2.5 mx-3 mb-1 group cursor-pointer rounded-3xl transition-colors duration-300 ${
+                isActiveFloor ? "bg-[#0A664F]" : "hover:bg-[#0A664F]/40"
+              }`}
             >
-              <div className={`${isCollapsed ? "flex justify-center" : "w-16 shrink-0 flex justify-center items-start"}`}>
-                <div
-                  className={`w-10 h-10 flex items-center justify-center font-bold text-base transition-all duration-300 rounded-xl ${
+              <motion.div 
+                layout 
+                transition={springTransition}
+                className="w-16 shrink-0 flex justify-center items-center"
+              >
+                <motion.div
+                  layout
+                  transition={springTransition}
+                  className={`w-10 h-10 flex items-center justify-center font-bold text-base transition-colors duration-300 rounded-xl ${
                     isActiveFloor ? "bg-[#14C89B] text-[#0A0A0A] shadow-lg" : 
                     hasData ? "bg-[#0A664F] text-white shadow-md" : 
                     "text-[#A3B8B2] bg-transparent group-hover:bg-[#0A664F] group-hover:text-white group-hover:shadow-md"
                   }`}
                 >
                   {floor.label}
-                </div>
-              </div>
+                </motion.div>
+              </motion.div>
 
-              {!isCollapsed && (
-                <div className="flex-1 flex flex-col pr-4 gap-1.5 min-w-0">
-                  {isActiveFloor ? (
-                    floor.rooms.map((room) => {
-                      const isSelected = selectedRooms.includes(room.id);
-                      const cantUnselect = viewMode === "snapshot" && isSelected && activeTools.length > 0;
-                      const isCached = !isSelected && hasCachedData(room.id);
+              <AnimatePresence>
+                {!isCollapsed && (
+                  <motion.div 
+                    layout
+                    initial={{ opacity: 0, width: 0, height: 0 }}
+                    animate={{ opacity: 1, width: "auto", height: "auto" }}
+                    exit={{ opacity: 0, width: 0, height: 0 }}
+                    transition={springTransition}
+                    className="flex-1 flex flex-col pr-4 gap-1.5 min-w-0 overflow-hidden"
+                  >
+                    {isActiveFloor ? (
+                      floor.rooms.map((room) => {
+                        const isSelected = selectedRooms.includes(room.id);
+                        const cantUnselect = viewMode === "snapshot" && isSelected && activeTools.length > 0;
+                        const isCached = !isSelected && hasCachedData(room.id);
 
-                      let roomStyle = "bg-black/20 text-[#A3B8B2] border-transparent hover:bg-[#14C89B] hover:text-[#0A0A0A]";
-                      if (isSelected) {
-                        roomStyle = "bg-[#14C89B] text-[#0A0A0A] font-bold shadow-md border-transparent";
-                      } else if (isCached) {
-                        if (mode === "graph") {
-                          roomStyle = "bg-transparent text-[#14C89B] font-semibold border border-[#14C89B] shadow-[0_0_10px_rgba(20,200,155,0.15)] hover:bg-[#14C89B] hover:text-[#0A0A0A]";
-                        } else {
-                          roomStyle = "bg-[#053D2F]/80 text-[#14C89B] font-semibold border border-[#0A664F] shadow-[0_0_10px_rgba(20,200,155,0.15)] hover:bg-[#14C89B] hover:text-[#0A0A0A]";
+                        let roomStyle = "bg-black/20 text-[#A3B8B2] border-transparent hover:bg-[#14C89B] hover:text-[#0A0A0A]";
+                        if (isSelected) {
+                          roomStyle = "bg-[#14C89B] text-[#0A0A0A] font-bold shadow-md border-transparent";
+                        } else if (isCached) {
+                          if (mode === "graph") {
+                            roomStyle = "bg-transparent text-[#14C89B] font-semibold border border-[#14C89B] shadow-[0_0_10px_rgba(20,200,155,0.15)] hover:bg-[#14C89B] hover:text-[#0A0A0A]";
+                          } else {
+                            roomStyle = "bg-[#053D2F]/80 text-[#14C89B] font-semibold border border-[#0A664F] shadow-[0_0_10px_rgba(20,200,155,0.15)] hover:bg-[#14C89B] hover:text-[#0A0A0A]";
+                          }
                         }
-                      }
 
-                      return (
-                        <div
-                          key={room.id}
-                          onClick={(e) => { e.stopPropagation(); onRoomToggle(room.id); }}
-                          className={`h-10 px-4 transition-all duration-300 flex items-center justify-between rounded-full truncate border ${roomStyle} ${
-                            cantUnselect ? "cursor-not-allowed opacity-90" : "cursor-pointer"
-                          }`}
-                        >
-                          <span className="text-xs truncate block">{room.name}</span>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <div className="h-10 flex items-center">
-                      <span className="text-xs text-[#A3B8B2] opacity-40 truncate group-hover:opacity-100 transition-opacity w-full block">
-                        {floor.rooms.map((r) => r.name).join(", ")}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+                        return (
+                          <div
+                            key={room.id}
+                            onClick={(e) => { e.stopPropagation(); onRoomToggle(room.id); }}
+                            className={`h-10 shrink-0 px-4 transition-all duration-300 flex items-center justify-between rounded-full truncate border whitespace-nowrap ${roomStyle} ${
+                              cantUnselect ? "cursor-not-allowed opacity-90" : "cursor-pointer"
+                            }`}
+                          >
+                            <span className="text-xs truncate block">{room.name}</span>
+                          </div>
+                        );
+                      })
+                    ) : (
+                      <div className="h-10 shrink-0 flex items-center">
+                        <span className="text-xs text-[#A3B8B2] opacity-40 truncate group-hover:opacity-100 transition-opacity w-full block">
+                          {floor.rooms.map((r) => r.name).join(", ")}
+                        </span>
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
           );
         })}
       </div>
 
-      <div 
+      <motion.div 
+        layout
+        transition={springTransition}
         ref={bottomSectionRef} 
-        className={`bg-[#0A664F] shrink-0 relative flex flex-col gap-3.5 rounded-t-3xl border-t border-[#14C89B]/20 shadow-[0_-10px_30px_rgba(0,0,0,0.3)] transition-all duration-300 py-5 ${
-          isCollapsed ? "px-3 items-center" : "px-5"
+        className={`bg-[#0A664F] shrink-0 relative flex flex-col gap-3.5 rounded-t-3xl border-t border-[#14C89B]/20 shadow-[0_-10px_30px_rgba(0,0,0,0.3)] py-5 ${
+          isCollapsed ? "px-3" : "px-5"
         }`}
       >
-        {isCollapsed ? (
-          <div className="flex flex-col items-center gap-3.5 w-full">
-            <motion.button
-              whileTap={{ scale: 0.92 }}
+        <div className="relative w-full flex justify-center h-10 shrink-0 z-20">
+          {isCollapsed ? (
+            <motion.div
+              layoutId="pill-background"
+              transition={springTransition}
               onClick={() => {
                 if (mode === "map") {
                   const targetTf = timeframe === "now" ? lastHistoricalTimeframe : timeframe;
@@ -235,134 +274,185 @@ export default function Sidebar({
                   onViewModeChange("snapshot");
                 }
               }}
-              className="w-10 h-10 rounded-xl bg-[#14C89B] text-[#0A0A0A] flex items-center justify-center font-bold text-base shadow-lg hover:brightness-110 transition-all"
+              className="w-10 h-10 rounded-xl bg-black/20 relative flex items-center justify-center shadow-lg cursor-pointer hover:brightness-110 transition-colors"
               title={mode === "graph" ? "Graph Mode (Click for Map)" : "Map Mode (Click for Graph)"}
             >
-              <AnimatePresence mode="wait">
-                <motion.span
-                  key={mode}
-                  initial={{ opacity: 0, scale: 0.6, rotate: -45 }}
-                  animate={{ opacity: 1, scale: 1, rotate: 0 }}
-                  exit={{ opacity: 0, scale: 0.6, rotate: 45 }}
-                  transition={{ duration: 0.15 }}
-                  className="block"
-                >
-                  {mode === "graph" ? "G" : "M"}
-                </motion.span>
-              </AnimatePresence>
-            </motion.button>
-
-            <div 
-              onClick={() => setIsCollapsed(false)}
-              title="Expand Sidebar"
-              className="w-10 h-10 rounded-xl bg-black/20 flex items-center justify-center shrink-0 text-white shadow-md cursor-pointer hover:ring-2 hover:ring-[#14C89B] transition-all overflow-hidden"
+              <motion.div 
+                layoutId="pill-highlight"
+                transition={springTransition}
+                className="absolute inset-0 bg-[#14C89B] rounded-xl shadow-md"
+              />
+              <div className="relative z-10 text-[#0A0A0A] font-bold text-base w-full h-full flex items-center justify-center">
+                <AnimatePresence mode="wait">
+                  <motion.span
+                    key={mode}
+                    initial={{ opacity: 0, scale: 0.6, rotate: -45 }}
+                    animate={{ opacity: 1, scale: 1, rotate: 0 }}
+                    exit={{ opacity: 0, scale: 0.6, rotate: 45 }}
+                    transition={{ duration: 0.15 }}
+                    className="block"
+                  >
+                    {mode === "graph" ? "G" : "M"}
+                  </motion.span>
+                </AnimatePresence>
+              </div>
+            </motion.div>
+          ) : (
+            <motion.div 
+              layoutId="pill-background"
+              transition={springTransition}
+              className="relative flex bg-black/20 p-1 rounded-full gap-1 shadow-inner w-full h-full"
             >
-              {userPicture ? (
-                <img src={userPicture} alt="User" className="w-full h-full object-cover" />
-              ) : (
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-              )}
-            </div>
-          </div>
-        ) : (
-          <>
-            <div className="relative grid grid-cols-2 bg-black/20 p-1 rounded-full gap-1 shadow-inner mx-1 h-10">
-              
-              {isTimeframeMenuOpen && (
-                <div className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 w-48 bg-[#0A664F] border border-[#14C89B]/30 rounded-2xl shadow-[0_-10px_30px_rgba(0,0,0,0.5)] p-2 flex flex-col gap-1.5 z-50">
-                  {TIMEFRAMES.map(tf => {
-                    const isSelected = timeframe === tf;
-                    const isCached = !isSelected && hasCachedDataForTimeframe(tf);
+              {/* TIMEFRAME MENU POPUP - Moved to parent wrapper to center completely */}
+              <AnimatePresence>
+                {isTimeframeMenuOpen && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 20, scale: 0.8 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 15, scale: 0.8 }}
+                    transition={springTransition}
+                    className="absolute bottom-full mb-3 left-1/2 -translate-x-1/2 w-48 bg-[#0A664F] border border-[#14C89B]/30 rounded-2xl shadow-[0_-10px_40px_rgba(0,0,0,0.6)] p-2 flex flex-col gap-1.5 z-50 origin-bottom"
+                  >
+                    {TIMEFRAMES.map(tf => {
+                      const isSelected = timeframe === tf;
+                      const isCached = !isSelected && hasCachedDataForTimeframe(tf);
 
-                    let buttonStyle = "bg-black/20 text-[#A3B8B2] font-medium border border-transparent hover:bg-[#14C89B] hover:text-[#0A0A0A]";
-                    if (isSelected) {
-                      buttonStyle = "bg-[#14C89B] text-[#0A0A0A] font-bold shadow-[0_0_12px_rgba(20,200,155,0.4)] border border-transparent";
-                    } else if (isCached) {
-                      buttonStyle = "bg-transparent text-[#14C89B] font-semibold border border-[#14C89B] shadow-[0_0_10px_rgba(20,200,155,0.15)] hover:bg-[#14C89B] hover:text-[#0A0A0A]";
-                    }
+                      let buttonStyle = "bg-black/20 text-[#A3B8B2] font-medium border border-transparent hover:bg-[#14C89B] hover:text-[#0A0A0A]";
+                      if (isSelected) {
+                        buttonStyle = "bg-[#14C89B] text-[#0A0A0A] font-bold shadow-[0_0_12px_rgba(20,200,155,0.4)] border border-transparent";
+                      } else if (isCached) {
+                        buttonStyle = "bg-transparent text-[#14C89B] font-semibold border border-[#14C89B] shadow-[0_0_10px_rgba(20,200,155,0.15)] hover:bg-[#14C89B] hover:text-[#0A0A0A]";
+                      }
 
-                    return (
-                      <button
-                        key={tf}
-                        onClick={() => { 
-                          onTimeframeChange(tf); 
-                          setIsTimeframeMenuOpen(false); 
-                        }}
-                        className={`w-full text-left px-3.5 py-2 rounded-full text-xs transition-all flex items-center justify-between ${buttonStyle}`}
-                      >
-                        <span>{TIMEFRAME_LABELS[tf]}</span>
-                      </button>
-                    );
-                  })}
+                      return (
+                        <button
+                          key={tf}
+                          onClick={() => { 
+                            onTimeframeChange(tf); 
+                            setIsTimeframeMenuOpen(false); 
+                          }}
+                          className={`w-full text-left px-3.5 py-2 rounded-full text-xs transition-all flex items-center justify-between ${buttonStyle}`}
+                        >
+                          <span>{TIMEFRAME_LABELS[tf]}</span>
+                        </button>
+                      );
+                    })}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {/* GRAPH BUTTON */}
+              <div className="relative flex-1 flex rounded-full z-10 h-full">
+                {mode === "graph" && (
+                  <motion.div 
+                    layoutId="pill-highlight"
+                    transition={springTransition}
+                    className="absolute inset-0 bg-[#14C89B] rounded-full shadow-md z-0"
+                  />
+                )}
+                <div className={`relative z-10 flex items-center justify-between w-full h-full rounded-full transition-colors duration-300 ${mode === "graph" ? "text-[#0A0A0A]" : "text-white/90 hover:bg-white/10"}`}>
+                  <button
+                    onClick={() => {
+                      const targetTf = timeframe === "now" ? lastHistoricalTimeframe : timeframe;
+                      onTimeframeChange(targetTf);
+                      onViewModeChange("graph");
+                    }}
+                    className="flex-1 flex items-center justify-center h-full pl-3 text-xs font-bold whitespace-nowrap"
+                  >
+                    Graph ({timeframe === "now" ? lastHistoricalTimeframe : timeframe})
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsTimeframeMenuOpen(!isTimeframeMenuOpen);
+                    }}
+                    className="px-2 h-full flex items-center justify-center"
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      {isTimeframeMenuOpen ? <polyline points="18 15 12 9 6 15" /> : <polyline points="6 9 12 15 18 9" />}
+                    </svg>
+                  </button>
                 </div>
-              )}
+              </div>
 
-              <div className={`flex items-center justify-between rounded-full overflow-hidden transition-all duration-300 h-full ${
-                mode === "graph" ? "bg-[#14C89B] text-[#0A0A0A] shadow-md" : "text-white/90 hover:bg-[#14C89B] hover:text-[#0A0A0A]"
-              }`}>
+              {/* MAP BUTTON */}
+              <div className="relative flex-1 flex rounded-full z-10 h-full">
+                {mode === "map" && (
+                  <motion.div 
+                    layoutId="pill-highlight"
+                    transition={springTransition}
+                    className="absolute inset-0 bg-[#14C89B] rounded-full shadow-md z-0"
+                  />
+                )}
                 <button
                   onClick={() => {
-                    const targetTf = timeframe === "now" ? lastHistoricalTimeframe : timeframe;
-                    onTimeframeChange(targetTf);
-                    onViewModeChange("graph");
+                    onTimeframeChange("now");
+                    onViewModeChange("snapshot");
                   }}
-                  className="flex-1 flex items-center justify-center h-full pl-3 text-xs font-bold whitespace-nowrap"
+                  className={`relative z-10 flex items-center justify-center w-full h-full rounded-full text-xs font-bold transition-colors duration-300 whitespace-nowrap ${
+                    mode === "map" ? "text-[#0A0A0A]" : "text-white/90 hover:bg-white/10"
+                  }`}
                 >
-                  Graph ({timeframe === "now" ? lastHistoricalTimeframe : timeframe})
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setIsTimeframeMenuOpen(!isTimeframeMenuOpen);
-                  }}
-                  className="px-2 h-full flex items-center justify-center transition-transform duration-200"
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    {isTimeframeMenuOpen ? <polyline points="18 15 12 9 6 15" /> : <polyline points="6 9 12 15 18 9" />}
-                  </svg>
+                  Map (Now)
                 </button>
               </div>
+            </motion.div>
+          )}
+        </div>
 
-              <button
-                onClick={() => {
-                  onTimeframeChange("now");
-                  onViewModeChange("snapshot");
-                }}
-                className={`flex items-center justify-center h-full rounded-full text-xs font-bold transition-all duration-300 whitespace-nowrap ${
-                  mode === "map" ? "bg-[#14C89B] text-[#0A0A0A] shadow-md" : "text-white/90 hover:bg-[#14C89B] hover:text-[#0A0A0A]"
-                }`}
-              >
-                Map (Now)
-              </button>
-            </div>
+        {/* --- 2. USER SECTION --- */}
+        <div className="relative w-full flex h-10 shrink-0 z-10" style={{ justifyContent: isCollapsed ? 'center' : 'flex-start' }}>
+          {isCollapsed ? (
+             <motion.div 
+               layoutId="user-avatar"
+               transition={springTransition}
+               onClick={() => setIsCollapsed(false)}
+               className="w-10 h-10 rounded-xl bg-black/20 flex items-center justify-center shrink-0 text-white shadow-md cursor-pointer hover:ring-2 hover:ring-[#14C89B] transition-shadow overflow-hidden"
+             >
+               {userPicture ? (
+                 <img src={userPicture} alt="User" className="w-full h-full object-cover" />
+               ) : (
+                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+               )}
+             </motion.div>
+          ) : (
+             <div className="flex items-center gap-2.5 bg-transparent w-full h-full overflow-hidden">
+               <motion.div 
+                 layoutId="user-avatar"
+                 transition={springTransition}
+                 onClick={() => setIsCollapsed(false)}
+                 className="w-10 h-10 rounded-xl bg-black/20 flex items-center justify-center shrink-0 shadow-sm overflow-hidden"
+               >
+                 {userPicture ? (
+                   <img src={userPicture} alt="User" className="w-full h-full object-cover" />
+                 ) : (
+                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                 )}
+               </motion.div>
+               
+               <motion.div 
+                 initial={{ opacity: 0, x: -10 }}
+                 animate={{ opacity: 1, x: 0 }}
+                 transition={{ duration: 0.3, delay: 0.1 }}
+                 className="flex-1 text-xs text-white font-medium line-clamp-2 break-all leading-tight"
+               >
+                 {userEmail || "Loading..."}
+               </motion.div>
 
-            <div className="flex items-center gap-2.5 bg-transparent h-10">
-              <div 
-                onClick={() => setIsCollapsed(false)} // Ensures clicking it while expanded does nothing harmful
-                className="w-10 h-10 rounded-xl bg-black/20 flex items-center justify-center shrink-0 shadow-sm overflow-hidden"
-              >
-                {userPicture ? (
-                  <img src={userPicture} alt="User" className="w-full h-full object-cover" />
-                ) : (
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-white"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                )}
-              </div>
-              
-              <div className="flex-1 text-xs text-white font-medium line-clamp-2 break-all leading-tight">
-                {userEmail || "Loading..."}
-              </div>
-
-              <button 
-                onClick={onLogout}
-                className="w-10 h-10 rounded-xl bg-[#8E2F3E] text-white flex items-center justify-center shrink-0 transition-all hover:bg-[#C84B5E] hover:text-[#0A0A0A] shadow-md"
-                title="Log Out"
-              >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-              </button>
-            </div>
-          </>
-        )}
-      </div>
-    </div>
+               <motion.button 
+                 initial={{ opacity: 0, scale: 0.8 }}
+                 animate={{ opacity: 1, scale: 1 }}
+                 transition={{ duration: 0.3, delay: 0.1 }}
+                 onClick={onLogout}
+                 className="w-10 h-10 rounded-xl bg-[#8E2F3E] text-white flex items-center justify-center shrink-0 transition-colors hover:bg-[#C84B5E] hover:text-[#0A0A0A] shadow-md"
+                 title="Log Out"
+               >
+                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+               </motion.button>
+             </div>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
   );
 }

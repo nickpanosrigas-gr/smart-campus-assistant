@@ -39,7 +39,9 @@ export default function MapStage(props: MapStageProps) {
     <div className="w-full h-full relative overflow-hidden bg-transparent">
       
       {/* MAP / GRAPH LAYER */}
-      <div className="absolute inset-0 z-0"> 
+      {/* pb-[84px] perfectly centers the map between the top edge and bottom toggles */}
+      {/* pl-[5%] nudges it further to the right while remaining responsive to the sidebar */}
+      <div className="absolute inset-0 z-0 pb-[84px] pl-[5%]"> 
         <InteractiveMap 
           appState={props.appState}
           activeTools={currentView ? [currentView] : []}

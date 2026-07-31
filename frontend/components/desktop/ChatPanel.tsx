@@ -294,7 +294,7 @@ export default function ChatPanel({
               {/* Token Counter & Reset Session Squircle */}
               <div className="flex items-center gap-3">
                  <span className="text-xs font-mono text-[#14C89B] bg-black/20 px-3 py-2 rounded-full shadow-inner">
-                   {tokens.toLocaleString("en-US")} / {MAX_TOKENS.toLocaleString("en-US")} ctx
+                   {pct.toFixed(1)}% ctx
                  </span>
                  
                  <button 

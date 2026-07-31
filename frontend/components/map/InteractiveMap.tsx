@@ -29,7 +29,7 @@ interface InteractiveMapProps {
   roomHealthData: Record<string, RoomHealth>;
   roomArtifacts: Record<string, any>;
   allArtifacts?: Record<string, Record<string, any>>;
-  timeframe: string; // <-- NEW PROP
+  timeframe: string; 
 }
 
 export default function InteractiveMap(props: InteractiveMapProps) {
@@ -54,7 +54,7 @@ export default function InteractiveMap(props: InteractiveMapProps) {
           <TransformWrapper
             key={`transform-wrapper-${activeLevel}`}
             centerOnInit={true}
-            initialScale={1}
+            initialScale={1.15} // Zoomed in a bit more initially
             minScale={1}
             maxScale={4}
             wheel={{ step: 0.002 }}
@@ -71,12 +71,13 @@ export default function InteractiveMap(props: InteractiveMapProps) {
           >
             <TransformComponent
               wrapperStyle={{ width: "100%", height: "100%" }}
-              contentStyle={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyItems: "center" }}
+              contentStyle={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}
             >
               <motion.div
                 key="map"
                 exit={{ opacity: 0, rotateY: 90 }}
-                className="w-full h-full max-w-[80%] max-h-[80%] transition-transform duration-700 ease-[cubic-bezier(0.34,1.56,0.64,1)] flex items-center justify-center"
+                // Increased max bounds so the zoomed map takes up more space
+                className="w-full h-full max-w-[90%] max-h-[82%] transition-transform duration-700 ease-[cubic-bezier(0.34,1.56,0.64,1)] flex items-center justify-center"
                 onClickCapture={(e) => {
                   if (isDragging.current) {
                     e.stopPropagation();
@@ -172,7 +173,7 @@ export default function InteractiveMap(props: InteractiveMapProps) {
             animate={{ opacity: 1, rotateY: 0 }}
             exit={{ opacity: 0, rotateY: 90 }}
             transition={{ duration: 0.5, ease: [0.34, 1.56, 0.64, 1] }}
-            className="w-full h-full flex items-center justify-center p-4"
+            className="w-full h-full flex items-center justify-center p-4 max-h-[90%]"
           >
             <GraphView
               activeTools={props.activeTools}
