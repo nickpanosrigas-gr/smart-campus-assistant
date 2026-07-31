@@ -7,7 +7,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent.parent
 ENV_FILE_PATH = ROOT_DIR.parent / ".env"
 
 class Settings(BaseSettings):
-    # ThinksBoard
+    # ThingsBoard
     THINGSBOARD_BASE_URL: str
     THINGSBOARD_USERNAME: str
     THINGSBOARD_PASSWORD: str
@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str
     JWT_ALGORITHM: str
     ALLOWED_EMAILS: str
+
+    # HPC / SLURM Settings
+    HPC_USER: str
+    HPC_HOST: str
+    SSH_KEY: str
 
     # Defaults to the root /data directory for local development
     DATA_DIR: str = str(ROOT_DIR.parent / "data")

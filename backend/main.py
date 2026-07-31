@@ -5,8 +5,10 @@ import uuid
 import asyncio
 from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Response, Depends
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Response, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+
 from src.smart_campus_assistant.utils.initialization import run_initialization
 from src.smart_campus_assistant.clients.auth_client import (
     verify_google_id_token, 
@@ -17,6 +19,9 @@ from src.smart_campus_assistant.clients.auth_client import (
 from src.smart_campus_assistant.graph.workflow import (
     process_chat_message, handle_map_interaction, process_voice_message, process_transcribe_only
 )
+from src.smart_campus_assistant.clients.slurm_client import (
+    trigger_slurm_job, touch_slurm_keepalive, cancel_slurm_job, check_slurm_health
+)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -25,56 +30,137 @@ app = FastAPI(title="Smart Campus Assistant API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "https://hua.pali.autos"
-    ],
+    allow_origin_regex=".*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- SESSION & SLURM MANAGEMENT ---
+# --- SESSION & SLURM MANAGEMENT CONFIGURATION ---
 
 class SessionData(BaseModel):
+    session_id: str
     thread_id: str
     created_at: datetime
     last_active: datetime
+    slurm_status: str  # "booting", "ready", "off"
 
 active_sessions: dict[str, SessionData] = {}
 
+# Time constants
+SESSION_IDLE_TIMEOUT = timedelta(minutes=15)
+GRACE_PERIOD_TIMEOUT = timedelta(minutes=25)  # 15m session + 10m grace period
+MAX_JOB_LIFETIME = timedelta(hours=5)
+
 async def session_reaper():
-    """Background task checking every 60s to enforce 15m idle and 5h absolute limits for SLURM model allocation."""
+    """Background task running every 30s to enforce idle timeouts and 5h max limits."""
     while True:
-        await asyncio.sleep(60)
+        await asyncio.sleep(30)
         now = datetime.now(timezone.utc)
-        expired_users = []
         
-        for user, session in list(active_sessions.items()):
+        for key, session in list(active_sessions.items()):
             time_idle = now - session.last_active
             time_active = now - session.created_at
             
-            if time_idle > timedelta(minutes=15) or time_active > timedelta(hours=5):
-                reason = "15m inactivity" if time_idle > timedelta(minutes=15) else "5h max lifetime"
-                expired_users.append((user, reason))
+            # 1. Check 5-Hour Hard Limit
+            if time_active >= MAX_JOB_LIFETIME:
+                logger.info(f"[SLURM REAPER] 5h Max lifetime reached for session {session.session_id}.")
+                await cancel_slurm_job(session.session_id)
+                del active_sessions[key]
+                continue
                 
-        for user, reason in expired_users:
-            if user in active_sessions:
-                del active_sessions[user]
-                logger.info(f"[SESSION REAPER] Session pruned for {user} due to {reason}.")
-                # ---------------------------------------------------------
-                # TODO: TRIGGER SLURM CLUSTER TEARDOWN / MODEL UNLOAD HERE
-                # ---------------------------------------------------------
+            # 2. Check 25-Minute Idle Limit (15m Session + 10m Grace Period)
+            if time_idle >= GRACE_PERIOD_TIMEOUT:
+                logger.info(f"[SLURM REAPER] Grace period expired (25m idle). Tearing down SLURM for {session.session_id}.")
+                await cancel_slurm_job(session.session_id)
+                del active_sessions[key]
+                continue
 
-@app.on_event("startup")
-async def startup_event():
-    init_success = run_initialization()
+            # 3. Update SLURM status flag asynchronously
+            if session.slurm_status == "booting":
+                is_ready = await check_slurm_health()
+                if is_ready:
+                    session.slurm_status = "ready"
+                    logger.info(f"[SLURM] Cluster is READY for session {session.session_id}")
+
+# --- BACKGROUND INITIALIZATION ---
+async def background_initialization():
+    """Runs the 5-minute SLURM setup in the background without blocking the web server."""
+    logger.info("Starting background initialization task...")
+    init_success = await run_initialization()
     if not init_success:
         logger.critical("CRITICAL: Initialization failed.")
-        sys.exit(1)
-        
-    # Start background reaper process
+        # In a real production app, you might set a global "maintenance mode" flag here
+        # For now, we will just log it heavily.
+    else:
+        logger.info("Background initialization complete. System is fully operational.")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Fire and forget the heavy initialization so Uvicorn can start immediately
+    asyncio.create_task(background_initialization())
+    
+    # Start the session reaper immediately
     asyncio.create_task(session_reaper())
+    
+    yield
+    
+    logger.info("Shutting down Smart Campus API...")
+
+app = FastAPI(title="Smart Campus Assistant API", lifespan=lifespan)
+
+# --- PRE-AUTHORIZATION & SESSION ENDPOINTS ---
+
+@app.get("/api/session/bootstrap")
+async def bootstrap_session(request: Request, response: Response):
+    """Triggered as soon as the user opens the web application (before logging in)."""
+    session_id = request.cookies.get("session_id")
+    now = datetime.now(timezone.utc)
+    
+    if not session_id or session_id not in active_sessions:
+        session_id = str(uuid.uuid4())
+        active_sessions[session_id] = SessionData(
+            session_id=session_id,
+            thread_id=str(uuid.uuid4()),
+            created_at=now,
+            last_active=now,
+            slurm_status="booting"
+        )
+        # Set persistent anonymous cookie
+        response.set_cookie(
+            key="session_id",
+            value=session_id,
+            httponly=True,
+            samesite="lax",
+            secure=False,
+            max_age=24 * 3600
+        )
+        logger.info(f"[PRE-AUTH] New visitor landing page open. Booting SLURM job ({session_id})...")
+        asyncio.create_task(trigger_slurm_job(session_id))
+    else:
+        # Extend activity
+        active_sessions[session_id].last_active = now
+        asyncio.create_task(touch_slurm_keepalive(session_id))
+        
+    return {
+        "session_id": session_id,
+        "slurm_status": active_sessions[session_id].slurm_status
+    }
+
+@app.get("/api/session/status")
+async def get_session_status(request: Request):
+    """Allows frontend to poll the cold-start readiness of the SLURM job."""
+    session_id = request.cookies.get("session_id")
+    if not session_id or session_id not in active_sessions:
+        return {"status": "off"}
+    
+    session = active_sessions[session_id]
+    if session.slurm_status == "booting":
+        is_ready = await check_slurm_health()
+        if is_ready:
+            session.slurm_status = "ready"
+            
+    return {"status": session.slurm_status}
 
 # --- AUTHENTICATION ENDPOINTS ---
 
@@ -82,11 +168,18 @@ class GoogleAuthRequest(BaseModel):
     credential: str
 
 @app.post("/api/auth/login")
-async def login(request: GoogleAuthRequest, response: Response):
+async def login(request: GoogleAuthRequest, response: Response, req: Request):
     user_info = verify_google_id_token(request.credential)
+    email = user_info["email"]
+    
+    # Associate current pre-auth SLURM session with authenticated user
+    session_id = req.cookies.get("session_id")
+    if session_id and session_id in active_sessions:
+        active_sessions[email] = active_sessions.pop(session_id)
+        active_sessions[email].session_id = email
     
     token = create_access_token(data={
-        "sub": user_info["email"], 
+        "sub": email, 
         "name": user_info.get("name"),
         "picture": user_info.get("picture")
     })
@@ -96,10 +189,10 @@ async def login(request: GoogleAuthRequest, response: Response):
         value=token,
         httponly=True,
         samesite="lax",
-        secure=False, # Set to True in production (HTTPS)
+        secure=False,
         max_age=24 * 3600
     )
-    return {"message": "Authenticated successfully", "email": user_info["email"]}
+    return {"message": "Authenticated successfully", "email": email}
 
 @app.post("/api/auth/logout")
 async def logout(response: Response):
@@ -122,17 +215,17 @@ async def websocket_endpoint(websocket: WebSocket):
     base_user = user["sub"] 
     now = datetime.now(timezone.utc)
     
-    # 1. Initialize SLURM / Session on demand
+    # Associate or recover active session
     if base_user not in active_sessions:
+        session_id = str(uuid.uuid4())
         active_sessions[base_user] = SessionData(
+            session_id=session_id,
             thread_id=str(uuid.uuid4()),
             created_at=now,
-            last_active=now
+            last_active=now,
+            slurm_status="booting"
         )
-        logger.info(f"[SLURM] New session created for {base_user}. Booting SLURM batch job...")
-        # ---------------------------------------------------------
-        # TODO: TRIGGER SLURM CLUSTER STARTUP / MODEL LOAD HERE
-        # ---------------------------------------------------------
+        asyncio.create_task(trigger_slurm_job(session_id))
 
     session = active_sessions[base_user]
     thread_id = f"{base_user}-{session.thread_id}"
@@ -143,32 +236,38 @@ async def websocket_endpoint(websocket: WebSocket):
             data = await websocket.receive_json()
             now = datetime.now(timezone.utc)
             
-            # 2. Check 15-minute rolling idle and 5-hour max session limits
             time_idle = now - session.last_active
             time_active = now - session.created_at
             
-            if time_idle > timedelta(minutes=15) or time_active > timedelta(hours=5):
-                logger.info(f"[SESSION TIMEOUT] Session for {base_user} expired. Resetting state without logging out.")
+            # Check 5-Hour hard limit or 15-Min idle session timeout
+            if time_idle > SESSION_IDLE_TIMEOUT or time_active >= MAX_JOB_LIFETIME:
+                reason = "5h_limit" if time_active >= MAX_JOB_LIFETIME else "15m_inactivity"
+                logger.info(f"[SESSION RESET] Resetting session for {base_user} due to {reason}.")
                 
-                # Re-initialize new thread session (SLURM reload)
-                new_session = SessionData(
-                    thread_id=str(uuid.uuid4()),
-                    created_at=now,
-                    last_active=now
-                )
-                active_sessions[base_user] = new_session
-                session = new_session
-                thread_id = f"{base_user}-{session.thread_id}"
-                
-                # Signal frontend to clear UI & local storage state
+                # Signal frontend to clear UI & reset session
                 await websocket.send_json({
                     "type": "session_expired",
-                    "message": "Session reset to default state due to inactivity."
+                    "reason": reason,
+                    "message": "Session limit reached. Resetting environment..."
                 })
+                
+                # Tear down old job and re-bootstrap
+                await cancel_slurm_job(session.session_id)
+                new_session_id = str(uuid.uuid4())
+                active_sessions[base_user] = SessionData(
+                    session_id=new_session_id,
+                    thread_id=str(uuid.uuid4()),
+                    created_at=now,
+                    last_active=now,
+                    slurm_status="booting"
+                )
+                session = active_sessions[base_user]
+                asyncio.create_task(trigger_slurm_job(new_session_id))
                 continue
             
-            # 3. Slide rolling activity window
+            # Extend activity window & keepalive file
             session.last_active = now
+            asyncio.create_task(touch_slurm_keepalive(session.session_id))
             
             msg_type = data.get("type")
             
@@ -195,12 +294,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 await handle_map_interaction(rooms, floor, domain, timeframe, thread_id, websocket)
             
             elif msg_type == "reset_session":
-                active_sessions[base_user] = SessionData(
-                    thread_id=str(uuid.uuid4()),
-                    created_at=now,
-                    last_active=now
-                )
-                session = active_sessions[base_user]
+                session.thread_id = str(uuid.uuid4())
+                session.created_at = now
+                session.last_active = now
                 thread_id = f"{base_user}-{session.thread_id}"
                 logger.info(f"[SESSION] Manually Reset. New ID: {thread_id}")
                 
