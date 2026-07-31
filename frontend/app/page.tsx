@@ -6,9 +6,7 @@ import MapStage from "@/components/desktop/MapStage";
 import { RoomHealth } from "@/components/map/constants";
 import Sidebar from "@/components/desktop/Sidebar";
 
-// 1. Centralize the Base URL
-// Since Next.js maps API_URL in next.config.ts, this will work seamlessly in dev and prod
-const API_BASE_URL = process.env.API_URL || "http://localhost:8000";
+const API_BASE_URL = process.env.NODE_ENV === "production" ? "" : "http://localhost:8000";
 
 export type Timeframe = "now" | "2h" | "24h" | "7d" | "30d" | "90d";
 export type HistoricalTimeframe = "2h" | "24h" | "7d" | "30d" | "90d";
@@ -321,9 +319,15 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
   useEffect(() => {
     const getWsUrl = () => {
       if (typeof window === "undefined") return ""; 
-      // Safely convert http/https to ws/wss dynamically
-      const wsBase = API_BASE_URL.replace(/^http/, "ws");
-      return `${wsBase}/ws/chat`;
+      
+      if (process.env.NODE_ENV === "production") {
+        // In production, connect to the Next.js proxy
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        return `${protocol}//${window.location.host}/ws/chat`;
+      }
+      
+      // Local development fallback
+      return "ws://localhost:8000/ws/chat";
     };
 
     ws.current = new WebSocket(getWsUrl());
