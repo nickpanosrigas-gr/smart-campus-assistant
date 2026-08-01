@@ -85,7 +85,11 @@ export default function InteractiveMap(props: InteractiveMapProps) {
                 }}
               >
                 {activeLevel === "B" ? (
-                  <BuildingView buildingArtifact={buildingArtifact} />
+                  <BuildingView 
+                    buildingArtifact={buildingArtifact} 
+                    selectedRooms={selectedRooms}
+                    onToggleRoom={onRoomToggle}
+                  />
                 ) : activeLevel === "-3" ? (
                   <FloorMinus3Base
                     activeTools={props.activeTools}

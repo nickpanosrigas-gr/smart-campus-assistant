@@ -29,10 +29,11 @@ class WhisperClient:
             url = settings.WHISPER_API_URL
             files = {'file': (filename, audio_bytes, f'audio/{ext}')}
             
-            # Pull model configuration from your settings
+            # Pull model configuration from your settings and add the 1h keep_alive timer
             data = {
                 'model_size': settings.WHISPER_MODEL,
-                'language': settings.WHISPER_LANGUAGE
+                'language': settings.WHISPER_LANGUAGE,
+                'keep_alive': 3600
             }
 
             logger.info(f"[WHISPER] Sending audio ({len(audio_bytes)} bytes) to LXC API at {url}...")

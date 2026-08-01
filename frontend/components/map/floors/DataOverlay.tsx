@@ -1,4 +1,3 @@
-// frontend/components/map/floors/DataOverlay.tsx
 import React from "react";
 import { SENSOR_COLORS, RoomHealth } from "../constants";
 
@@ -36,7 +35,8 @@ export default function DataOverlay({ artifact, roomId }: DataOverlayProps) {
   const status = (artifact.status as RoomHealth) || "good";
   const textColor = SENSOR_COLORS[status] || SENSOR_COLORS.good;
 
-  if (status === "unavailable") {
+  // Bypass the unavailable text message specifically for Doors/Windows so we can render the default UI with dashes
+  if (status === "unavailable" && domain !== "Doors/Windows") {
     return (
       <div className="flex flex-col items-center justify-center gap-1 p-2 text-center font-sans">
         <span className="text-sm font-light tracking-tight leading-snug" style={{ color: textColor }}>
@@ -46,8 +46,8 @@ export default function DataOverlay({ artifact, roomId }: DataOverlayProps) {
     );
   }
 
-  // If there are no aggregates/results and it's not a schedule tool, don't render
-  if (!aggs && !results && domain !== "Schedule") return null;
+  // If there are no aggregates/results and it's not a schedule tool or Doors/Windows, don't render
+  if (!aggs && !results && domain !== "Schedule" && domain !== "Doors/Windows") return null;
 
   // Render a clean, borderless, typography-focused UI
   const renderContent = () => {
@@ -87,10 +87,10 @@ export default function DataOverlay({ artifact, roomId }: DataOverlayProps) {
           <div className="flex flex-col items-center justify-center gap-1">
             <div className="flex items-baseline gap-3">
               <span className="text-3xl font-light tracking-tighter" style={{ color: textColor }}>
-                {aggs?.temperature ? `${formatNum(aggs.temperature)}°C` : "--"}
+                {aggs?.temperature ? `${formatNum(aggs.temperature)}°C` : "-"}
               </span>
               <span className="text-2xl font-light text-[#A3B8B2]/70">
-                {aggs?.humidity ? `${formatNum(aggs.humidity)}%` : "--"}
+                {aggs?.humidity ? `${formatNum(aggs.humidity)}%` : "-"}
               </span>
             </div>
           </div>
@@ -100,7 +100,7 @@ export default function DataOverlay({ artifact, roomId }: DataOverlayProps) {
         return (
           <div className="flex flex-col items-center justify-center gap-1">
             <span className="text-4xl font-light tracking-tighter" style={{ color: textColor }}>
-              {aggs?.occupancy !== undefined ? formatNum(aggs.occupancy) : "--"} <span className="text-xl text-[#A3B8B2]/60">/ {aggs?.capacity ?? "--"}</span>
+              {aggs?.occupancy !== undefined ? formatNum(aggs.occupancy) : "-"} <span className="text-xl text-[#A3B8B2]/60">/ {aggs?.capacity ?? "-"}</span>
             </span>
           </div>
         );
@@ -110,11 +110,11 @@ export default function DataOverlay({ artifact, roomId }: DataOverlayProps) {
           <div className="flex flex-col items-center justify-center gap-2">
             <div className="flex items-baseline gap-5">
               <div className="flex flex-col items-center">
-                <span className="text-3xl font-light" style={{ color: textColor }}>{aggs?.co2 !== undefined ? formatNum(aggs.co2) : "--"}</span>
+                <span className="text-3xl font-light" style={{ color: textColor }}>{aggs?.co2 !== undefined ? formatNum(aggs.co2) : "-"}</span>
                 <span className="text-[9px] uppercase tracking-widest text-[#A3B8B2]/50">CO2</span>
               </div>
               <div className="flex flex-col items-center">
-                <span className="text-3xl font-light" style={{ color: textColor }}>{aggs?.pm2_5 !== undefined ? formatNum(aggs.pm2_5) : "--"}</span>
+                <span className="text-3xl font-light" style={{ color: textColor }}>{aggs?.pm2_5 !== undefined ? formatNum(aggs.pm2_5) : "-"}</span>
                 <span className="text-[9px] uppercase tracking-widest text-[#A3B8B2]/50">PM2.5</span>
               </div>
             </div>
@@ -132,16 +132,33 @@ export default function DataOverlay({ artifact, roomId }: DataOverlayProps) {
         );
 
       case "Doors/Windows":
+        const isDWUnavailable = status === "unavailable";
+        const noDoors = aggs?.total_doors === 0;
+        const noWindows = aggs?.total_windows === 0;
+
+        // Use grey if unavailable or if the room physically doesn't have doors/windows. Otherwise green.
+        const doorsColor = isDWUnavailable || noDoors ? SENSOR_COLORS.unavailable : SENSOR_COLORS.good;
+        const windowsColor = isDWUnavailable || noWindows ? SENSOR_COLORS.unavailable : SENSOR_COLORS.good;
+
+        const doorsVal = isDWUnavailable || noDoors ? "-" : (aggs?.open_doors !== undefined ? formatNum(aggs.open_doors) : 0);
+        const windowsVal = isDWUnavailable || noWindows ? "-" : (aggs?.open_windows !== undefined ? formatNum(aggs.open_windows) : 0);
+
         return (
           <div className="flex flex-col items-center justify-center gap-2 text-sm font-light text-[#A3B8B2]">
             <div className="flex items-baseline gap-5">
               <div className="flex flex-col items-center">
-                <span className="text-3xl font-light" style={{ color: textColor }}>{aggs?.open_doors !== undefined ? formatNum(aggs.open_doors) : 0}</span>
-                <span className="text-[9px] uppercase tracking-widest text-[#A3B8B2]/50">DOORS</span>
+                <span className="text-3xl font-light" style={{ color: doorsColor }}>{doorsVal}</span>
+                <div className="flex flex-col items-center mt-1">
+                  <span className="text-[9px] uppercase tracking-widest text-[#A3B8B2]/50 leading-none mb-[2px]">OPEN</span>
+                  <span className="text-[9px] uppercase tracking-widest text-[#A3B8B2]/50 leading-none">DOORS</span>
+                </div>
               </div>
               <div className="flex flex-col items-center">
-                <span className="text-3xl font-light" style={{ color: textColor }}>{aggs?.open_windows !== undefined ? formatNum(aggs.open_windows) : 0}</span>
-                <span className="text-[9px] uppercase tracking-widest text-[#A3B8B2]/50">WINDOWS</span>
+                <span className="text-3xl font-light" style={{ color: windowsColor }}>{windowsVal}</span>
+                <div className="flex flex-col items-center mt-1">
+                  <span className="text-[9px] uppercase tracking-widest text-[#A3B8B2]/50 leading-none mb-[2px]">OPEN</span>
+                  <span className="text-[9px] uppercase tracking-widest text-[#A3B8B2]/50 leading-none">WINDOWS</span>
+                </div>
               </div>
             </div>
           </div>

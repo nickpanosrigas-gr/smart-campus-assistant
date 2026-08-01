@@ -1,4 +1,3 @@
-// frontend/components/map/floors/BuildingView.tsx
 "use client";
 import { motion } from "framer-motion";
 import DataOverlay from "./DataOverlay";
@@ -6,16 +5,24 @@ import { ROOM_COLORS, RoomHealth } from "../constants";
 
 interface BuildingViewProps {
   buildingArtifact?: any;
+  selectedRooms: string[];
+  onToggleRoom: (roomId: string) => void;
 }
 
-export default function BuildingView({ buildingArtifact }: BuildingViewProps) {
+export default function BuildingView({ buildingArtifact, selectedRooms, onToggleRoom }: BuildingViewProps) {
   // Logic to determine colors
   const health = (buildingArtifact?.status as RoomHealth) || "good";
   const baseColor = ROOM_COLORS[health] || ROOM_COLORS.good;
 
-  // Use the duller background green (80 hex = 50% opacity) for the idle state.
-  // This matches the floors and gives Framer Motion a valid hex value to animate from!
-  const fillColor = buildingArtifact ? baseColor : `${baseColor}80`; 
+  // Selection logic mimicking FloorBase components
+  const isSelected = selectedRooms.includes("building");
+  const hasSelection = selectedRooms.length > 0;
+  
+  let fillColor = `${baseColor}80`; // Default 50% opacity
+  if (hasSelection) {
+    fillColor = isSelected ? `${baseColor}E6` : `${baseColor}20`; // 90% opacity if selected, 12.5% if unselected
+  }
+
   const strokeColor = "#000000";
 
   // The solid fill path
@@ -27,24 +34,33 @@ export default function BuildingView({ buildingArtifact }: BuildingViewProps) {
   return (
     <svg width="100%" height="100%" viewBox="0 0 711 924" fill="none" preserveAspectRatio="xMidYMid meet">
       
-      {/* 1. Building Solid Fill */}
-      <motion.path 
-        animate={{ fill: fillColor }}
-        transition={{ duration: 0.5 }}
-        d={fillPath} 
-        stroke="none"
-      />
+      {/* 
+        Wrap both paths inside a group with a pointer cursor.
+        Clicking the building triggers the same selection toggle flow as other rooms.
+      */}
+      <g 
+        className="cursor-pointer" 
+        onClick={() => onToggleRoom("building")}
+      >
+        {/* 1. Building Solid Fill */}
+        <motion.path 
+          animate={{ fill: fillColor }}
+          transition={{ duration: 0.3 }}
+          d={fillPath} 
+          stroke="none"
+        />
 
-      {/* 2. Building Wireframe (Lines) */}
-      <motion.path 
-        animate={{ stroke: strokeColor }}
-        transition={{ duration: 0.5 }}
-        d={wireframePath} 
-        strokeWidth="3" 
-        strokeLinecap="round" 
-        strokeLinejoin="round" 
-        fill="none"
-      />
+        {/* 2. Building Wireframe (Lines) */}
+        <motion.path 
+          animate={{ stroke: strokeColor }}
+          transition={{ duration: 0.5 }}
+          d={wireframePath} 
+          strokeWidth="3" 
+          strokeLinecap="round" 
+          strokeLinejoin="round" 
+          fill="none"
+        />
+      </g>
 
       {/* 3. Data Overlay */}
       {buildingArtifact && (

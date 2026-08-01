@@ -733,7 +733,7 @@ if __name__ == "__main__":
     print("-" * 50)
     try:
         print("\n[Testing]")
-        summary, raw_data = get_doors_windows_status.func(room="2.4", timeframe="now")
+        summary, raw_data = get_doors_windows_status.func(room="building", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)

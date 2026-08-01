@@ -8,20 +8,11 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 import random
 
-from transformers import AutoTokenizer
-
 from src.smart_campus_assistant.config.settings import settings
 from src.smart_campus_assistant.agents.supervisor import supervisor_llm, all_campus_tools, supervisor_prompt
 from src.smart_campus_assistant.clients.whisper_client import whisper_client
 
 logger = logging.getLogger(__name__)
-
-# Pre-load Qwen Tokenizer for Exact Context Math
-try:
-    qwen_tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3.5-4B-Chat")
-except Exception as e:
-    logger.warning(f"Could not load Qwen tokenizer, falling back to tiktoken: {e}")
-    qwen_tokenizer = None
 
 # ==========================================
 # STATUS PHRASE DICTIONARIES
@@ -201,7 +192,6 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
                     
                     args = event["data"].get("input", {})
                     
-                    # UPDATED: Extract variables safely with fallbacks, including "target" for diagnostics
                     room_id = args.get("target") or args.get("room_id") or args.get("room") or "selected area"
                     timeframe = args.get("timeframe") or "now"
                     query_val = args.get("query") or args.get("search_query") or "your request"
@@ -282,18 +272,25 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
         except Exception:
             pass 
         
-    # --- CALCULATE EXACT QWEN TOKENS ---
+    # --- CALCULATE ESTIMATED TOKENS ---
     current_state = app.get_state(config)
     messages = current_state.values.get("messages", [])
+    map_context = current_state.values.get("map_context", {})
     
     try:
-        full_text = "\n".join([str(m.content) for m in messages])
-        if qwen_tokenizer:
-            token_count = len(qwen_tokenizer.encode(full_text))
-        else:
-            import tiktoken
-            enc = tiktoken.get_encoding("cl100k_base")
-            token_count = len(enc.encode(full_text))
+        # Recreate the dynamic system prompt exactly as the supervisor sees it
+        dynamic_prompt = supervisor_prompt
+        if map_context:
+            dynamic_prompt += f"\n\n[SYSTEM LOG]: The user is currently viewing the following map data: {map_context}"
+            
+        # Combine the system prompt with the rest of the message history
+        history_text = "\n".join([str(m.content) for m in messages])
+        full_text = f"{dynamic_prompt}\n{history_text}"
+        
+        # Calculate tokens using tiktoken approximation
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+        token_count = len(enc.encode(full_text))
     except Exception as e:
         logger.error(f"Token parsing failed: {e}")
         token_count = len(str(messages)) // 4 
@@ -451,18 +448,24 @@ async def handle_map_interaction(rooms: list, floor: str, domain: str, timeframe
         )
         app.update_state(config, {"messages": [context_msg]})
         
-        # --- CALCULATE EXACT QWEN TOKENS AFTER MAP CLICK ---
+        # --- CALCULATE ESTIMATED TOKENS AFTER MAP CLICK ---
         current_state = app.get_state(config)
         messages = current_state.values.get("messages", [])
+        map_context = current_state.values.get("map_context", {})
         
         try:
-            full_text = "\n".join([str(m.content) for m in messages])
-            if qwen_tokenizer:
-                token_count = len(qwen_tokenizer.encode(full_text))
-            else:
-                import tiktoken
-                enc = tiktoken.get_encoding("cl100k_base")
-                token_count = len(enc.encode(full_text))
+            # Recreate the dynamic system prompt exactly as the supervisor sees it
+            dynamic_prompt = supervisor_prompt
+            if map_context:
+                dynamic_prompt += f"\n\n[SYSTEM LOG]: The user is currently viewing the following map data: {map_context}"
+                
+            # Combine the system prompt with the rest of the message history
+            history_text = "\n".join([str(m.content) for m in messages])
+            full_text = f"{dynamic_prompt}\n{history_text}"
+            
+            import tiktoken
+            enc = tiktoken.get_encoding("cl100k_base")
+            token_count = len(enc.encode(full_text))
         except Exception:
             token_count = len(str(messages)) // 4
             
