@@ -165,7 +165,6 @@ export default function LandingPage({ onLoginSuccess }: { onLoginSuccess: () => 
   const handleSuccess = async (credentialResponse: any) => {
     setError("");
     try {
-      // FIX: Changed process.env.NEXT_PUBLIC_API_URL to the API_BASE_URL constant
       const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -230,50 +229,21 @@ export default function LandingPage({ onLoginSuccess }: { onLoginSuccess: () => 
 
           <div className="flex flex-col items-start gap-[clamp(0.75rem,1.5vh,1.25rem)]">
             
-            {/* Custom Google Button using fluid clamp sizing */}
-            <div className="relative inline-flex items-center justify-center overflow-hidden rounded-full bg-[#1A1A1A]/80 border border-[#333333] px-[clamp(1rem,1.5vw,1.75rem)] py-[clamp(0.5rem,1vh,0.875rem)] text-[clamp(0.8rem,0.9vw,1rem)] font-medium text-[#A3B8B2] hover:text-[#14C89B] hover:bg-[#2A2A2A] transition-colors duration-300 shadow-inner group">
-              
-              {/* Transparent Google SVG Icon */}
-              <svg className="w-[clamp(1rem,1.2vw,1.25rem)] h-[clamp(1rem,1.2vw,1.25rem)] mr-[clamp(0.5rem,0.75vw,0.75rem)] shrink-0" viewBox="0 0 24 24">
-                <path
-                  fill="#EA4335"
-                  d="M12 5c1.6 0 3 .6 4.1 1.6l3.1-3.1C17.3 1.7 14.8 1 12 1 7.5 1 3.7 3.6 1.9 7.3l3.7 2.9C6.5 7.2 9 5 12 5z"
-                />
-                <path
-                  fill="#4285F4"
-                  d="M23.5 12.3c0-.8-.1-1.6-.2-2.3H12v4.5h6.5c-.3 1.5-1.1 2.8-2.4 3.7l3.7 2.9c2.2-2 3.7-5 3.7-8.8z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M5.6 14.8c-.2-.7-.4-1.5-.4-2.8s.2-2.1.4-2.8L1.9 6.3C.7 8.7 0 10.3 0 12s.7 3.3 1.9 5.7l3.7-2.9z"
-                />
-                <path
-                  fill="#34A853"
-                  d="M12 23c3.2 0 6-1.1 8-3l-3.7-2.9c-1.1.7-2.5 1.2-4.3 1.2-3 0-5.5-2.2-6.4-5.2L1.9 16C3.7 19.7 7.5 23 12 23z"
-                />
-              </svg>
-
-              <span>Continue with Google</span>
-
-              {/* Invisible Google OAuth Trigger Overlay */}
-              <div className="absolute inset-0 opacity-0 cursor-pointer pointer-events-auto">
-                <GoogleLogin
-                  onSuccess={handleSuccess}
-                  onError={() => setError("Google Login popup failed or was closed.")}
-                  hosted_domain="hua.gr"
-                  theme="outline"
-                  shape="pill"
-                  text="continue_with"
-                />
-              </div>
+            {/* Native Google Login Button to prevent Chrome Clickjacking */}
+            <div className="relative inline-flex overflow-hidden rounded-full shadow-inner">
+              <GoogleLogin
+                onSuccess={handleSuccess}
+                onError={() => setError("Google Login popup failed or was closed.")}
+                hosted_domain="hua.gr"
+                theme="filled_black"
+                shape="pill"
+                text="continue_with"
+              />
             </div>
 
             {error && (
               <div className="mt-4 text-[#C84B5E] text-[clamp(0.75rem,0.85vw,0.875rem)] bg-black/40 border border-[#C84B5E]/30 px-[clamp(0.875rem,1.2vw,1.25rem)] py-[clamp(0.5rem,0.8vh,0.75rem)] rounded-xl max-w-sm backdrop-blur-md">
                 {error}
-                <p className="mt-2 text-[0.7rem] opacity-80">
-                  Developer Note: Make sure <code className="bg-white/10 px-1 py-0.5 rounded">http://192.168.1.203:3000</code> is added to your OAuth <strong>Authorized JavaScript origins</strong> in Google Cloud Console.
-                </p>
               </div>
             )}
           </div>
