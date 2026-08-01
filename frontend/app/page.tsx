@@ -66,6 +66,15 @@ const INITIAL_GRAPH_SANDBOXES: Record<HistoricalTimeframe, GraphSandboxState> = 
   "90d": { selectedRoom: null, roomTools: {} },
 };
 
+const SESSION_TTL_MS = 60 * 60 * 1000; // 1 Hour
+
+function isCacheValid(): boolean {
+  if (typeof window === "undefined") return false;
+  const lastActive = localStorage.getItem("lastActiveTimestamp");
+  if (!lastActive) return false;
+  return Date.now() - parseInt(lastActive, 10) < SESSION_TTL_MS;
+}
+
 // ==========================================
 // 1. MAIN APP WRAPPER (Handles Auth State)
 // ==========================================
@@ -111,13 +120,9 @@ export default function Page() {
 // ==========================================
 function DesktopDashboard({ user }: { user: { sub: string; picture?: string } }) {
 
-  // ---> FIX: Synchronous Lazy Initialization from localStorage <---
-  // This completely eliminates the "refresh overwrite" bug because the state 
-  // is instantly correct on the very first render.
-  
   const [appState, setAppState] = useState<AppState>("idle");
   const [llmStatus, setLlmStatus] = useState<LLMStatus | null>(() => {
-    if (typeof window !== "undefined") {
+    if (typeof window !== "undefined" && isCacheValid()) {
       const cached = localStorage.getItem("llmStatus");
       if (cached && cached !== "null") return JSON.parse(cached);
     }
@@ -125,33 +130,35 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
   });
   
   const [timeframe, setTimeframe] = useState<Timeframe>(() => {
-    if (typeof window !== "undefined") {
+    if (typeof window !== "undefined" && isCacheValid()) {
       return (localStorage.getItem("timeframe") as Timeframe) || "now";
     }
     return "now";
   });
 
   const [lastHistoricalTimeframe, setLastHistoricalTimeframe] = useState<HistoricalTimeframe>(() => {
-    if (typeof window !== "undefined") {
+    if (typeof window !== "undefined" && isCacheValid()) {
       return (localStorage.getItem("lastHistoricalTimeframe") as HistoricalTimeframe) || "24h";
     }
     return "24h";
   });
 
   const [currentViewType, setCurrentViewType] = useState<ViewType>(() => {
-    if (typeof window !== "undefined") {
+    if (typeof window !== "undefined" && isCacheValid()) {
       return (localStorage.getItem("currentViewType") as ViewType) || "snapshot";
     }
     return "snapshot";
   });
 
   const [activeLevel, setActiveLevel] = useState<string>(() => {
-    if (typeof window !== "undefined") return localStorage.getItem("activeLevel") || "B";
+    if (typeof window !== "undefined" && isCacheValid()) {
+      return localStorage.getItem("activeLevel") || "B";
+    }
     return "B";
   }); 
 
   const [artifactCache, setArtifactCache] = useState<Record<string, Record<string, Record<string, any>>>>(() => {
-    if (typeof window !== "undefined") {
+    if (typeof window !== "undefined" && isCacheValid()) {
       const cached = localStorage.getItem("artifactCache");
       if (cached) return JSON.parse(cached);
     }
@@ -159,7 +166,7 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
   });
   
   const [mapSandbox, setMapSandbox] = useState<Record<string, MapSandboxState>>(() => {
-    if (typeof window !== "undefined") {
+    if (typeof window !== "undefined" && isCacheValid()) {
       const cached = localStorage.getItem("mapSandbox");
       if (cached) return JSON.parse(cached);
     }
@@ -167,7 +174,7 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
   });
 
   const [graphSandboxes, setGraphSandboxes] = useState<Record<HistoricalTimeframe, GraphSandboxState>>(() => {
-    if (typeof window !== "undefined") {
+    if (typeof window !== "undefined" && isCacheValid()) {
       const cached = localStorage.getItem("graphSandboxes");
       if (cached) return JSON.parse(cached);
     }
@@ -175,7 +182,7 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
   });
 
   const [contextData, setContextData] = useState(() => {
-    if (typeof window !== "undefined") {
+    if (typeof window !== "undefined" && isCacheValid()) {
       const cached = localStorage.getItem("contextData");
       if (cached) return JSON.parse(cached);
     }
@@ -183,7 +190,7 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
   });
 
   const [sessionTools, setSessionTools] = useState<{tool: string, room: string}[]>(() => {
-    if (typeof window !== "undefined") {
+    if (typeof window !== "undefined" && isCacheValid()) {
       const cached = localStorage.getItem("sessionTools");
       if (cached) return JSON.parse(cached);
     }
@@ -191,7 +198,7 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
   });
 
   const [messages, setMessages] = useState<Array<{ sender: "user" | "agent"; text: string }>>(() => {
-    if (typeof window !== "undefined") {
+    if (typeof window !== "undefined" && isCacheValid()) {
       const cached = localStorage.getItem("chatMessages");
       if (cached) return JSON.parse(cached);
     }
@@ -336,6 +343,21 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
     ws.current.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+
+        // --- SESSION HANDSHAKE HANDLER ---
+        if (data.type === "session_init") {
+          if (data.is_new) {
+            console.log("🧹 New backend session detected. Resetting local cache...");
+            handleResetSession(false);
+          } else {
+            // Update timestamp for active session
+            localStorage.setItem("lastActiveTimestamp", Date.now().toString());
+          }
+          return;
+        }
+
+        // Record activity on any incoming message
+        localStorage.setItem("lastActiveTimestamp", Date.now().toString());
 
         // --- SESSION TIMEOUT HANDLER (Resets State Without Logging Out) ---
         if (data.type === "session_expired") {
@@ -507,6 +529,8 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
 
   const handleUserMessage = (msg: string) => {
     if (!msg.trim()) return;
+    
+    localStorage.setItem("lastActiveTimestamp", Date.now().toString());
     setMessages(prev => [...prev, { sender: "user", text: msg }]);
     setAppState("routing");
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
@@ -519,6 +543,7 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
   };
 
   const handleSendAudio = (audioBase64: string, sendToLLM: boolean, currentInput: string) => {
+    localStorage.setItem("lastActiveTimestamp", Date.now().toString());
     setAppState("routing");
     if (ws.current && ws.current.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({
@@ -671,6 +696,9 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
     localStorage.removeItem("currentViewType");
     localStorage.removeItem("timeframe");
     localStorage.removeItem("lastHistoricalTimeframe");
+
+    // Re-initialize the active timestamp for the new fresh session
+    localStorage.setItem("lastActiveTimestamp", Date.now().toString());
 
     if (notifyBackend && ws.current && ws.current.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({ type: "reset_session" }));

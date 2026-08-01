@@ -215,7 +215,8 @@ async def websocket_endpoint(websocket: WebSocket):
     if delayed_unload_task and not delayed_unload_task.done():
         delayed_unload_task.cancel()
         
-    # 1. Initialize Session
+    # 1. Initialize Session and track newness
+    is_new_session = False
     if base_user not in active_sessions:
         active_sessions[base_user] = SessionData(
             thread_id=str(uuid.uuid4()),
@@ -223,20 +224,28 @@ async def websocket_endpoint(websocket: WebSocket):
             last_active=now,
             connections=0
         )
+        is_new_session = True
         logger.info(f"[SESSION] New session created for {base_user}.")
         
     # Increment connection counter for this user's session
     active_sessions[base_user].connections += 1
+    
+    session = active_sessions[base_user]
+    thread_id = f"{base_user}-{session.thread_id}"
+    logger.info(f"[WEBSOCKET] Connected: {thread_id} ({base_user})")
+
+    # Send handshake to inform client about session state
+    await websocket.send_json({
+        "type": "session_init",
+        "thread_id": session.thread_id,
+        "is_new": is_new_session
+    })
     
     # Check total global connections across all users
     total_connections = sum(s.connections for s in active_sessions.values())
     if total_connections == 1 and not models_are_loaded:
         # Fire and forget the model load so it doesn't block the WebSocket!
         asyncio.create_task(load_ai_models())
-
-    session = active_sessions[base_user]
-    thread_id = f"{base_user}-{session.thread_id}"
-    logger.info(f"[WEBSOCKET] Connected: {thread_id} ({base_user})")
     
     try:
         while True:
