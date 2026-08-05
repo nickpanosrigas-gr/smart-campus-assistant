@@ -669,6 +669,38 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
     }
   };
 
+  const handleFloorChange = (newLevel: string) => {
+    // 1. Always update the active level for both modes
+    setActiveLevel(newLevel);
+
+    // 2. Apply auto-restore logic ONLY when in Graph view
+    if (isGraphMode) {
+      const histTf = timeframe as HistoricalTimeframe;
+      const currentBox = graphSandboxes[histTf] || { selectedRoom: null, roomTools: {} };
+      const currentSelectedRoom = currentBox.selectedRoom;
+
+      // Check if the current room does NOT belong to the newly clicked floor
+      if (!currentSelectedRoom || getFloorForRoom(currentSelectedRoom) !== newLevel) {
+        
+        // Find all rooms on this new floor that have tools cached in the graph sandbox
+        const floorRoomsWithData = Object.keys(currentBox.roomTools || {}).filter(
+          (roomId) => getFloorForRoom(roomId) === newLevel
+        );
+
+        if (floorRoomsWithData.length > 0) {
+          // Auto-select a previously interacted room on this floor
+          // (Grabbing the last item in the array restores the most recently cached one)
+          updateGraphSandbox(histTf, { 
+            selectedRoom: floorRoomsWithData[floorRoomsWithData.length - 1] 
+          });
+        } else {
+          // If no data exists for this floor yet, clear the selection to prompt "Select a Room"
+          updateGraphSandbox(histTf, { selectedRoom: null });
+        }
+      }
+    }
+  };
+
   const handleResetSession = (notifyBackend: boolean = true) => {
     setMapSandbox({});
     setGraphSandboxes(INITIAL_GRAPH_SANDBOXES);
@@ -729,7 +761,7 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
     >
       <Sidebar 
         activeLevel={activeLevel}
-        setActiveLevel={setActiveLevel}
+        setActiveLevel={handleFloorChange}
         selectedRooms={selectedRooms}
         onRoomToggle={handleRoomSelect}
         activeTools={activeTools}
@@ -758,7 +790,7 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
             appState={appState} 
             activeTools={activeTools}
             activeLevel={activeLevel}
-            setActiveLevel={setActiveLevel} 
+            setActiveLevel={handleFloorChange} 
             selectedRooms={selectedRooms}
             onRoomToggle={handleRoomSelect}
             viewMode={currentViewType} 

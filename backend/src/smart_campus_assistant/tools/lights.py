@@ -471,7 +471,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             if "solar_radiation" in w_raw and w_raw["solar_radiation"]:
                 w_df = pd.DataFrame(w_raw["solar_radiation"])
                 w_df['value'] = pd.to_numeric(w_df['value'])
-                w_df['datetime'] = pd.to_datetime(w_df['ts'], unit='ms').dt.tz_localize('UTC').dt.tz_convert(settings.TIMEZONE)
+                w_df['datetime'] = pd.to_datetime(w_df['ts'], unit='ms', utc=True).dt.tz_convert(settings.TIMEZONE).dt.tz_localize(None)
                 w_df.set_index('datetime', inplace=True)
                 solar_rad_series = w_df['value']
         except Exception as e:
@@ -486,7 +486,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             if "light_level" in raw_data and raw_data["light_level"]:
                 df = pd.DataFrame(raw_data["light_level"])
                 df['value'] = pd.to_numeric(df['value'])
-                df['datetime'] = pd.to_datetime(df['ts'], unit='ms').dt.tz_localize('UTC').dt.tz_convert(settings.TIMEZONE)
+                df['datetime'] = pd.to_datetime(df['ts'], unit='ms', utc=True).dt.tz_convert(settings.TIMEZONE).dt.tz_localize(None)
                 df.set_index('datetime', inplace=True)
                 df.rename(columns={'value': device_name}, inplace=True)
                 df.drop(columns=['ts'], inplace=True)
@@ -517,8 +517,31 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
 
     combined_df = pd.concat(all_dataframes, axis=1, sort=True)
     
-    # --- SENSOR SYNCHRONIZATION ---
-    aligned_df = combined_df.resample('10min').median()
+    # 1. Enforce timeframe boundaries to guarantee full graph timeline
+    end_ts = pd.Timestamp.now(tz=settings.TIMEZONE).tz_localize(None)
+    td_map = {
+        "2h": pd.Timedelta(hours=2), 
+        "24h": pd.Timedelta(hours=24), 
+        "7d": pd.Timedelta(days=7), 
+        "30d": pd.Timedelta(days=30),
+        "90d": pd.Timedelta(days=90)
+    }
+    start_ts = end_ts - td_map.get(timeframe, pd.Timedelta(hours=2))
+
+    if not combined_df.empty and timeframe != "now":
+        combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
+        boundary_idx = pd.DatetimeIndex([start_ts, end_ts])
+        full_idx = combined_df.index.union(boundary_idx).sort_values()
+        combined_df = combined_df.reindex(full_idx)
+        # Propagate the last known state to fill empty space
+        combined_df.ffill(inplace=True)
+        combined_df.bfill(inplace=True)
+
+    # 2. Use dynamic bin_size and fill any remaining NaNs
+    aligned_df = combined_df.resample(bin_size).median()
+    aligned_df.ffill(inplace=True)
+    aligned_df.fillna(0, inplace=True)
+
     aligned_df['Room_Aggregate'] = aligned_df.median(axis=1)
     raw_series = aligned_df['Room_Aggregate'].dropna()
 
@@ -546,7 +569,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     if timeframe in ["30d", "90d"]:
         artifact_df = ui_df.resample('1D').median(numeric_only=True)
     else:
-        # Use the default 10-minute splits for 2h, 24h, 7d
+        # Use the default splits for 2h, 24h, 7d
         artifact_df = ui_df
 
     series_data = []
@@ -555,6 +578,7 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
 
     for dt, row in artifact_df.iterrows():
         point = {"timestamp": dt.isoformat()}
+        changed = False
         
         for col in artifact_df.columns:
             val = row[col]
@@ -563,10 +587,18 @@ def get_ambient_lights(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
                 if val != last_sent_values[col]:
                     point[col] = float(val)
                     last_sent_values[col] = val
+                    changed = True
                     
-        # Only append the timestamp to the array if at least ONE sensor changed state
-        if len(point) > 1:
-            series_data.append(point)
+        # Bypass delta compression for long-term daily graphs
+        if timeframe in ["30d", "90d"] or changed:
+            if timeframe in ["30d", "90d"] and not changed:
+                for col in artifact_df.columns:
+                    if last_sent_values[col] is not None:
+                        point[col] = float(last_sent_values[col])
+                        
+            # Only append the timestamp to the array if at least ONE sensor is present
+            if len(point) > 1:
+                series_data.append(point)
             
     graph_artifact = {
         "type": "map_update",
@@ -831,21 +863,35 @@ if __name__ == "__main__":
     print("-" * 50)
     try:
         print("\n[Testing]")
-        summary, raw_data = get_ambient_lights.func(room="parkin.b", timeframe="now")
-        print(summary)
-        print("\n[Artifact Payload]")
-        print(raw_data)
-        print("-" * 50)
-
-        print("\n[Testing]")
-        summary, raw_data = get_ambient_lights.func(room="building", timeframe="24h")
+        summary, raw_data = get_ambient_lights.func(room="4.9", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("-" * 50)
         
         print("\n[Testing]")
-        summary, raw_data = get_ambient_lights.func(room="building", timeframe="30d")
+        summary, raw_data = get_ambient_lights.func(room="4.9", timeframe="2h")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("-" * 50)
+
+        print("\n[Testing]")
+        summary, raw_data = get_ambient_lights.func(room="4.9", timeframe="24h")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("-" * 50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_ambient_lights.func(room="4.9", timeframe="7d")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("-" * 50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_ambient_lights.func(room="4.9", timeframe="30d")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)

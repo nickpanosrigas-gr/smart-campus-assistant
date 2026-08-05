@@ -2,6 +2,7 @@
 import React from "react";
 import OccupancyGraph from "./OccupancyGraph";
 import DoorsWindowsGraph from "./DoorsWindowsGraph";
+import LightsGraph from "./LightsGraph";
 import { BarChart3, MousePointerClick, Loader2 } from "lucide-react";
 
 interface GraphViewProps {
@@ -86,14 +87,14 @@ export default function GraphView({
     case "occupancy":
       return <OccupancyGraph artifact={artifact} />;
 
-    // ---> NEW: Route Doors/Windows directly to our dedicated component! <---
     case "doors/windows":
     case "doors & windows":
       return <DoorsWindowsGraph artifact={artifact} />;
-
+    
+    case "lights":
+      return <LightsGraph artifact={artifact} />;
     case "air quality":
     case "climate":
-    case "lights":
     case "diagnostics":
       return (
         <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center bg-[#061C16]/40 rounded-3xl border border-[#0A664F]/50 text-[#A3B8B2]">

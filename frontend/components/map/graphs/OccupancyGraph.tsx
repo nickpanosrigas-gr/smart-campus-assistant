@@ -240,13 +240,14 @@ export default function OccupancyGraph({ artifact }: OccupancyGraphProps) {
       let timeStr = "";
 
       if (isLongTerm) {
-        // ---> Correctly displays the bucket start date (e.g., "Jul 25") <---
+        // Correctly displays the bucket start date (e.g., "Jul 25")
         timeStr = startDate.toLocaleDateString("en-US", { month: "short", day: "numeric" });
       } else if (tf === "7d" || tf === "24h") {
         const startDay = startDate.toLocaleDateString("en-US", { weekday: "short" });
+        const endDay = endDate.toLocaleDateString("en-US", { weekday: "short" });
         const startTime = startDate.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
         const endTime = endDate.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
-        timeStr = `${startDay} ${startTime} – ${endTime}`;
+        timeStr = `${startDay} ${startTime} – ${endDay} ${endTime}`;
       } else {
         const startTime = startDate.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
         const endTime = endDate.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -263,48 +264,41 @@ export default function OccupancyGraph({ artifact }: OccupancyGraphProps) {
 
       return (
         <div className="flex flex-col gap-2 bg-[#0A0A0A]/95 p-3 rounded-2xl border border-white/10 shadow-[0_4px_20px_rgba(0,0,0,0.8)] pointer-events-none backdrop-blur-md min-w-[150px]">
-          {isMotionOnly ? (
-            <>
-              <div className="text-center text-xs font-mono font-semibold text-[#A3B8B2]/90 pb-0.5">
-                {timeStr}
-              </div>
-              <div className="flex items-center justify-center pt-0.5">
-                <span
-                  className="px-3 py-1 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider border flex items-center gap-1.5 shadow-sm"
-                  style={{
-                    backgroundColor: `${badgeBg}90`,
-                    borderColor: badgeColor,
-                    color: badgeColor
-                  }}
-                >
-                  <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: badgeColor }} />
-                  {badgeText}
-                </span>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="flex items-baseline justify-between gap-4 text-xs font-mono font-semibold pb-1">
-                <span className="text-[#A3B8B2]/80 leading-none">{timeStr}</span>
-                <span className="font-bold text-base leading-none" style={{ color: badgeColor }}>
-                  {val} <span className="text-[10px] text-[#A3B8B2]/60 font-normal">people</span>
-                </span>
-              </div>
+          <div className="text-center text-xs font-mono font-semibold text-[#A3B8B2]/90 pb-0.5">
+            {timeStr}
+          </div>
 
-              <div className="flex items-center justify-center pt-0.5">
-                <span
-                  className="px-3 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider border flex items-center gap-1.5 shadow-sm"
-                  style={{
-                    backgroundColor: `${badgeBg}90`,
-                    borderColor: badgeColor,
-                    color: badgeColor
-                  }}
-                >
-                  <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: badgeColor }} />
-                  {badgeText}
-                </span>
-              </div>
-            </>
+          {isMotionOnly ? (
+            <div className="flex items-center justify-center pt-0.5">
+              <span
+                className="px-3 py-1 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider border flex items-center gap-1.5 shadow-sm"
+                style={{
+                  backgroundColor: `${badgeBg}90`,
+                  borderColor: badgeColor,
+                  color: badgeColor
+                }}
+              >
+                <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: badgeColor }} />
+                {badgeText}
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center gap-3 pt-0.5">
+              <span className="font-bold text-base leading-none" style={{ color: badgeColor }}>
+                {val} <span className="text-[10px] text-[#A3B8B2]/60 font-normal">people</span>
+              </span>
+              <span
+                className="px-3 py-0.5 rounded-full text-[10px] font-mono font-bold uppercase tracking-wider border flex items-center gap-1.5 shadow-sm"
+                style={{
+                  backgroundColor: `${badgeBg}90`,
+                  borderColor: badgeColor,
+                  color: badgeColor
+                }}
+              >
+                <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: badgeColor }} />
+                {badgeText}
+              </span>
+            </div>
           )}
         </div>
       );

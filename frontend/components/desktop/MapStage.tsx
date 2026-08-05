@@ -22,18 +22,54 @@ interface MapStageProps {
   timeframe: Timeframe;
 }
 
-const ALL_TOGGLES = ["Air Quality", "Doors/Windows", "Lights", "Occupancy", "Climate", "Schedule", "Diagnostics"];
+const ALL_TOGGLES = ["Occupancy", "Climate", "Air Quality", "Doors/Windows", "Lights", "Diagnostics", "Schedule"];
 
 export default function MapStage(props: MapStageProps) {
   // ---> CRITICAL FIX: Directly derive active tool from props to eliminate render lag! <---
   const currentView = props.activeTools[0] || "";
 
+  // Helper to evaluate if a tool should be disabled based on current view/room/floor
+  const isToolDisabled = (tool: string) => {
+    const isGraphMode = props.viewMode === "graph";
+    
+    if (tool === "Schedule") {
+      if (isGraphMode) return true; // Disabled in all rooms in Graph view
+      // Disabled on specific floors in Map view
+      if (!isGraphMode && ["B", "0", "-1", "-2", "-3"].includes(props.activeLevel)) return true; 
+    }
+    
+    if (tool === "Doors/Windows") {
+      if (isGraphMode) {
+        // Disabled in specific rooms in Graph view
+        const room = props.selectedRooms[0];
+        const disabledRooms = ["parkin.c", "parkin.b", "kitchen", "restaurant", "entrance", "1.1", "2.2", "3.7"];
+        if (room && disabledRooms.includes(room)) return true;
+      } else {
+        // Disabled on specific floors in Map view
+        if (["0", "-2", "-3"].includes(props.activeLevel)) return true;
+      }
+    }
+    
+    return false;
+  };
+
   const handleToggleClick = (toggle: string) => {
+    // Prevent selecting disabled tools. (But allow deselecting them if they were previously active)
+    const isDisabled = isToolDisabled(toggle);
+    const isActive = props.activeTools.includes(toggle);
+    
+    if (isDisabled && !isActive) return;
+    
     props.onToggleSelect(toggle);
   };
 
   const availableToggles = props.activeTools;
-  const unavailableToggles = ALL_TOGGLES.filter(t => !props.activeTools.includes(t));
+  
+  // Split and sort unselected tools so disabled ones move to the far right
+  const unselectedTools = ALL_TOGGLES.filter(t => !props.activeTools.includes(t));
+  const enabledUnavailable = unselectedTools.filter(t => !isToolDisabled(t));
+  const disabledUnavailable = unselectedTools.filter(t => isToolDisabled(t));
+  const sortedUnavailable = [...enabledUnavailable, ...disabledUnavailable];
 
   return (
     <div className="w-full h-full relative overflow-hidden bg-transparent">
@@ -86,18 +122,26 @@ export default function MapStage(props: MapStageProps) {
               </motion.div>
             )}
 
-            {unavailableToggles.length > 0 && (
+            {sortedUnavailable.length > 0 && (
               <motion.div layout className="flex items-center bg-[#1A1A1A]/80 border border-[#333333] rounded-full p-[clamp(0.2rem,0.3vw,0.375rem)] shadow-inner">
-                {unavailableToggles.map(toggle => (
-                  <motion.button 
-                    layout="position" 
-                    key={toggle} 
-                    onClick={() => handleToggleClick(toggle)}
-                    className="px-[clamp(0.6rem,1vw,1.25rem)] py-[clamp(0.35rem,0.6vh,0.625rem)] rounded-full text-[clamp(0.75rem,0.85vw,0.875rem)] font-medium bg-transparent text-[#A3B8B2]/50 hover:text-[#A3B8B2] hover:bg-[#2A2A2A] transition-colors duration-300 whitespace-nowrap"
-                  >
-                    {toggle}
-                  </motion.button>
-                ))}
+                {sortedUnavailable.map(toggle => {
+                  const isDisabled = isToolDisabled(toggle);
+                  return (
+                    <motion.button 
+                      layout="position" 
+                      key={toggle} 
+                      onClick={() => handleToggleClick(toggle)}
+                      disabled={isDisabled}
+                      className={`px-[clamp(0.6rem,1vw,1.25rem)] py-[clamp(0.35rem,0.6vh,0.625rem)] rounded-full text-[clamp(0.75rem,0.85vw,0.875rem)] font-medium whitespace-nowrap transition-colors duration-300 ${
+                        isDisabled
+                          ? "bg-transparent text-[#A3B8B2]/20 cursor-not-allowed" // Muted 20% opacity with no hover effect
+                          : "bg-transparent text-[#A3B8B2]/50 hover:text-[#A3B8B2] hover:bg-[#2A2A2A]"
+                      }`}
+                    >
+                      {toggle}
+                    </motion.button>
+                  );
+                })}
               </motion.div>
             )}
           </div>

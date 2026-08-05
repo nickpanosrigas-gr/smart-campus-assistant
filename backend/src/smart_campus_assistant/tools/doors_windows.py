@@ -131,7 +131,9 @@ def get_doors_windows_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, d
                     "floor": floor_val,
                     "room_id": str(room),
                     "status": "unavailable",
-                    "message": "No MC Sensors"
+                    "message": "No MC Sensors",
+                    "total_doors": 0,
+                    "total_windows": 0
                 }
             }
         else:
@@ -148,6 +150,8 @@ def get_doors_windows_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, d
                     "message": "No MC Sensors",
                     "online_sensors": [],
                     "offline_sensors": [],
+                    "total_doors": 0,
+                    "total_windows": 0,
                     "series": [],
                     "metadata": {}
                 }
@@ -185,7 +189,9 @@ def get_doors_windows_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, d
                 "domain": "Doors/Windows",
                 "floor": floor_val,
                 "room_id": str(room),
-                "message": "All sensors offline"
+                "message": "All sensors offline",
+                "total_doors": 0,
+                "total_windows": 0
             }
         }
 
@@ -356,6 +362,8 @@ def get_doors_windows_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, d
                 "floor": floor_val,
                 "room_id": str(room),
                 "status": overall_status,
+                "total_doors": len(doors),
+                "total_windows": len(windows),
                 "room_aggregates": ui_aggregates,
                 "sensors": ui_sensors
             }
@@ -424,6 +432,8 @@ def get_doors_windows_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, d
                 "timeframe": timeframe,
                 "online_sensors": list(active_mc_devices.keys()),
                 "offline_sensors": offline_sensors,
+                "total_doors": len(doors),
+                "total_windows": len(windows),
                 "series": [],
                 "metadata": {}
             }
@@ -504,6 +514,8 @@ def get_doors_windows_status(room: Rooms, timeframe: Timeframes) -> Tuple[str, d
             "timeframe": timeframe,
             "online_sensors": list(active_mc_devices.keys()),
             "offline_sensors": offline_sensors,
+            "total_doors": len(doors),
+            "total_windows": len(windows),
             "series": series_data,
             "metadata": metadata
         }
@@ -740,35 +752,21 @@ if __name__ == "__main__":
         print("-" * 50)
         
         print("\n[Testing]")
-        summary, raw_data = get_doors_windows_status.func(room="2.4", timeframe="2h")
+        summary, raw_data = get_doors_windows_status.func(room="building", timeframe="2h")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("-" * 50)
         
         print("\n[Testing]")
-        summary, raw_data = get_doors_windows_status.func(room="2.4", timeframe="24h")
+        summary, raw_data = get_doors_windows_status.func(room="building", timeframe="24h")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("-" * 50)
         
         print("\n[Testing]")
-        summary, raw_data = get_doors_windows_status.func(room="2.4", timeframe="7d")
-        print(summary)
-        print("\n[Artifact Payload]")
-        print(raw_data)
-        print("-" * 50)
-        
-        print("\n[Testing]")
-        summary, raw_data = get_doors_windows_status.func(room="2.4", timeframe="30d")
-        print(summary)
-        print("\n[Artifact Payload]")
-        print(raw_data)
-        print("-" * 50)
-        
-        print("\n[Testing]")
-        summary, raw_data = get_doors_windows_status.func(room="2.4", timeframe="90d")
+        summary, raw_data = get_doors_windows_status.func(room="building", timeframe="30d")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)

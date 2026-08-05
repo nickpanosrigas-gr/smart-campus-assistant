@@ -945,21 +945,21 @@ if __name__ == "__main__":
     
     try:
         print("\n[Testing]")
-        summary, raw_data = get_climate.func(room="parkin.b", timeframe="now")
+        summary, raw_data = get_climate.func(room="restaurant", timeframe="2h")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("\n" + "="*50)
         
         print("\n[Testing]")
-        summary, raw_data = get_climate.func(room="building", timeframe="24h")
+        summary, raw_data = get_climate.func(room="restaurant", timeframe="24h")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("\n" + "="*50)
         
         print("\n[Testing]")
-        summary, raw_data = get_climate.func(room="building", timeframe="30d")
+        summary, raw_data = get_climate.func(room="restaurant", timeframe="30d")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)

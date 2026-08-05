@@ -89,6 +89,13 @@ export default function Sidebar({
     return floorObj.rooms.some(room => {
       const roomCache = artifactCache[room.id];
       if (!roomCache) return false;
+      
+      // --> NEW: In Graph mode, show the effect if ANY tool has data for this timeframe
+      if (mode === "graph") {
+        return Object.values(roomCache).some((toolCache: any) => !!toolCache?.[timeframe]);
+      }
+
+      // Map mode logic: only show effect if the currently active tool has data
       if (activeTools.length > 0) {
         const activeTool = activeTools[0];
         return Object.keys(roomCache).some(k => k.toLowerCase() === activeTool.toLowerCase() && !!roomCache[k]?.[timeframe]);
@@ -99,6 +106,12 @@ export default function Sidebar({
 
   const hasCachedData = (roomId: string) => {
     if (!artifactCache[roomId]) return false;
+    
+    // --> NEW: In Graph mode, show the effect if ANY tool has data for this timeframe
+    if (mode === "graph") {
+      return Object.values(artifactCache[roomId]).some((toolCache: any) => !!toolCache?.[timeframe]);
+    }
+
     if (activeTools.length > 0) {
       const activeTool = activeTools[0];
       return Object.keys(artifactCache[roomId]).some(
