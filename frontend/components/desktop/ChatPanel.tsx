@@ -283,17 +283,14 @@ export default function ChatPanel({
                 <span className="font-bold text-[#14C89B] text-base tracking-wide">
                   HUAssistant
                 </span>
-                <span 
-                  className="text-xs font-bold px-2.5 py-1 rounded-full bg-black/20 shadow-inner" 
-                  style={{ color: statusColor }}
-                >
-                  {statusText}
-                </span>
               </div>
               
               {/* Token Counter & Reset Session Squircle */}
               <div className="flex items-center gap-3">
-                 <span className="text-xs font-mono text-[#14C89B] bg-black/20 px-3 py-2 rounded-full shadow-inner">
+                 <span 
+                   className="text-xs font-mono font-bold bg-black/20 px-3 py-2 rounded-full shadow-inner"
+                   style={{ color: statusColor }}
+                 >
                    {pct.toFixed(1)}% ctx
                  </span>
                  

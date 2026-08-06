@@ -170,14 +170,14 @@ def _audit_device(device_name: str, device_id: str) -> dict:
             if (recent_t['value'] > 0).any():
                 tamper = True
                 t_ts = recent_t[recent_t['value'] > 0].iloc[0]['ts']
-                tamper_time = datetime.fromtimestamp(t_ts / 1000.0).strftime("%H:%M:%S EEST")
+                tamper_time = datetime.fromtimestamp(t_ts / 1000.0).strftime("%A, %B %d, %Y %H:%M:%S")
                 break
         if not tamper and t_key in latest_data and latest_data[t_key]:
             val = _safe_extract_float(latest_data, [t_key])
             if val is not None and val > 0:
                 tamper = True
                 t_ts = latest_data[t_key][0]['ts']
-                tamper_time = datetime.fromtimestamp(t_ts / 1000.0).strftime("%H:%M:%S EEST")
+                tamper_time = datetime.fromtimestamp(t_ts / 1000.0).strftime("%A, %B %d, %Y %H:%M:%S")
                 break
 
     for k in ["temperature", "humidity", "co2", "air_temperature"]:
@@ -434,7 +434,10 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
                             power_warnings.append(f"    - {name_disp}: [LOW_BATTERY] {data['battery']:{val_format}}{unit} remaining")
                         elif data["est_days"] < 14:
                             power_warnings.append(f"    - {name_disp}: [HIGH_DRAIN_RATE_ANOMALY] Est. {int(data['est_days'])} days remaining")
-                    
+                    else:
+                        # Sensor doesn't have battery telemetry
+                        battery_estimates_lines.append(f"    - {name_disp}: No Battery Telemetry")
+                        
                     if data["anomalies"]:
                         for a in data["anomalies"]: anomaly_lines.append(f"    - {name_disp} {a}")
                     if data["tamper"]:
@@ -572,7 +575,38 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
 
     combined_df = pd.concat(all_dfs, axis=1, sort=True)
     combined_df = combined_df.reindex(sorted(combined_df.columns), axis=1)
-    combined_df = combined_df.resample(bin_size).median().ffill().bfill()
+
+    # Resolve massive time gap issue by securely trimming the dataframe to the requested timeframe bounds
+    if not combined_df.empty:
+        # 1. Forward-fill to propagate values from older dead/offline timestamps 
+        combined_df = combined_df.ffill()
+        
+        # 2. Extract boundaries
+        now_dt = pd.Timestamp.now(tz=settings.TIMEZONE)
+        td_map = {
+            "2h": pd.Timedelta(hours=2), 
+            "24h": pd.Timedelta(hours=24), 
+            "7d": pd.Timedelta(days=7), 
+            "30d": pd.Timedelta(days=30), 
+            "90d": pd.Timedelta(days=90)
+        }
+        start_dt = now_dt - td_map.get(timeframe, pd.Timedelta(hours=2))
+        
+        # 3. Clip timestamps before the timeframe boundary
+        if combined_df.index[0] < start_dt:
+            pre_start_data = combined_df[combined_df.index <= start_dt]
+            if not pre_start_data.empty:
+                last_pre_start_vals = pre_start_data.iloc[-1]
+                combined_df = combined_df[combined_df.index >= start_dt]
+                combined_df.loc[start_dt] = last_pre_start_vals
+                
+        # 4. Enforce that the dataframe correctly covers the entire timeframe to now
+        if not combined_df.empty:
+            combined_df.loc[now_dt] = combined_df.iloc[-1]
+            
+        combined_df = combined_df.sort_index()
+        combined_df = combined_df.resample(bin_size).median().ffill().bfill()
+
 
     # --- BUILD THE GRAPH ARTIFACT (WITH DELTA-ONLY LOGIC) ---
     series_data = []
@@ -649,72 +683,6 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
                 point["average_battery"] = avg_bat
                 series_data.append(point)
                 last_agg = current_agg
-                
-        # Inject exact current snapshot at "now" using manual recalculation of status to match current time
-        now_dt = pd.Timestamp.now(tz=settings.TIMEZONE)
-        now_counts = {"good": 0, "warning": 0, "critical": 0, "error": 0}
-        now_bat_sum = 0.0
-        now_bat_count = 0
-        
-        for name in all_sensor_names:
-            ctx = historical_contexts.get(name, {})
-            audit = ctx.get("audit", {})
-            is_weather = audit.get("is_weather", False)
-            is_plugged = audit.get("is_plugged_in", False)
-            
-            has_major_fault = any("HARDWARE_FAULT" in a or "FLATLINE" in a for a in audit.get("anomalies", []))
-            has_signal_issue = any("WEAK_SIGNAL" in a or "POOR_SNR" in a for a in audit.get("anomalies", []))
-
-            is_online_now = audit.get("is_online", True)
-            
-            if not is_plugged:
-                if not is_online_now:
-                    now_bat_sum += 0.0
-                    now_bat_count += 1
-                else:
-                    bat_val = audit.get("battery")
-                    if bat_val is not None:
-                        bat_pct = float(bat_val)
-                        if is_weather:
-                            bat_pct = max(0, min(100, (bat_pct - 2.4) / (3.0 - 2.4) * 100))
-                        now_bat_sum += bat_pct
-                        now_bat_count += 1
-
-            if not is_online_now or audit.get("tamper", False) or has_major_fault:
-                now_counts["error"] += 1
-            else:
-                status = "error"
-                if is_plugged:
-                    status = "warning" if has_signal_issue else "good"
-                else:
-                    bat_val = audit.get("battery")
-                    if bat_val is None:
-                        status = "error"
-                    else:
-                        bat_pct = float(bat_val)
-                        if is_weather:
-                            bat_pct = max(0, min(100, (bat_pct - 2.4) / (3.0 - 2.4) * 100))
-                            
-                        if bat_pct > 40: status = "good"
-                        elif bat_pct >= 16: status = "warning"
-                        elif bat_pct >= 1: status = "critical"
-                        else: status = "error"
-                        
-                        if has_signal_issue and status == "good":
-                            status = "warning"
-                            
-                now_counts[status] += 1
-                        
-        avg_bat = round(now_bat_sum / now_bat_count, 1) if now_bat_count > 0 else 0.0
-        current_agg = (now_counts["good"], now_counts["warning"], now_counts["critical"], now_counts["error"], avg_bat)
-        
-        if last_agg is None or current_agg != last_agg:
-            point = {"timestamp": now_dt.isoformat()}
-            if last_agg is None:
-                point["total"] = total_scanned
-            point.update(now_counts)
-            point["average_battery"] = avg_bat
-            series_data.append(point)
 
         graph_artifact = {
             "type": "map_update",
@@ -738,20 +706,30 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
         }
     else:
         # Standard Single Room Logic
-        last_sent_values = {col: None for col in combined_df.columns}
+        last_sent_values = {col: None for col in all_sensor_names}
         for dt, row in combined_df.iterrows():
             point = {"timestamp": dt.isoformat()}
-            for col in combined_df.columns:
-                val = row[col]
-                audit = historical_contexts.get(col, {}).get("audit", {})
+            for col in all_sensor_names:
+                ctx = historical_contexts.get(col, {})
+                audit = ctx.get("audit", {})
                 is_online = audit.get("is_online", True)
+                is_plugged = audit.get("is_plugged_in", False)
                 
+                if is_plugged:
+                    val = 100.0
+                else:
+                    if col in combined_df.columns:
+                        val = row[col]
+                    else:
+                        # Fallback for sensors entirely missing from telemetry history
+                        val = audit.get("battery") 
+
                 if not is_online and audit.get("last_ts"):
                     death_dt = pd.to_datetime(audit["last_ts"], unit='ms', utc=True).tz_convert(settings.TIMEZONE)
                     if dt > death_dt:
                         val = 0.0
                         
-                if pd.notna(val):
+                if pd.notna(val) and val is not None:
                     val = round(float(val), 2 if audit.get("is_weather", False) else 1)
                     if last_sent_values[col] is None or val != last_sent_values[col]:
                         point[col] = val
@@ -759,6 +737,16 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
                         
             if len(point) > 1:
                 series_data.append(point)
+
+        meta_dict = {}
+        for col in all_sensor_names:
+            audit = historical_contexts.get(col, {}).get("audit", {})
+            if audit.get("is_plugged_in", False):
+                meta_dict[col] = "Plugged In"
+            elif "WEATHER" in col.upper():
+                meta_dict[col] = "Battery (V)"
+            else:
+                meta_dict[col] = "Battery %"
 
         graph_artifact = {
             "type": "map_update",
@@ -771,7 +759,7 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
                 "online_sensors": online_sensors_list,
                 "offline_sensors": offline_sensors_list,
                 "series": series_data,
-                "metadata": {col: "Battery (V)" if "WEATHER" in col.upper() else "Battery %" for col in combined_df.columns}
+                "metadata": meta_dict
             }
         }
 
@@ -787,7 +775,8 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
     ]
     
     err_lines = []
-    for col in combined_df.columns:
+    # Process ALL sensors, missing dataframe columns included
+    for col in all_sensor_names:
         ctx = historical_contexts.get(col, {})
         audit = ctx.get("audit", {})
         hist_errors = ctx.get("hist_errors", [])
@@ -833,16 +822,24 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
     output.append("Battery_Drain_Summary (Over Timeframe):")
     
     drain_lines = []
-    for col in combined_df.columns:
-        raw_df = historical_contexts.get(col, {}).get("df", pd.DataFrame())
+    
+    # Process ALL sensors, evaluating sensors missing from history
+    for col in all_sensor_names:
+        ctx = historical_contexts.get(col, {})
+        audit = ctx.get("audit", {})
+        is_plugged = audit.get("is_plugged_in", False)
         
-        if not raw_df.empty:
-            start_val = raw_df[col].iloc[0]
-            last_recorded = raw_df[col].iloc[-1]
+        if is_plugged:
+            drain_lines.append(f"  - {col}: Plugged In")
+            continue
+            
+        raw_df = ctx.get("df", pd.DataFrame())
+        
+        if col in raw_df.columns and not raw_df[col].dropna().empty:
+            start_val = raw_df[col].dropna().iloc[0]
+            last_recorded = raw_df[col].dropna().iloc[-1]
             diff = start_val - last_recorded
             
-            ctx = historical_contexts.get(col, {})
-            audit = ctx.get("audit", {})
             is_online = audit.get("is_online", True)
             is_weather = audit.get("is_weather", False)
             
@@ -859,15 +856,25 @@ def get_diagnostics(target: Targets, timeframe: Timeframes) -> Tuple[str, dict]:
                     est_days = int(last_recorded / drain_per_day)
                     est_str = f" | Est. {est_days} days remaining"
             
+            if diff < 0:
+                event_str = f"Battery Replaced (Jumped from {start_val:{val_format}}{unit} to {last_recorded:{val_format}}{unit})"
+            elif diff > 0:
+                event_str = f"Dropped {diff:{val_format}}{unit} (From {start_val:{val_format}}{unit} to {last_recorded:{val_format}}{unit}){span_str}{est_str}"
+            else:
+                event_str = f"Stable at {last_recorded:{val_format}}{unit}"
+                
             if not is_online:
                 off_str = audit.get('offline_duration_str', 'Unknown')
-                drain_lines.append(f"  - {col}: Dropped {diff:{val_format}}{unit} (From {start_val:{val_format}}{unit} to {last_recorded:{val_format}}{unit}){span_str} | Currently 0.0{unit} [Dead/Offline: {off_str}]")
-            elif diff < 0:
-                drain_lines.append(f"  - {col}: Battery Replaced (Jumped from {start_val:{val_format}}{unit} to {last_recorded:{val_format}}{unit})")
-            elif diff > 0:
-                drain_lines.append(f"  - {col}: Dropped {diff:{val_format}}{unit} (From {start_val:{val_format}}{unit} to {last_recorded:{val_format}}{unit}){span_str}{est_str}")
+                drain_lines.append(f"  - {col}: {event_str} | Currently 0.0{unit} [Dead/Offline: {off_str}]")
             else:
-                drain_lines.append(f"  - {col}: Stable at {last_recorded:{val_format}}{unit}")
+                drain_lines.append(f"  - {col}: {event_str}")
+        else:
+            is_online = audit.get("is_online", True)
+            if not is_online:
+                off_str = audit.get('offline_duration_str', 'Unknown')
+                drain_lines.append(f"  - {col}: No Battery Telemetry [Dead/Offline: {off_str}]")
+            else:
+                drain_lines.append(f"  - {col}: No Battery Telemetry")
                 
     if drain_lines:
         drain_lines.sort()
@@ -887,7 +894,7 @@ if __name__ == "__main__":
 
     try:
         print("\n[Testing]")
-        summary, raw_data = get_diagnostics.func(target="2.4", timeframe="now")
+        summary, raw_data = get_diagnostics.func(target="2.4", timeframe="2h")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
@@ -901,14 +908,7 @@ if __name__ == "__main__":
         print("\n" + "-"*50)
         
         print("\n[Testing]")
-        summary, raw_data = get_diagnostics.func(target="building", timeframe="now")
-        print(summary)
-        print("\n[Artifact Payload]")
-        print(raw_data)
-        print("\n" + "-"*50)
-        
-        print("\n[Testing]")
-        summary, raw_data = get_diagnostics.func(target="building", timeframe="24h")
+        summary, raw_data = get_diagnostics.func(target="2.4", timeframe="30d")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
@@ -916,5 +916,4 @@ if __name__ == "__main__":
 
 
     except Exception as e:
-
         logger.error(f"\nError during execution: {e}", exc_info=True)

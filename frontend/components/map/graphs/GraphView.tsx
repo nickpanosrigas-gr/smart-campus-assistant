@@ -3,7 +3,10 @@ import React from "react";
 import OccupancyGraph from "./OccupancyGraph";
 import DoorsWindowsGraph from "./DoorsWindowsGraph";
 import LightsGraph from "./LightsGraph";
+import ClimateGraph from "./ClimateGraph";
+import AirQualityGraph from "./AirQualityGraph";
 import { BarChart3, MousePointerClick, Loader2 } from "lucide-react";
+import DiagnosticsGraph from "./DiagnosticsGraph";
 
 interface GraphViewProps {
   activeTools: string[];
@@ -93,22 +96,15 @@ export default function GraphView({
     
     case "lights":
       return <LightsGraph artifact={artifact} />;
-    case "air quality":
+
     case "climate":
+      return <ClimateGraph artifact={artifact} />;
+
+    case "air quality":
+      return <AirQualityGraph artifact={artifact} />;
+
     case "diagnostics":
-      return (
-        <div className="w-full h-full flex flex-col items-center justify-center p-8 text-center bg-[#061C16]/40 rounded-3xl border border-[#0A664F]/50 text-[#A3B8B2]">
-          <BarChart3 size={36} className="mb-3 text-[#14C89B]" />
-          <h3 className="text-lg font-bold text-white">{activeTool} Graph</h3>
-          <p className="text-xs text-[#A3B8B2]/70 mt-1 max-w-md">
-            The data payload for Room {targetRoom.toUpperCase()} ({artifact.timeframe}) was successfully received! 
-            The dedicated UI chart for <strong className="text-[#14C89B]">{activeTool}</strong> will be added next.
-          </p>
-          <pre className="mt-4 p-3 bg-black/50 rounded-xl border border-white/5 text-[10px] font-mono text-left w-full max-w-md overflow-hidden text-ellipsis">
-            {JSON.stringify({ timeframe: artifact.timeframe, dataPoints: artifact.series?.length || 0 }, null, 2)}
-          </pre>
-        </div>
-      );
+      return < DiagnosticsGraph artifact={artifact}/>;
 
     default:
       return (

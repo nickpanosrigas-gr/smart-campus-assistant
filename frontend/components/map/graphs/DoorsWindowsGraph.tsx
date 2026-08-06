@@ -17,7 +17,7 @@ interface DoorsWindowsGraphProps {
   artifact: any;
 }
 
-// Unified palette: Green for Open (Active), Orange for Closed (Critical)
+// Unified palette: Green for Open (Active), Orange for Close (Critical)
 const COLOR_OPEN = SENSOR_COLORS.good;
 const COLOR_CLOSED = SENSOR_COLORS.critical;
 const BG_OPEN = ROOM_COLORS.good;
@@ -158,43 +158,60 @@ const BuildingAggregateGraph = ({ artifact }: { artifact: any }) => {
   };
 
   return (
-    <div className="w-full h-full flex flex-col justify-center gap-6 bg-transparent p-4 pb-8 select-none">
-      {/* 1. DOORS GRAPH */}
-      <div className="w-full flex-1 min-h-[140px] relative">
-        <h3 className="absolute -top-4 left-4 text-[10px] font-mono uppercase tracking-widest text-[#A3B8B2]/60 z-10">Total Open Doors</h3>
-        <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={formattedData} margin={{ top: 15, right: 30, left: -20, bottom: 5 }}>
-            <defs>
-              <linearGradient id="areaFadeDoors" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={COLOR_OPEN} stopOpacity={0.35} />
-                <stop offset="95%" stopColor={COLOR_OPEN} stopOpacity={0.0} />
-              </linearGradient>
-            </defs>
-            <XAxis dataKey="timeMs" type="number" domain={[startTime, endTime]} ticks={majorTicks} tickFormatter={formatXAxisTick} tick={false} axisLine={false} tickLine={false} />
-            <YAxis domain={[0, maxDoors]} stroke="#A3B8B2" strokeOpacity={0.6} fontSize={10} axisLine={false} tickLine={false} allowDecimals={false} />
-            <Tooltip content={<CustomTooltip type="doors" />} cursor={{ stroke: "#ffffff", strokeWidth: 1, strokeDasharray: "3 3", strokeOpacity: 0.25 }} />
-            <Area type="stepAfter" dataKey="open_doors" stroke="none" fill="url(#areaFadeDoors)" isAnimationActive={false} activeDot={false} />
-            <Line type="stepAfter" dataKey="open_doors" stroke={COLOR_OPEN} strokeWidth={2} dot={false} isAnimationActive={false} activeDot={<CustomActiveDot />} />
-          </ComposedChart>
-        </ResponsiveContainer>
+    <div className="w-full h-full flex flex-col bg-transparent p-4 pb-4 select-none overflow-hidden">
+      {/* --- Scrollable Graphs Container --- */}
+      <div className="flex-1 w-full overflow-y-auto overflow-x-hidden chat-scrollbar pr-2 flex flex-col gap-6">
+        {/* 1. DOORS GRAPH */}
+        <div className="w-full flex-1 min-h-[200px] relative mt-2">
+          <h3 className="absolute top-1 left-8 text-[10px] font-mono uppercase tracking-widest text-[#A3B8B2]/60 z-10">
+            Total Open Doors
+          </h3>
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={formattedData} margin={{ top: 25, right: 30, left: 0, bottom: 5 }}>
+              <defs>
+                <linearGradient id="areaFadeDoors" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={COLOR_OPEN} stopOpacity={0.35} />
+                  <stop offset="95%" stopColor={COLOR_OPEN} stopOpacity={0.0} />
+                </linearGradient>
+              </defs>
+              <XAxis dataKey="timeMs" type="number" domain={[startTime, endTime]} ticks={majorTicks} tickFormatter={formatXAxisTick} tick={false} axisLine={false} tickLine={false} minTickGap={25} interval="preserveStartEnd" />
+              <YAxis width={45} domain={[0, maxDoors]} stroke="#A3B8B2" strokeOpacity={0.6} fontSize={10} axisLine={false} tickLine={false} allowDecimals={false} />
+              <Tooltip content={<CustomTooltip type="doors" />} cursor={{ stroke: "#ffffff", strokeWidth: 1, strokeDasharray: "3 3", strokeOpacity: 0.25 }} />
+              <Area type="stepAfter" dataKey="open_doors" stroke="none" fill="url(#areaFadeDoors)" isAnimationActive={false} activeDot={false} />
+              <Line type="stepAfter" dataKey="open_doors" stroke={COLOR_OPEN} strokeWidth={2} dot={false} isAnimationActive={false} activeDot={<CustomActiveDot />} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+
+        {/* 2. WINDOWS GRAPH */}
+        <div className="w-full flex-1 min-h-[200px] relative mt-2">
+          <h3 className="absolute top-1 left-8 text-[10px] font-mono uppercase tracking-widest text-[#A3B8B2]/60 z-10">
+            Total Open Windows
+          </h3>
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={formattedData} margin={{ top: 25, right: 30, left: 0, bottom: 5 }}>
+              <defs>
+                <linearGradient id="areaFadeWindows" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor={COLOR_OPEN} stopOpacity={0.35} />
+                  <stop offset="95%" stopColor={COLOR_OPEN} stopOpacity={0.0} />
+                </linearGradient>
+              </defs>
+              <XAxis dataKey="timeMs" type="number" domain={[startTime, endTime]} ticks={majorTicks} tickFormatter={formatXAxisTick} tick={false} axisLine={false} tickLine={false} minTickGap={25} interval="preserveStartEnd" />
+              <YAxis width={45} domain={[0, maxWindows]} stroke="#A3B8B2" strokeOpacity={0.6} fontSize={10} axisLine={false} tickLine={false} allowDecimals={false} />
+              <Tooltip content={<CustomTooltip type="windows" />} cursor={{ stroke: "#ffffff", strokeWidth: 1, strokeDasharray: "3 3", strokeOpacity: 0.25 }} />
+              <Area type="stepAfter" dataKey="open_windows" stroke="none" fill="url(#areaFadeWindows)" isAnimationActive={false} activeDot={false} />
+              <Line type="stepAfter" dataKey="open_windows" stroke={COLOR_OPEN} strokeWidth={2} dot={false} isAnimationActive={false} activeDot={<CustomActiveDot />} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
       </div>
 
-      {/* 2. WINDOWS GRAPH */}
-      <div className="w-full flex-1 min-h-[140px] relative">
-        <h3 className="absolute -top-4 left-4 text-[10px] font-mono uppercase tracking-widest text-[#A3B8B2]/60 z-10">Total Open Windows</h3>
+      {/* --- Fixed Bottom X-Axis Container --- */}
+      <div className="w-full h-[24px] shrink-0 mt-1 pointer-events-none pr-2">
         <ResponsiveContainer width="100%" height="100%">
-          <ComposedChart data={formattedData} margin={{ top: 15, right: 30, left: -20, bottom: 20 }}>
-            <defs>
-              <linearGradient id="areaFadeWindows" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={COLOR_OPEN} stopOpacity={0.35} />
-                <stop offset="95%" stopColor={COLOR_OPEN} stopOpacity={0.0} />
-              </linearGradient>
-            </defs>
-            <XAxis dataKey="timeMs" type="number" domain={[startTime, endTime]} ticks={majorTicks} tickFormatter={formatXAxisTick} stroke="#A3B8B2" strokeOpacity={0.4} fontSize={11} axisLine={false} tickLine={false} dy={10} minTickGap={25} interval="preserveStartEnd" />
-            <YAxis domain={[0, maxWindows]} stroke="#A3B8B2" strokeOpacity={0.6} fontSize={10} axisLine={false} tickLine={false} allowDecimals={false} />
-            <Tooltip content={<CustomTooltip type="windows" />} cursor={{ stroke: "#ffffff", strokeWidth: 1, strokeDasharray: "3 3", strokeOpacity: 0.25 }} />
-            <Area type="stepAfter" dataKey="open_windows" stroke="none" fill="url(#areaFadeWindows)" isAnimationActive={false} activeDot={false} />
-            <Line type="stepAfter" dataKey="open_windows" stroke={COLOR_OPEN} strokeWidth={2} dot={false} isAnimationActive={false} activeDot={<CustomActiveDot />} />
+          <ComposedChart data={formattedData} margin={{ top: 0, right: 30, left: 0, bottom: 0 }}>
+            <XAxis dataKey="timeMs" type="number" domain={[startTime, endTime]} ticks={majorTicks} tickFormatter={formatXAxisTick} stroke="#A3B8B2" strokeOpacity={0.4} fontSize={11} tickLine={false} axisLine={false} minTickGap={25} interval="preserveStartEnd" />
+            <YAxis width={45} hide domain={[0, 1]} />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
@@ -462,55 +479,24 @@ export default function DoorsWindowsGraph({ artifact }: DoorsWindowsGraphProps) 
     const sensor = sensorSeries.find(s => s.baseValue === val || s.openValue === val || s.centerY === val);
     if (!sensor) return null;
     
-    if (val === sensor.centerY) {
-      const name = sensor.friendlyLabel;
-      const words = name.split(' ');
-      const lines: string[] = [];
-      
-      if (name.length <= 16) {
-        lines.push(name);
-      } else if (words.length <= 4) {
-        const mid = Math.ceil(words.length / 2);
-        lines.push(words.slice(0, mid).join(' '));
-        lines.push(words.slice(mid).join(' '));
-      } else {
-        const third = Math.ceil(words.length / 3);
-        lines.push(words.slice(0, third).join(' '));
-        lines.push(words.slice(third, third * 2).join(' '));
-        if (third * 2 < words.length) {
-          lines.push(words.slice(third * 2).join(' '));
-        }
-      }
-      
+    if (val === sensor.openValue) {
       return (
-        <text x={x - 55} y={y} textAnchor="end" fill="#A3B8B2" fontSize={12} className="font-mono font-semibold">
-          {lines.map((line, i) => {
-            let dy = "1.2em";
-            if (i === 0) {
-              if (lines.length === 1) dy = "0.3em";
-              if (lines.length === 2) dy = "-0.3em";
-              if (lines.length === 3) dy = "-0.9em";
-            }
-            return (
-              <tspan key={i} x={x - 55} dy={dy}>
-                {line}
-              </tspan>
-            );
-          })}
-        </text>
-      );
-    } 
-    else if (val === sensor.openValue) {
-      return (
-        <text x={x - 10} y={y} dy={4} textAnchor="end" fill={COLOR_OPEN} fontSize={10} className="font-mono font-bold">
-          Open
-        </text>
+        <g>
+          {/* Status Label aligned right within the 45px axis */}
+          <text x={x - 5} y={y} dy={4} textAnchor="end" fill={COLOR_OPEN} fontSize={10} className="font-mono font-bold">
+            Open
+          </text>
+          {/* Sensor Title injected directly into the graph area, emulating top-1 left-8 natively in SVG */}
+          <text x={x + 10} y={y} dy={-12} textAnchor="start" fill="#A3B8B2" opacity={0.6} fontSize={10} className="font-mono uppercase tracking-widest">
+            {sensor.friendlyLabel}
+          </text>
+        </g>
       );
     } 
     else if (val === sensor.baseValue) {
       return (
-        <text x={x - 10} y={y} dy={4} textAnchor="end" fill={COLOR_CLOSED} fontSize={10} className="font-mono font-bold">
-          Closed
+        <text x={x - 5} y={y} dy={4} textAnchor="end" fill={COLOR_CLOSED} fontSize={10} className="font-mono font-bold">
+          Close
         </text>
       );
     }
@@ -621,10 +607,44 @@ export default function DoorsWindowsGraph({ artifact }: DoorsWindowsGraphProps) 
     );
   };
 
+  // --- 11. ISOLATED ROW CURSOR ---
+  const CustomCursor = (props: any) => {
+    const { points, height, top } = props;
+    if (!points || points.length === 0 || !hoveredKey) return null;
+    
+    const { x } = points[0];
+    const sensor = sensorSeries.find(s => s.key === hoveredKey);
+    if (!sensor) return null;
+
+    // Map the sensor's data domain offsets to the SVG pixel height
+    const getPixelY = (dataY: number) => {
+       const pct = (dataY - yAxisMin) / (yAxisMax - yAxisMin);
+       return top + height - (pct * height);
+    };
+
+    // Calculate bounds exactly at the plot line heights with a tiny 2px buffer
+    const yTop = getPixelY(sensor.openValue + 2);
+    const yBottom = getPixelY(sensor.baseValue - 2);
+
+    return (
+      <line
+        x1={x}
+        y1={yTop}
+        x2={x}
+        y2={yBottom}
+        stroke="#ffffff"
+        strokeWidth={1}
+        strokeDasharray="3 3"
+        strokeOpacity={0.25}
+      />
+    );
+  };
+
   return (
-    <div className="w-full h-full flex flex-col justify-center bg-transparent p-4 pb-8 select-none">
+    <div className="w-full h-full flex flex-col bg-transparent p-4 pb-4 select-none overflow-hidden">
+      {/* --- Main Graph Container --- */}
       <div 
-        className="w-full h-full relative" 
+        className="flex-1 w-full min-h-[260px] relative pr-2" 
         ref={containerRef}
         onMouseMove={handleNativeMouseMove}
         onMouseLeave={() => setHoveredKey(null)}
@@ -632,7 +652,7 @@ export default function DoorsWindowsGraph({ artifact }: DoorsWindowsGraphProps) 
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart
             data={formattedData}
-            margin={{ top: 20, right: 30, left: 10, bottom: 20 }}
+            margin={{ top: 25, right: 30, left: 0, bottom: 5 }}
           >
             <defs>
               {sensorSeries.map(s => {
@@ -660,10 +680,11 @@ export default function DoorsWindowsGraph({ artifact }: DoorsWindowsGraphProps) 
               fontSize={11}
               tickLine={false}
               axisLine={false}
-              dy={10}
+              tick={false} // Ticks mapped to bottom axis
             />
 
             <YAxis
+              width={45} // Fixed width matches the rest of the application
               stroke="#A3B8B2"
               strokeOpacity={0.6}
               fontSize={11}
@@ -672,12 +693,12 @@ export default function DoorsWindowsGraph({ artifact }: DoorsWindowsGraphProps) 
               domain={[yAxisMin, yAxisMax]}
               ticks={yTicks}
               tick={<CustomYAxisTick />}
-              width={260}
             />
 
+            {/* ---> INJECT CUSTOM CURSOR HERE <--- */}
             <Tooltip
               shared={true}
-              cursor={{ stroke: "#ffffff", strokeWidth: 1, strokeDasharray: "3 3", strokeOpacity: 0.25 }}
+              cursor={<CustomCursor />}
               content={<CustomTooltip />}
             />
 
@@ -729,6 +750,30 @@ export default function DoorsWindowsGraph({ artifact }: DoorsWindowsGraphProps) 
                 </React.Fragment>
               );
             })}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* --- Fixed Bottom X-Axis Container --- */}
+      <div className="w-full h-[24px] shrink-0 mt-1 pointer-events-none pr-2">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={formattedData} margin={{ top: 0, right: 30, left: 0, bottom: 0 }}>
+            <XAxis
+              dataKey="timeMs"
+              type="number"
+              domain={[startTime, endTime]}
+              ticks={majorTicks}
+              tickFormatter={formatXAxisTick}
+              stroke="#A3B8B2"
+              strokeOpacity={0.4}
+              fontSize={11}
+              tickLine={false}
+              axisLine={false}
+              minTickGap={25}
+              interval="preserveStartEnd"
+            />
+            {/* Hidden YAxis with identical explicit width perfectly aligns the grids */}
+            <YAxis width={45} hide domain={[0, 1]} /> 
           </ComposedChart>
         </ResponsiveContainer>
       </div>

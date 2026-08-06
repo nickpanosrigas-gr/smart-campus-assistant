@@ -66,7 +66,7 @@ UNITS = {
 
 DISPLAY_NAMES = {
     "temperature": "Temp", "humidity": "Hum", "pressure": "Pres",
-    "air_temperature": "Out_Temp", "relative_humidity": "Out_Hum", 
+    "air_temperature": "Out_Temp", "relative_humidity": "Hum", 
     "solar_radiation": "Avg_Solar", "precipitation": "Precip", "wind_speed": "Wind"
 }
 
@@ -334,7 +334,7 @@ def get_climate(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             f"    - Vertical_Angle: {solar['thermal_vertical']}",
             "",
             f"Statistical_Baseline ({current_ctx}):",
-            f"  Weather: {format_baseline_str(ctx_w_base, ['air_temperature', 'relative_humidity', 'solar_radiation', 'precipitation', 'wind_speed'])}",
+            f"  Weather: {format_baseline_str(ctx_w_base, ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed', 'relative_humidity'])}",
             f"  Indoor: {format_baseline_str(ctx_i_base, IAQ_KEYS)}",
             "",
             "Current_State_With_Diffs (vs Baseline & Limits):"
@@ -349,7 +349,7 @@ def get_climate(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             if is_weather_active:
                 w_curr = extract_current_values(tb_client.get_now(WEATHER_STATION_ID, WEATHER_KEYS), WEATHER_KEYS)
                 
-                ui_w_curr = {k: v for k, v in w_curr.items() if k in ["air_temperature", "relative_humidity", "atmospheric_pressure"]}
+                ui_w_curr = {k: v for k, v in w_curr.items() if k in ["air_temperature", "relative_humidity"]}
                 
                 ui_sensors[WEATHER_STATION_NAME] = {
                     "status": "good",
@@ -357,7 +357,7 @@ def get_climate(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
                     "readings": ui_w_curr
                 }
                 # Keep text generation exactly the same for the LLM
-                w_parts = [format_val(k, w_curr.get(k), ctx_w_base.get(k), room) for k in ['air_temperature', 'relative_humidity', 'solar_radiation', 'precipitation', 'wind_speed'] if w_curr.get(k) is not None]
+                w_parts = [format_val(k, w_curr.get(k), ctx_w_base.get(k), room) for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed', 'relative_humidity'] if w_curr.get(k) is not None]
                 output.append(f"  Weather: {' | '.join(w_parts) if w_parts else 'Offline / No Data'}")
             else:
                 ui_sensors[WEATHER_STATION_NAME] = {
@@ -429,7 +429,7 @@ def get_climate(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             ui_sensors[name] = {
                 "status": sensor_status,
                 "category": "IAQ",
-                "readings": i_curr if has_valid_data else None
+                "readings": {k: v for k, v in i_curr.items() if k != "pressure"} if has_valid_data else None
             }
             
             # Keep text intact
@@ -438,6 +438,7 @@ def get_climate(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             
         # 4. Aggregate IAQ for Room Level
         for k in IAQ_KEYS:
+            if k == "pressure": continue
             vals = [i_curr.get(k) for i_curr in i_curr_list if i_curr.get(k) is not None]
             if vals:
                 ui_aggregates[k] = sum(vals) / len(vals)
@@ -523,7 +524,7 @@ def get_climate(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
     else:
         artifact_df = master_df
         
-    allowed_ui_cols = IAQ_KEYS + ["air_temperature", "relative_humidity", "atmospheric_pressure"]
+    allowed_ui_cols = ["temperature", "humidity", "air_temperature", "relative_humidity"]
     ui_df = artifact_df[[c for c in artifact_df.columns if c in allowed_ui_cols]]
         
     series_data = []
@@ -596,7 +597,7 @@ def get_climate(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
             lines = [f"    {name}:"]
             # Standardized Baseline Key
             lines.append("      Baseline:")
-            lines.append(f"        Weather: {format_baseline_str(cell_base_w, ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed'])}")
+            lines.append(f"        Weather: {format_baseline_str(cell_base_w, ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed', 'relative_humidity'])}")
             lines.append(f"        Indoor: {format_baseline_str(cell_base_i, IAQ_KEYS)}")
             
             outliers = []
@@ -656,7 +657,7 @@ def get_climate(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
                                 sign = 1
                         if is_spk: spike_keys.append((k, sign))
                             
-                for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed']:
+                for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed', 'relative_humidity']:
                     val = day_mean.get(k)
                     base = cell_base_w.get(k)
                     is_spk = False
@@ -757,15 +758,15 @@ def get_climate(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
         ctx_w_base = {k: weather_baseline.get(k, {}).get(ctx) for k in WEATHER_KEYS}
         ctx_i_base = {k: indoor_baseline.get(k, {}).get(ctx) for k in IAQ_KEYS}
         output.append(f"  {ctx}:")
-        output.append(f"    Weather: {format_baseline_str(ctx_w_base, ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed'])}")
+        output.append(f"    Weather: {format_baseline_str(ctx_w_base, ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed', 'relative_humidity'])}")
         output.append(f"    Indoor: {format_baseline_str(ctx_i_base, IAQ_KEYS)}")
     output.append("")
     
     # Calculate true contextual average deviations
     period_i_deltas = {k: [] for k in IAQ_KEYS}
     period_i_vals = {k: [] for k in IAQ_KEYS}
-    period_w_deltas = {k: [] for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed']}
-    period_w_vals = {k: [] for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed']}
+    period_w_deltas = {k: [] for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed', 'relative_humidity']}
+    period_w_vals = {k: [] for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed', 'relative_humidity']}
     
     for exact_time, row in master_df.iterrows():
         ctx = get_time_context(exact_time)
@@ -775,7 +776,7 @@ def get_climate(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
                 period_i_deltas[k].append(row[k] - indoor_baseline[k][ctx])
                 period_i_vals[k].append(row[k])
                 
-        for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed']:
+        for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed', 'relative_humidity']:
             if pd.notna(row.get(k)) and weather_baseline.get(k, {}).get(ctx) is not None:
                 period_w_deltas[k].append(row[k] - weather_baseline[k][ctx])
                 period_w_vals[k].append(row[k])
@@ -789,7 +790,7 @@ def get_climate(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
                 p_i_shifts.append(f"{DISPLAY_NAMES.get(k, k)}: {avg_val:.1f}{UNITS.get(k, '')} ({avg_delta:+.1f}{UNITS.get(k, '')})")
                 
     p_w_shifts = []
-    for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed']:
+    for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed', 'relative_humidity']:
         if period_w_deltas[k]:
             avg_delta = np.mean(period_w_deltas[k])
             avg_val = np.mean(period_w_vals[k])
@@ -871,7 +872,7 @@ def get_climate(room: Rooms, timeframe: Timeframes) -> Tuple[str, dict]:
                             sign = 1
                     if is_spike: spike_keys.append((k, sign))
             
-            for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed']:
+            for k in ['air_temperature', 'solar_radiation', 'precipitation', 'wind_speed', 'relative_humidity']:
                 val = row.get(k)
                 base = weather_baseline.get(k, {}).get(ctx)
                 is_spike = False

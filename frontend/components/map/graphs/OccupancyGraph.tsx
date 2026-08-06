@@ -154,8 +154,8 @@ export default function OccupancyGraph({ artifact }: OccupancyGraphProps) {
     const max = cap ? cap : Math.max(maxDataVal, 5);
     return {
       capacity: cap,
-      yAxisMin: -max * 0.02,
-      yAxisMax: max * 1.02
+      yAxisMin: 0,
+      yAxisMax: max
     };
   }, [artifact, formattedData, isMotionOnly]);
 
@@ -187,7 +187,7 @@ export default function OccupancyGraph({ artifact }: OccupancyGraphProps) {
     if (["30d", "90d"].includes(tf)) {
       return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
     }
-    if (tf === "7d") {
+    if (["7d", "24h"].includes(tf)) {
       return date.toLocaleDateString("en-US", { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false });
     }
     return date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -199,11 +199,11 @@ export default function OccupancyGraph({ artifact }: OccupancyGraphProps) {
     const len = formattedData.length;
     if (len === 0) return null;
 
-    let prevColor = formattedData[0].Motion === 1 ? SENSOR_COLORS.warning : SENSOR_COLORS.good;
+    let prevColor = formattedData[0].Motion === 1 ? SENSOR_COLORS.critical : SENSOR_COLORS.good;
     stops.push(<stop key="start" offset="0%" stopColor={prevColor} />);
 
     for (let i = 1; i < len; i++) {
-      const currColor = formattedData[i].Motion === 1 ? SENSOR_COLORS.warning : SENSOR_COLORS.good;
+      const currColor = formattedData[i].Motion === 1 ? SENSOR_COLORS.critical : SENSOR_COLORS.good;
       const prevY = formattedData[i - 1].PlotValue;
       const currY = formattedData[i].PlotValue;
       const currPct = (i / (len - 1)) * 100;
@@ -258,8 +258,8 @@ export default function OccupancyGraph({ artifact }: OccupancyGraphProps) {
       const val = Math.round(dataPoint.Occupancy);
       const isMotionActive = dataPoint.Motion === 1;
 
-      const badgeColor = isMotionActive ? SENSOR_COLORS.warning : SENSOR_COLORS.good;
-      const badgeBg = isMotionActive ? ROOM_COLORS.warning : ROOM_COLORS.good;
+      const badgeColor = isMotionActive ? SENSOR_COLORS.critical : SENSOR_COLORS.good;
+      const badgeBg = isMotionActive ? ROOM_COLORS.critical : ROOM_COLORS.good;
       const badgeText = isMotionActive ? "Motion Active" : "Motion Idle";
 
       return (
@@ -309,25 +309,20 @@ export default function OccupancyGraph({ artifact }: OccupancyGraphProps) {
   const CustomActiveDot = (props: any) => {
     const { cx, cy, payload } = props;
     if (cx === undefined || cy === undefined || !payload) return null;
-    const color = payload.Motion === 1 ? SENSOR_COLORS.warning : SENSOR_COLORS.good;
+    const color = payload.Motion === 1 ? SENSOR_COLORS.critical : SENSOR_COLORS.good;
     return <circle cx={cx} cy={cy} r={6} fill={color} stroke="#0A0A0A" strokeWidth={2} />;
   };
 
   return (
-    <div className="w-full h-full flex flex-col justify-center bg-transparent p-4 pb-32 select-none">
-      <div className="w-full h-full min-h-[260px]">
+    <div className="w-full h-full flex flex-col bg-transparent p-4 pb-4 select-none overflow-hidden">
+      {/* --- Main Graph Container --- */}
+      <div className="flex-1 w-full min-h-[260px] relative pr-2">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart
             data={formattedData}
-            margin={{
-              top: 30,
-              right: 30,
-              left: isMotionOnly ? 15 : -10,
-              bottom: 20
-            }}
+            margin={{ top: 25, right: 30, left: 0, bottom: 5 }}
           >
             <defs>
-              {/* Reverted to default objectBoundingBox for 100% pixel-perfect X-coordinate alignment! */}
               <linearGradient id="motionStrokeGradMinimal" x1="0%" y1="0%" x2="100%" y2="0%">
                 {renderGradientStops()}
               </linearGradient>
@@ -353,10 +348,11 @@ export default function OccupancyGraph({ artifact }: OccupancyGraphProps) {
               fontSize={11}
               tickLine={false}
               axisLine={false}
-              dy={10}
+              tick={false} // Ticks are mapped to the fixed bottom axis
             />
 
             <YAxis
+              width={45} // Fixed width guarantees correct left alignment without clipping
               stroke="#A3B8B2"
               strokeOpacity={0.6}
               fontSize={11}
@@ -397,6 +393,28 @@ export default function OccupancyGraph({ artifact }: OccupancyGraphProps) {
               dot={false}
               activeDot={<CustomActiveDot />}
             />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* --- Fixed Bottom X-Axis Container --- */}
+      <div className="w-full h-[24px] shrink-0 mt-1 pointer-events-none pr-2">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={formattedData} margin={{ top: 0, right: 30, left: 0, bottom: 0 }}>
+            <XAxis
+              dataKey="timestamp"
+              ticks={majorTicks}
+              tickFormatter={formatXAxisTick}
+              interval="preserveStartEnd"
+              minTickGap={25}
+              stroke="#A3B8B2"
+              strokeOpacity={0.4}
+              fontSize={11}
+              tickLine={false}
+              axisLine={false}
+            />
+            {/* Hidden YAxis with identical explicit width perfectly aligns the grids */}
+            <YAxis width={45} hide domain={[0, 1]} /> 
           </ComposedChart>
         </ResponsiveContainer>
       </div>

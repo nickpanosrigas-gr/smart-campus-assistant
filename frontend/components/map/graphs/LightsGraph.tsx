@@ -174,13 +174,50 @@ export default function LightsGraph({ artifact }: LightsGraphProps) {
     if (["30d", "90d"].includes(tf)) {
       return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
     }
-    if (tf === "7d") {
+    if (["7d", "24h"].includes(tf)) {
       return date.toLocaleDateString("en-US", { weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false });
     }
     return date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
   };
 
-  // --- 3. TOOLTIP WITH BASELINE ALIGNMENT & 30D/90D EXACT DAY DISPLAY ---
+  // --- 3. DYNAMIC CRITICAL GRADIENT GENERATOR ---
+  const renderGradientStops = () => {
+    const stops = [];
+    const len = formattedData.length;
+    if (len === 0) return null;
+
+    const getColor = (val: number) => val >= 4 ? SENSOR_COLORS.critical : SENSOR_COLORS.good;
+
+    let prevColor = getColor(formattedData[0].PlotValue);
+    stops.push(<stop key="start" offset="0%" stopColor={prevColor} />);
+
+    for (let i = 1; i < len; i++) {
+      const currColor = getColor(formattedData[i].PlotValue);
+      const prevY = formattedData[i - 1].PlotValue;
+      const currY = formattedData[i].PlotValue;
+      const currPct = (i / (len - 1)) * 100;
+
+      if (prevColor !== currColor) {
+        if (prevY >= currY) {
+          const endPrev = Math.min(100, currPct + 0.15);
+          const startCurr = Math.min(100, currPct + 0.16);
+          stops.push(<stop key={`drop-prev-${i}`} offset={`${endPrev}%`} stopColor={prevColor} />);
+          stops.push(<stop key={`drop-curr-${i}`} offset={`${startCurr}%`} stopColor={currColor} />);
+        } else {
+          const endPrev = Math.max(0, currPct - 0.16);
+          const startCurr = Math.max(0, currPct - 0.15);
+          stops.push(<stop key={`jump-prev-${i}`} offset={`${endPrev}%`} stopColor={prevColor} />);
+          stops.push(<stop key={`jump-curr-${i}`} offset={`${startCurr}%`} stopColor={currColor} />);
+        }
+        prevColor = currColor;
+      }
+    }
+
+    stops.push(<stop key="end" offset="100%" stopColor={prevColor} />);
+    return stops;
+  };
+
+  // --- 4. TOOLTIP WITH BASELINE ALIGNMENT & CRITICAL AWARENESS ---
   const CustomTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
       const dataPoint = payload[0].payload;
@@ -205,11 +242,11 @@ export default function LightsGraph({ artifact }: LightsGraphProps) {
         timeStr = `${startTime} – ${endTime}`;
       }
 
-      // Round out the 0.0001 epsilon hack so tooltips display clean integers
       const val = Math.round(dataPoint.PlotValue);
       const semanticLabel = LIGHT_LABELS[val] || `Level ${val}`;
-      const badgeColor = SENSOR_COLORS.good;
-      const badgeBg = ROOM_COLORS.good;
+      const isCritical = val >= 4;
+      const badgeColor = isCritical ? SENSOR_COLORS.critical : SENSOR_COLORS.good;
+      const badgeBg = isCritical ? ROOM_COLORS.critical : ROOM_COLORS.good;
 
       return (
         <div className="flex flex-col gap-2 bg-[#0A0A0A]/95 p-3 rounded-2xl border border-white/10 shadow-[0_4px_20px_rgba(0,0,0,0.8)] pointer-events-none backdrop-blur-md min-w-[150px]">
@@ -238,40 +275,41 @@ export default function LightsGraph({ artifact }: LightsGraphProps) {
     }
     return null;
   };
-  // --- 4. CUSTOM ACTIVE DOT ---
+
+  // --- 5. CUSTOM ACTIVE DOT ---
   const CustomActiveDot = (props: any) => {
-    const { cx, cy } = props;
-    if (cx === undefined || cy === undefined) return null;
+    const { cx, cy, payload } = props;
+    if (cx === undefined || cy === undefined || !payload) return null;
+    const color = payload.PlotValue >= 4 ? SENSOR_COLORS.critical : SENSOR_COLORS.good;
+    
     return (
-      <circle 
-        cx={cx} 
-        cy={cy} 
-        r={6} 
-        fill={SENSOR_COLORS.good} 
-        stroke="#0A0A0A" 
-        strokeWidth={2} 
-      />
+      <circle cx={cx} cy={cy} r={6} fill={color} stroke="#0A0A0A" strokeWidth={2} style={{ pointerEvents: "none" }} />
     );
   };
 
   return (
-    <div className="w-full h-full flex flex-col justify-center bg-transparent p-4 pb-32 select-none">
-      <div className="w-full h-full min-h-[260px]">
+    <div className="w-full h-full flex flex-col bg-transparent p-4 pb-4 select-none overflow-hidden">
+      {/* --- Main Graph Container --- */}
+      <div className="flex-1 w-full min-h-[260px] relative pr-2">
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart
             data={formattedData}
-            margin={{
-              top: 30,
-              right: 30,
-              left: -10,
-              bottom: 20
-            }}
+            margin={{ top: 25, right: 30, left: 0, bottom: 5 }}
           >
             <defs>
-              <linearGradient id="lightAreaFade" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor={SENSOR_COLORS.good} stopOpacity={0.35} />
-                <stop offset="95%" stopColor={SENSOR_COLORS.good} stopOpacity={0.0} />
+              {/* Uses identical mask rendering as OccupancyGraph for visual alignment */}
+              <linearGradient id="lightStrokeGradMinimal" x1="0%" y1="0%" x2="100%" y2="0%">
+                {renderGradientStops()}
               </linearGradient>
+
+              <linearGradient id="verticalFadeMaskLights" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#ffffff" stopOpacity={0.35} />
+                <stop offset="95%" stopColor="#ffffff" stopOpacity={0.0} />
+              </linearGradient>
+
+              <mask id="lightAreaMask">
+                <rect x="0" y="0" width="100%" height="100%" fill="url(#verticalFadeMaskLights)" />
+              </mask>
             </defs>
 
             <XAxis
@@ -285,10 +323,11 @@ export default function LightsGraph({ artifact }: LightsGraphProps) {
               fontSize={11}
               tickLine={false}
               axisLine={false}
-              dy={10}
+              tick={false}
             />
 
             <YAxis
+              width={45}
               stroke="#A3B8B2"
               strokeOpacity={0.6}
               fontSize={11}
@@ -309,7 +348,8 @@ export default function LightsGraph({ artifact }: LightsGraphProps) {
               type="stepAfter"
               dataKey="PlotValue"
               stroke="none"
-              fill="url(#lightAreaFade)"
+              fill="url(#lightStrokeGradMinimal)"
+              mask="url(#lightAreaMask)"
               isAnimationActive={false}
               activeDot={false}
             />
@@ -317,12 +357,33 @@ export default function LightsGraph({ artifact }: LightsGraphProps) {
             <Line
               type="stepAfter"
               dataKey="PlotValue"
-              stroke={SENSOR_COLORS.good}
+              stroke="url(#lightStrokeGradMinimal)"
               strokeWidth={2.5}
               isAnimationActive={false}
               dot={false}
               activeDot={<CustomActiveDot />}
             />
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* --- Fixed Bottom X-Axis Container --- */}
+      <div className="w-full h-[24px] shrink-0 mt-1 pointer-events-none pr-2">
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={formattedData} margin={{ top: 0, right: 30, left: 0, bottom: 0 }}>
+            <XAxis
+              dataKey="timestamp"
+              ticks={majorTicks}
+              tickFormatter={formatXAxisTick}
+              interval="preserveStartEnd"
+              minTickGap={25}
+              stroke="#A3B8B2"
+              strokeOpacity={0.4}
+              fontSize={11}
+              tickLine={false}
+              axisLine={false}
+            />
+            <YAxis width={45} hide domain={[0, 1]} /> 
           </ComposedChart>
         </ResponsiveContainer>
       </div>
