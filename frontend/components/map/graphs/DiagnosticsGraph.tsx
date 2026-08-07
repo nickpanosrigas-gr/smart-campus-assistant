@@ -337,99 +337,102 @@ export default function DiagnosticsGraph({ artifact }: DiagnosticsGraphProps) {
           const strokeFill = getStrokeFill();
 
           return (
-            <div key={metric.key} className="w-full shrink-0 min-h-[140px] relative mt-2">
-              <h3 className="absolute top-1 left-8 text-[10px] font-mono uppercase tracking-widest text-[#A3B8B2]/60 z-10">
+            <div key={metric.key} className="w-full shrink-0 min-h-[140px] relative mt-2 flex flex-col">
+              <h3 className="absolute top-1 left-8 text-[10px] font-mono uppercase tracking-widest text-[#A3B8B2]/60 z-20">
                 {metric.label}
               </h3>
 
-              {/* Plugged In Centered Label */}
+              {/* Plugged In Centered Label (z-0 puts it behind the graph's SVG layer) */}
               {metric.isPluggedIn && (
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
                   <span className="text-[15px] font-mono font-bold uppercase tracking-widest text-[#14C89B]/50 bg-[#0A0A0A]/50 px-4 py-1.5 rounded-full border border-[#14C89B]/10 backdrop-blur-sm shadow-md">
                     Plugged In
                   </span>
                 </div>
               )}
               
-              <ResponsiveContainer width="100%" height="100%">
-                {/* NOTE: No syncId is used here, ensuring tooltips/dots only appear on the graph currently hovered */}
-                <ComposedChart
-                  data={formattedData}
-                  margin={{ top: 25, right: 30, left: 0, bottom: 5 }}
-                >
-                  {/* Define Localized SVG Masks and Gradients ensuring guaranteed cross-browser rendering */}
-                  <defs>
-                    <linearGradient id={`verticalFadeMask-${metric.key}`} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#ffffff" stopOpacity={0.35} />
-                      <stop offset="95%" stopColor="#ffffff" stopOpacity={0.0} />
-                    </linearGradient>
-                    <mask id={`diagAreaMask-${metric.key}`}>
-                      <rect x="0" y="0" width="100%" height="100%" fill={`url(#verticalFadeMask-${metric.key})`} />
-                    </mask>
-
-                    {!isFlat && (
-                      <linearGradient id={`gradLineDiag-${metric.key}`} x1="0%" y1="0%" x2="100%" y2="0%">
-                        {renderGradientStops(metric.key, metric.isDynamic, metric.color)}
+              {/* Graph Container (z-10 elevates the hover cursor over the label) */}
+              <div className="w-full flex-1 relative z-10">
+                <ResponsiveContainer width="100%" height="100%">
+                  {/* NOTE: No syncId is used here, ensuring tooltips/dots only appear on the graph currently hovered */}
+                  <ComposedChart
+                    data={formattedData}
+                    margin={{ top: 25, right: 30, left: 0, bottom: 5 }}
+                  >
+                    {/* Define Localized SVG Masks and Gradients ensuring guaranteed cross-browser rendering */}
+                    <defs>
+                      <linearGradient id={`verticalFadeMask-${metric.key}`} x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor="#ffffff" stopOpacity={0.35} />
+                        <stop offset="95%" stopColor="#ffffff" stopOpacity={0.0} />
                       </linearGradient>
-                    )}
-                  </defs>
+                      <mask id={`diagAreaMask-${metric.key}`}>
+                        <rect x="0" y="0" width="100%" height="100%" fill={`url(#verticalFadeMask-${metric.key})`} />
+                      </mask>
 
-                  <XAxis
-                    dataKey="timeMs"
-                    type="number"
-                    domain={[formattedData[0]?.timeMs, formattedData[formattedData.length - 1]?.timeMs]}
-                    ticks={majorTicks}
-                    tickFormatter={formatXAxisTick}
-                    stroke="#A3B8B2"
-                    strokeOpacity={0.4}
-                    fontSize={11}
-                    tickLine={false}
-                    axisLine={false}
-                    tick={false} // Never show ticks here to save vertical space; mapped to fixed bottom axis
-                    minTickGap={25}
-                    interval="preserveStartEnd"
-                  />
+                      {!isFlat && (
+                        <linearGradient id={`gradLineDiag-${metric.key}`} x1="0%" y1="0%" x2="100%" y2="0%">
+                          {renderGradientStops(metric.key, metric.isDynamic, metric.color)}
+                        </linearGradient>
+                      )}
+                    </defs>
 
-                  <YAxis
-                    width={45} // Fixed width guarantees correct left alignment without clipping
-                    domain={metric.domain}
-                    stroke="#A3B8B2"
-                    strokeOpacity={0.6}
-                    fontSize={10}
-                    axisLine={false}
-                    tickLine={false}
-                    allowDataOverflow={false}
-                  />
+                    <XAxis
+                      dataKey="timeMs"
+                      type="number"
+                      domain={[formattedData[0]?.timeMs, formattedData[formattedData.length - 1]?.timeMs]}
+                      ticks={majorTicks}
+                      tickFormatter={formatXAxisTick}
+                      stroke="#A3B8B2"
+                      strokeOpacity={0.4}
+                      fontSize={11}
+                      tickLine={false}
+                      axisLine={false}
+                      tick={false} // Never show ticks here to save vertical space; mapped to fixed bottom axis
+                      minTickGap={25}
+                      interval="preserveStartEnd"
+                    />
 
-                  <Tooltip
-                    content={<CustomTooltip metric={metric} />}
-                    cursor={{ stroke: "#ffffff", strokeWidth: 1, strokeDasharray: "3 3", strokeOpacity: 0.25 }}
-                  />
+                    <YAxis
+                      width={45} // Fixed width guarantees correct left alignment without clipping
+                      domain={metric.domain}
+                      stroke="#A3B8B2"
+                      strokeOpacity={0.6}
+                      fontSize={10}
+                      axisLine={false}
+                      tickLine={false}
+                      allowDataOverflow={false}
+                    />
 
-                  {/* Area Shadowing Effect */}
-                  <Area
-                    type="stepAfter"
-                    dataKey={metric.key}
-                    stroke="none"
-                    fill={strokeFill}
-                    mask={`url(#diagAreaMask-${metric.key})`}
-                    isAnimationActive={false}
-                    activeDot={false}
-                    connectNulls={true}
-                  />
+                    <Tooltip
+                      content={<CustomTooltip metric={metric} />}
+                      cursor={{ stroke: "#ffffff", strokeWidth: 1, strokeDasharray: "3 3", strokeOpacity: 0.25 }}
+                    />
 
-                  <Line
-                    type="stepAfter"
-                    dataKey={metric.key}
-                    stroke={strokeFill}
-                    strokeWidth={2}
-                    dot={false}
-                    isAnimationActive={false}
-                    connectNulls={true}
-                    activeDot={<CustomActiveDot metric={metric} />}
-                  />
-                </ComposedChart>
-              </ResponsiveContainer>
+                    {/* Area Shadowing Effect */}
+                    <Area
+                      type="stepAfter"
+                      dataKey={metric.key}
+                      stroke="none"
+                      fill={strokeFill}
+                      mask={`url(#diagAreaMask-${metric.key})`}
+                      isAnimationActive={false}
+                      activeDot={false}
+                      connectNulls={true}
+                    />
+
+                    <Line
+                      type="stepAfter"
+                      dataKey={metric.key}
+                      stroke={strokeFill}
+                      strokeWidth={2}
+                      dot={false}
+                      isAnimationActive={false}
+                      connectNulls={true}
+                      activeDot={<CustomActiveDot metric={metric} />}
+                    />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
             </div>
           );
         })}
