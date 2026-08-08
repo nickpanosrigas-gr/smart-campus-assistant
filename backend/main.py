@@ -30,39 +30,130 @@ models_are_loaded = False
 model_transition_lock = asyncio.Lock()
 delayed_unload_task = None
 
+# New Health States
+ollama_health = True
+whisper_health = True
+active_websockets: set[WebSocket] = set()
+
+def sync_check_ollama(timeout_sec: int = 15):
+    """Runs synchronously in a background thread to ping/warm Ollama."""
+    try:
+        res_llm = requests.post(
+            f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/generate",
+            json={
+                "model": settings.OLLAMA_MODEL, 
+                "keep_alive": "1h",
+                "options": {"num_ctx": settings.OLLAMA_NUM_CTX, "temperature": 0.0}
+            },
+            timeout=timeout_sec
+        )
+        res_llm.raise_for_status()
+
+        res_embed = requests.post(
+            f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/embed",
+            json={
+                "model": settings.OLLAMA_EMBED_MODEL, 
+                "input": "warmup",
+                "keep_alive": "1h"
+            },
+            timeout=timeout_sec
+        )
+        res_embed.raise_for_status()
+        return True
+    except Exception as e:
+        logger.warning(f"Ollama Health Check Failed: {e}")
+        return False
+
+def sync_check_whisper(timeout_sec: int = 15):
+    """Runs synchronously in a background thread to ping/warm Whisper."""
+    try:
+        whisper_manage_url = settings.WHISPER_API_URL.replace("/transcribe", "/manage")
+        res_whisper = requests.post(
+            whisper_manage_url, 
+            json={
+                "model_size": settings.WHISPER_MODEL, 
+                "compute_type": settings.WHISPER_COMPUTE_TYPE,
+                "keep_alive": 3600
+            }, 
+            timeout=timeout_sec
+        )
+        res_whisper.raise_for_status()
+        return True
+    except Exception as e:
+        logger.warning(f"Whisper Health Check Failed: {e}")
+        return False
+
+async def broadcast_health():
+    """Pushes health updates to all connected tabs instantly."""
+    dead_ws = set()
+    for ws in active_websockets:
+        try:
+            await ws.send_json({
+                "type": "model_health",
+                "ollama": ollama_health,
+                "whisper": whisper_health
+            })
+        except Exception:
+            dead_ws.add(ws)
+    for ws in dead_ws:
+        active_websockets.discard(ws)
+
 async def load_ai_models():
-    """Warms up Ollama and Whisper. Uses a lock to prevent duplicate overlapping requests."""
-    global models_are_loaded
+    """Warms up Ollama and Whisper in parallel using separate threads."""
+    global models_are_loaded, ollama_health, whisper_health
     
     async with model_transition_lock:
         if models_are_loaded:
-            return  # Already loaded, skip duplicate request
+            return  
+            
+        # Optimistically assume online to prevent stale "offline" messages on new connections
+        if not ollama_health or not whisper_health:
+            ollama_health = True
+            whisper_health = True
+            await broadcast_health()
             
         logger.info(f"Loading AI models into VRAM for active users (Context: {settings.OLLAMA_NUM_CTX})...")
-        try:
-            def warm_models():
-                # Warm Ollama
-                requests.post(
-                    f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-                    json={
-                        "model": settings.OLLAMA_MODEL, 
-                        "keep_alive": "1h",
-                        "options": {"num_ctx": settings.OLLAMA_NUM_CTX, "temperature": 0.0}
-                    },
-                    timeout=120
-                )
-                # Warm Whisper
-                whisper_manage_url = settings.WHISPER_API_URL.replace("/transcribe", "/manage")
-                requests.post(whisper_manage_url, json={"model_size": settings.WHISPER_MODEL, "keep_alive": 3600}, timeout=120)
-                
-            await asyncio.to_thread(warm_models)
-            models_are_loaded = True
-            logger.info("All AI Models successfully loaded into VRAM.")
-        except Exception as e:
-            logger.error(f"Failed to load AI models into VRAM: {e}")
+        
+        # Use 120s timeout so the models have plenty of time to load into VRAM on cold starts
+        o_health, w_health = await asyncio.gather(
+            asyncio.to_thread(sync_check_ollama, 120),
+            asyncio.to_thread(sync_check_whisper, 120)
+        )
+        
+        changed = (ollama_health != o_health) or (whisper_health != w_health)
+        ollama_health = o_health
+        whisper_health = w_health
+        
+        models_are_loaded = True 
+        
+        if changed:
+            await broadcast_health()
+            
+        logger.info(f"Preload Complete. Ollama: {'ONLINE' if ollama_health else 'OFFLINE'} | Whisper: {'ONLINE' if whisper_health else 'OFFLINE'}")
+
+async def model_health_monitor():
+    """Background task checking every 30s if services recovered or went down."""
+    global ollama_health, whisper_health
+    while True:
+        await asyncio.sleep(30)
+        
+        if not models_are_loaded:
+            continue # Do not ping if there are zero users/sessions active
+            
+        # Use the fast 15s timeout for standard background polling
+        o_health, w_health = await asyncio.gather(
+            asyncio.to_thread(sync_check_ollama, 15),
+            asyncio.to_thread(sync_check_whisper, 15)
+        )
+        
+        if o_health != ollama_health or w_health != whisper_health:
+            logger.info(f"[HEALTH MONITOR] State Change - Ollama: {o_health}, Whisper: {w_health}")
+            ollama_health = o_health
+            whisper_health = w_health
+            await broadcast_health()
 
 async def execute_unload():
-    """Immediately unloads the models."""
+    """Immediately unloads the models (Safely ignores offline endpoints)."""
     global models_are_loaded
     
     async with model_transition_lock:
@@ -72,15 +163,15 @@ async def execute_unload():
         logger.info("Zero active sessions. Evicting AI models from VRAM...")
         try:
             def free_models():
-                # Unload Ollama
-                requests.post(
-                    f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/generate",
-                    json={"model": settings.OLLAMA_MODEL, "keep_alive": 0},
-                    timeout=10
-                )
-                # Unload Whisper
-                whisper_manage_url = settings.WHISPER_API_URL.replace("/transcribe", "/manage")
-                requests.post(whisper_manage_url, json={"keep_alive": 0}, timeout=10)
+                try:
+                    requests.post(f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/generate", json={"model": settings.OLLAMA_MODEL, "keep_alive": 0}, timeout=5)
+                    requests.post(f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/embed", json={"model": settings.OLLAMA_EMBED_MODEL, "input": "", "keep_alive": 0}, timeout=5)
+                except Exception: pass
+                
+                try:
+                    whisper_manage_url = settings.WHISPER_API_URL.replace("/transcribe", "/manage")
+                    requests.post(whisper_manage_url, json={"keep_alive": 0}, timeout=5)
+                except Exception: pass
                 
             await asyncio.to_thread(free_models)
             models_are_loaded = False
@@ -136,19 +227,18 @@ async def session_reaper():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # --- STARTUP LOGIC ---
     init_success = run_initialization()
     if not init_success:
         logger.critical("CRITICAL: Initialization failed.")
         sys.exit(1)
         
     reaper_task = asyncio.create_task(session_reaper())
+    monitor_task = asyncio.create_task(model_health_monitor()) # Start the monitor
     
     yield
     
-    # --- SHUTDOWN LOGIC ---
     reaper_task.cancel()
-    # Ensure models are unloaded if the server crashes/stops
+    monitor_task.cancel()
     await execute_unload()
 
 app = FastAPI(title="Smart Campus Assistant API", lifespan=lifespan)
@@ -207,15 +297,15 @@ async def websocket_endpoint(websocket: WebSocket):
         return 
         
     await websocket.accept()
+    active_websockets.add(websocket)
+    
     base_user = user["sub"] 
     now = datetime.now(timezone.utc)
     
-    # Cancel any pending unload if someone just refreshed the page
     global delayed_unload_task
     if delayed_unload_task and not delayed_unload_task.done():
         delayed_unload_task.cancel()
         
-    # 1. Initialize Session and track newness
     is_new_session = False
     if base_user not in active_sessions:
         active_sessions[base_user] = SessionData(
@@ -227,32 +317,30 @@ async def websocket_endpoint(websocket: WebSocket):
         is_new_session = True
         logger.info(f"[SESSION] New session created for {base_user}.")
         
-    # Increment connection counter for this user's session
     active_sessions[base_user].connections += 1
     
     session = active_sessions[base_user]
     thread_id = f"{base_user}-{session.thread_id}"
     logger.info(f"[WEBSOCKET] Connected: {thread_id} ({base_user})")
 
-    # Send handshake to inform client about session state
     await websocket.send_json({
-        "type": "session_init",
-        "thread_id": session.thread_id,
-        "is_new": is_new_session
+        "type": "model_health",
+        "ollama": ollama_health,
+        "whisper": whisper_health
     })
     
-    # Check total global connections across all users
     total_connections = sum(s.connections for s in active_sessions.values())
     if total_connections == 1 and not models_are_loaded:
-        # Fire and forget the model load so it doesn't block the WebSocket!
         asyncio.create_task(load_ai_models())
+    
+    # Track the active processing task so we can cancel it mid-flight
+    active_task = None
     
     try:
         while True:
             data = await websocket.receive_json()
             now = datetime.now(timezone.utc)
             
-            # 2. Check 1-hour rolling idle limit
             time_idle = now - session.last_active
             
             if time_idle > timedelta(hours=1):
@@ -274,33 +362,15 @@ async def websocket_endpoint(websocket: WebSocket):
                 })
                 continue
             
-            # 3. Slide rolling activity window
             session.last_active = now
             msg_type = data.get("type")
             
-            if msg_type == "chat_message":
-                user_query = data.get("query", "")
-                await process_chat_message(user_query, thread_id, websocket)
+            # --- INTERCEPT & CANCEL ON RESET OR STOP RESPONSE ---
+            if msg_type == "reset_session":
+                if active_task and not active_task.done():
+                    active_task.cancel()
+                    logger.info(f"[STREAM] LLM generation aborted manually by {base_user}.")
                 
-            elif msg_type == "voice_message":
-                base64_audio = data.get("audio", "")
-                audio_format = data.get("format", "webm")
-                prepend_text = data.get("prepend_text", "")
-                await process_voice_message(base64_audio, audio_format, prepend_text, thread_id, websocket)
-
-            elif msg_type == "transcribe_audio":
-                base64_audio = data.get("audio", "")
-                audio_format = data.get("format", "webm")
-                await process_transcribe_only(base64_audio, audio_format, websocket)
-
-            elif msg_type == "map_interaction":
-                rooms = data.get("rooms", [])
-                floor = data.get("floor", "B")
-                domain = data.get("domain")
-                timeframe = data.get("timeframe", "now")
-                await handle_map_interaction(rooms, floor, domain, timeframe, thread_id, websocket)
-            
-            elif msg_type == "reset_session":
                 active_sessions[base_user] = SessionData(
                     thread_id=str(uuid.uuid4()),
                     created_at=now,
@@ -310,23 +380,63 @@ async def websocket_endpoint(websocket: WebSocket):
                 session = active_sessions[base_user]
                 thread_id = f"{base_user}-{session.thread_id}"
                 logger.info(f"[SESSION] Manually Reset. New ID: {thread_id}")
+                continue
+
+            elif msg_type == "stop_response":
+                if active_task and not active_task.done():
+                    active_task.cancel()
+                    logger.info(f"[STREAM] LLM response manually stopped by {base_user}.")
+                await websocket.send_json({"type": "resolved"})
+                continue
+            
+            # For new commands, cancel any lingering active tasks to prevent overlapping replies
+            if active_task and not active_task.done():
+                active_task.cancel()
+            
+            # --- ASYNCHRONOUS TASK DISPATCHING ---
+            if msg_type == "chat_message":
+                user_query = data.get("query", "")
+                active_task = asyncio.create_task(
+                    process_chat_message(user_query, thread_id, websocket)
+                )
+                
+            elif msg_type == "voice_message":
+                base64_audio = data.get("audio", "")
+                audio_format = data.get("format", "webm")
+                prepend_text = data.get("prepend_text", "")
+                active_task = asyncio.create_task(
+                    process_voice_message(base64_audio, audio_format, prepend_text, thread_id, websocket)
+                )
+
+            elif msg_type == "transcribe_audio":
+                base64_audio = data.get("audio", "")
+                audio_format = data.get("format", "webm")
+                active_task = asyncio.create_task(
+                    process_transcribe_only(base64_audio, audio_format, websocket)
+                )
+
+            elif msg_type == "map_interaction":
+                rooms = data.get("rooms", [])
+                floor = data.get("floor", "B")
+                domain = data.get("domain")
+                timeframe = data.get("timeframe", "now")
+                active_task = asyncio.create_task(
+                    handle_map_interaction(rooms, floor, domain, timeframe, thread_id, websocket)
+                )
                 
     except WebSocketDisconnect:
         logger.info(f"[WEBSOCKET] Disconnected (Tab Closed): {thread_id}")
     except Exception as e:
         logger.error(f"[WEBSOCKET] Error: {e}")
     finally:
-        # 4. Safe Cleanup
-        # Decrement connection safely whether it was a clean close or an error
+         # Clean up socket on disconnect
+        active_websockets.discard(websocket)
         if base_user in active_sessions:
             active_sessions[base_user].connections -= 1
-            
-            # Only delete the session if ALL tabs for this user are closed
             if active_sessions[base_user].connections <= 0:
                 del active_sessions[base_user]
                 logger.info(f"[SESSION] All tabs closed for {base_user}. Session removed.")
                 
-        # Check if the very last user on the server just left
         total_connections = sum(s.connections for s in active_sessions.values())
         if total_connections == 0:
             delayed_unload_task = asyncio.create_task(schedule_unload())

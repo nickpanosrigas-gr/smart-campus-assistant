@@ -7,7 +7,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent.parent
 ENV_FILE_PATH = ROOT_DIR.parent / ".env"
 
 class Settings(BaseSettings):
-    # ThinksBoard
+    # ThingsBoard
     THINGSBOARD_BASE_URL: str
     THINGSBOARD_USERNAME: str
     THINGSBOARD_PASSWORD: str
@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     # Whisper
     WHISPER_API_URL: str
     WHISPER_MODEL: str
+    WHISPER_COMPUTE_TYPE: str = "int8_float16"
     WHISPER_LANGUAGE: str
     
     # Astral

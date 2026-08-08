@@ -8,7 +8,6 @@ logger = logging.getLogger(__name__)
 
 class WhisperClient:
     def __init__(self):
-        # The local model initialization is removed since we are delegating to the LXC API
         pass
 
     async def transcribe_base64_audio(self, base64_audio: str, file_extension: str = "webm") -> str:
@@ -29,16 +28,20 @@ class WhisperClient:
             url = settings.WHISPER_API_URL
             files = {'file': (filename, audio_bytes, f'audio/{ext}')}
             
-            # Pull model configuration from your settings and add the 1h keep_alive timer
+            # Include model_size, compute_type, and language from settings
             data = {
                 'model_size': settings.WHISPER_MODEL,
+                'compute_type': settings.WHISPER_COMPUTE_TYPE,
                 'language': settings.WHISPER_LANGUAGE,
                 'keep_alive': 3600
             }
 
-            logger.info(f"[WHISPER] Sending audio ({len(audio_bytes)} bytes) to LXC API at {url}...")
+            logger.info(
+                f"[WHISPER] Sending audio ({len(audio_bytes)} bytes) to LXC API at {url} "
+                f"[{settings.WHISPER_MODEL} | {settings.WHISPER_COMPUTE_TYPE}]..."
+            )
 
-            # Wrap the synchronous requests.post call in a thread to prevent blocking the async WebSocket loop
+            # Wrap synchronous requests.post in a thread to avoid blocking the WebSocket event loop
             def fetch_transcription():
                 response = requests.post(url, files=files, data=data, timeout=60)
                 response.raise_for_status()

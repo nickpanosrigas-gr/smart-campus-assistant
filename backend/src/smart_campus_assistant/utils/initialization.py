@@ -16,7 +16,6 @@ def check_qdrant() -> bool:
         headers["api-key"] = settings.QDRANT_API_KEY
         
     try:
-        # A GET request to the root URL of Qdrant returns basic version info
         url = f"{settings.QDRANT_URL.rstrip('/')}/"
         response = requests.get(url, headers=headers, timeout=5)
         response.raise_for_status()
@@ -30,12 +29,10 @@ def check_ollama() -> bool:
     """Verifies if Ollama is online and if the required models are pulled."""
     logger.info(f"Checking Ollama at {settings.OLLAMA_BASE_URL}...")
     try:
-        # Check if Ollama service is running
         base_url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/"
         response = requests.get(base_url, timeout=5)
         response.raise_for_status()
         
-        # Check if the required models are available
         tags_url = f"{settings.OLLAMA_BASE_URL.rstrip('/')}/api/tags"
         tags_response = requests.get(tags_url, timeout=5)
         tags_response.raise_for_status()
@@ -46,7 +43,6 @@ def check_ollama() -> bool:
         embed_ok = False
         
         for m in available_models:
-            # We use startswith to handle tags like "llama3:latest" vs just "llama3"
             if m.startswith(settings.OLLAMA_MODEL):
                 llm_ok = True
             if m.startswith(settings.OLLAMA_EMBED_MODEL):
@@ -69,31 +65,36 @@ def check_ollama() -> bool:
         return False
 
 def check_whisper() -> bool:
-    """Verifies if the Whisper API is online."""
-    logger.info(f"Checking Whisper API at {settings.WHISPER_API_URL}...")
+    """Verifies if the Whisper API container is online."""
+    # Strip path to check container root host
+    base_whisper_url = settings.WHISPER_API_URL.split("/transcribe")[0].rstrip('/')
+    logger.info(f"Checking Whisper API at {base_whisper_url}...")
     try:
-        # Most local whisper APIs will respond to a basic GET request at the root or /v1/models
-        # Adjust the endpoint if your specific Whisper container uses a different health check
-        response = requests.get(settings.WHISPER_API_URL, timeout=5)
-        
-        # We just want to know the server didn't timeout or refuse connection. 
-        # Even a 404/405 means the server is UP.
-        logger.info(f"Whisper API is online (Model Target: {settings.WHISPER_MODEL}).")
+        # Check docs or root path for clean HTTP 200 health check
+        response = requests.get(f"{base_whisper_url}/docs", timeout=5)
+        response.raise_for_status()
+        logger.info(
+            f"Whisper API is online (Model: {settings.WHISPER_MODEL}, Compute: {settings.WHISPER_COMPUTE_TYPE})."
+        )
         return True
     except RequestException as e:
-        logger.error(f"Whisper API is offline or unreachable: {e}")
-        return False
+        # Fallback check on full URL
+        try:
+            requests.get(settings.WHISPER_API_URL, timeout=5)
+            logger.info(
+                f"Whisper API is online (Model: {settings.WHISPER_MODEL}, Compute: {settings.WHISPER_COMPUTE_TYPE})."
+            )
+            return True
+        except RequestException as fallback_e:
+            logger.error(f"Whisper API is offline or unreachable: {fallback_e}")
+            return False
 
 def unload_ollama_embed_model():
-    """
-    Sends a termination signal to Ollama to instantly drop the embedding model from VRAM.
-    """
+    """Sends a termination signal to Ollama to instantly drop the embedding model from VRAM."""
     logger.info(f"Evicting embedding model '{settings.OLLAMA_EMBED_MODEL}' from VRAM...")
     
     base_url = settings.OLLAMA_BASE_URL.rstrip('/')
     url = f"{base_url}/api/generate"
-    
-    # keep_alive: 0 instructs Ollama to immediately unload the model
     payload = {
         "model": settings.OLLAMA_EMBED_MODEL,
         "keep_alive": 0
@@ -125,12 +126,8 @@ def run_initialization() -> bool:
     logger.info("All services are online. Proceeding to Vector DB Synchronization.")
     
     try:
-        # Run the sync process we built earlier
         sync_knowledge_base(data_dir=f"{settings.DATA_DIR}/knowledge")
-        
-        # Unload the embedding model from VRAM now that sync is complete
         unload_ollama_embed_model()
-        
         logger.info("Initialization sequence completed successfully.")
         return True
     except Exception as e:
@@ -138,7 +135,6 @@ def run_initialization() -> bool:
         return False
 
 if __name__ == "__main__":
-    # Allows running this file standalone to quickly test services
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     success = run_initialization()
     if not success:

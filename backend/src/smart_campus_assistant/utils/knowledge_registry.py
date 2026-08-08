@@ -58,6 +58,8 @@ def sync_knowledge_base(data_dir: str = None):
             if not content:
                 continue
                 
+            meta["page_content"] = content 
+            
             full_text = f"{title}\n\n{content}"
 
             documents.append(full_text)

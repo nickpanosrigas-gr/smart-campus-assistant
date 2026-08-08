@@ -1,4 +1,6 @@
 import logging
+import asyncio
+import random
 from typing import Annotated, TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
@@ -6,7 +8,6 @@ from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
-import random
 
 from src.smart_campus_assistant.config.settings import settings
 from src.smart_campus_assistant.agents.supervisor import supervisor_llm, all_campus_tools, supervisor_prompt
@@ -164,7 +165,7 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
     has_called_tools = False # Tracks if we are in the 'Initial' or 'Processing' phase
     
     try:
-        # Wrap the user query in XML tags to enforce the security instructions in the system prompt
+        # Wrap the user query in XML tags
         secure_query = f"<user_input>\n{user_query}\n</user_input>"
         
         async for event in app.astream_events(
@@ -192,16 +193,29 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
                     
                     args = event["data"].get("input", {})
                     
-                    room_id = args.get("target") or args.get("room_id") or args.get("room") or "selected area"
-                    timeframe = args.get("timeframe") or "now"
-                    query_val = args.get("query") or args.get("search_query") or "your request"
+                    # Extract raw room/target value
+                    raw_room = args.get("target") or args.get("room_id") or args.get("room") or "selected area"
+                    
+                    # Safely handle list vs string inputs to prevent 'unhashable type: list' error in sets
+                    if isinstance(raw_room, list):
+                        for r in raw_room:
+                            ui_sync_data["rooms"].add(str(r))
+                        room_id = ", ".join(map(str, raw_room))
+                    else:
+                        if raw_room != "selected area":
+                            ui_sync_data["rooms"].add(str(raw_room))
+                        room_id = str(raw_room)
+
+                    raw_timeframe = args.get("timeframe") or "now"
+                    timeframe = ", ".join(map(str, raw_timeframe)) if isinstance(raw_timeframe, list) else str(raw_timeframe)
+
+                    raw_query = args.get("query") or args.get("search_query") or "your request"
+                    query_val = ", ".join(map(str, raw_query)) if isinstance(raw_query, list) else str(raw_query)
                     
                     logger.info(f"[AGENT TOOL] Executing: {tool_name} | Target: {room_id} | Args: {args}")
                     
                     ui_tool_name = BACKEND_TO_UI_TOOLS.get(tool_name, tool_name)
                     ui_sync_data["tools"].add(ui_tool_name)
-                    if room_id != "selected area":
-                        ui_sync_data["rooms"].add(room_id)
                     
                     # Fetch dynamic phrase or fallback to generic
                     phrases = TOOL_PHRASES.get(tool_name, [f"Running {ui_tool_name}..."])
@@ -260,6 +274,11 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
                         "text": accumulated_text
                     })
                     
+    except asyncio.CancelledError:
+        # Gracefully handle the manual cancellation
+        logger.info(f"[STREAM] Task cancelled for thread {thread_id}. Halting LLM generation.")
+        return
+    
     except Exception as e:
         err_msg = str(e).lower()
         if "close message has been sent" in err_msg or "closed" in err_msg or "disconnect" in err_msg:
@@ -268,7 +287,7 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
             
         logger.error(f"[GRAPH ERROR] {e}")
         try:
-            await websocket.send_json({"type": "text", "text": "\n[System Error: Unable to process request.]"})
+            await websocket.send_json({"type": "text", "text": "\nSystem Error: Unable to process request."})
         except Exception:
             pass 
         
@@ -539,6 +558,10 @@ async def process_voice_message(base64_audio: str, audio_format: str, prepend_te
         # Route the fully combined text to the LLM
         await process_chat_message(final_text, thread_id, websocket)
 
+    except asyncio.CancelledError:
+        logger.info(f"[VOICE] Task cancelled for thread {thread_id}.")
+        return
+    
     except Exception as e:
         logger.error(f"[VOICE PROCESS ERROR] {e}")
         await websocket.send_json({
@@ -578,6 +601,10 @@ async def process_transcribe_only(base64_audio: str, audio_format: str, websocke
             "text": transcribed_text
         })
 
+    except asyncio.CancelledError:
+        logger.info("[TRANSCRIBE] Task cancelled.")
+        return
+    
     except Exception as e:
         logger.error(f"[TRANSCRIBE ONLY ERROR] {e}")
         await websocket.send_json({

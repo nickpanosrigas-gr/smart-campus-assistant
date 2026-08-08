@@ -1,7 +1,7 @@
 // frontend/components/desktop/ChatPanel.tsx
 import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Trash2, ChevronDown, CheckCircle2, Mic, Square, X, ArrowUp } from 'lucide-react';
+import { Trash2, ChevronDown, CheckCircle2, Mic, Square, X, ArrowUp, AlertCircle, AlertTriangle } from 'lucide-react';
 import { SENSOR_COLORS, ROOM_COLORS } from '@/components/map/constants';
 import remarkGfm from 'remark-gfm';
 
@@ -10,6 +10,7 @@ interface ChatPanelProps {
   llmStatus?: { state: string; message: string; tool_name?: string } | null;
   onSendMessage: (msg: string) => void;
   onSendAudio: (audioBase64: string, sendToLLM: boolean, currentInput: string) => void;
+  onStopResponse: () => void;
   activeTools: string[];
   messages: Array<{ sender: "user" | "agent"; text: string }>;
   contextData?: { tokens: number };
@@ -17,6 +18,8 @@ interface ChatPanelProps {
   onResetSession: () => void;
   transcribedText?: string | null;
   onClearTranscribedText?: () => void;
+  ollamaOnline: boolean;
+  whisperOnline: boolean;
 }
 
 export default function ChatPanel({ 
@@ -24,11 +27,14 @@ export default function ChatPanel({
   llmStatus, 
   onSendMessage,
   onSendAudio, 
+  onStopResponse,
   messages, 
   contextData, 
   onResetSession,
   transcribedText,
-  onClearTranscribedText
+  onClearTranscribedText,
+  ollamaOnline,
+  whisperOnline
 }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const [statusHistory, setStatusHistory] = useState<string[]>([]);
@@ -228,7 +234,8 @@ export default function ChatPanel({
   }
 
   const isWorking = appState === 'routing' || appState === 'tool_execution';
-  const isSendDisabled = input.trim().length === 0 || isWorking;
+  // Check if Ollama is online. If offline, block sending message.
+  const isSendDisabled = input.trim().length === 0 || isWorking || !ollamaOnline;
 
   const renderStatusBlock = () => (
     <div className="flex justify-start w-full">
@@ -321,6 +328,21 @@ export default function ChatPanel({
         <div className="absolute top-0 left-0 right-0 h-8 bg-gradient-to-b from-[#0A0A0A] to-transparent z-10 pointer-events-none"></div>
 
         <div className="flex-1 overflow-y-auto px-5 py-6 z-0 chat-scrollbar flex flex-col gap-4">
+          
+          {/* Dynamic Error Pills - Placed right below the top fade gradient */}
+          {!ollamaOnline && (
+            <div className="mx-auto w-fit max-w-[90%] px-4 py-2.5 rounded-full bg-white/5 border border-white/5 shadow-md flex items-center gap-3 mb-2 shrink-0">
+               <AlertCircle size={16} className="text-[#ef4444] shrink-0" />
+               <span className="text-sm font-medium text-[#ef4444]">LLM is currently offline. Chat is disabled.</span>
+            </div>
+          )}
+          {ollamaOnline && !whisperOnline && (
+            <div className="mx-auto w-fit max-w-[90%] px-4 py-2.5 rounded-full bg-white/5 border border-white/5 shadow-md flex items-center gap-3 mb-2 shrink-0">
+               <AlertTriangle size={16} className="text-[#f97316] shrink-0" />
+               <span className="text-sm font-medium text-[#f97316]">Speech-to-text is currently offline.</span>
+            </div>
+          )}
+
           {messages.map((msg, idx) => {
             const isLastMessage = idx === messages.length - 1;
             const isLastAgentMessage = isLastMessage && msg.sender === 'agent';
@@ -378,33 +400,48 @@ export default function ChatPanel({
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Ask HUAssistant..."
-                className="w-full bg-transparent border-none py-3 px-4 pr-28 text-sm text-[#0A0A0A] placeholder-[#0A0A0A] focus:outline-none focus:ring-0 transition-colors font-normal h-full"
-                disabled={isWorking}
+                placeholder={!ollamaOnline ? "Connection lost..." : "Ask HUAssistant..."}
+                disabled={isWorking || !ollamaOnline}
+                className={`w-full bg-transparent border-none py-3 px-4 pr-28 text-sm text-[#0A0A0A] placeholder-[#0A0A0A] focus:outline-none focus:ring-0 transition-colors font-normal h-full ${
+                  !ollamaOnline ? "opacity-50 cursor-not-allowed" : ""
+                }`}
               />
               <div className="absolute right-1.5 flex items-center gap-1.5">
                 <button 
                   type="button" 
                   onClick={startRecording}
-                  disabled={isWorking}
-                  className="w-10 h-10 rounded-2xl bg-black/20 text-[#14C89B] disabled:opacity-40 hover:bg-[#14C89B] hover:text-[#0A0A0A] flex items-center justify-center transition-all duration-300 shadow-sm shrink-0"
-                  title="Record Voice"
+                  disabled={isWorking || !whisperOnline || !ollamaOnline}
+                  className={`w-10 h-10 rounded-2xl bg-black/20 text-[#14C89B] flex items-center justify-center transition-all duration-300 shadow-sm shrink-0 ${
+                    (isWorking || !whisperOnline || !ollamaOnline) ? "opacity-40 cursor-not-allowed" : "hover:bg-[#14C89B] hover:text-[#0A0A0A]"
+                  }`}
+                  title={!whisperOnline ? "Speech-to-text offline" : "Record Voice"}
                 >
                   <Mic size={18} />
                 </button>
                 
-                <button 
-                  type="submit"
-                  disabled={isSendDisabled}
-                  className={`w-10 h-10 rounded-2xl bg-black/20 text-[#14C89B] flex items-center justify-center transition-all duration-300 shadow-sm font-normal shrink-0 ${
-                    isSendDisabled 
-                      ? "opacity-40 cursor-not-allowed" 
-                      : "hover:bg-[#14C89B] hover:text-[#0A0A0A]"
-                  }`}
-                  title="Send Message"
-                >
-                  <ArrowUp size={20} />
-                </button>
+                {isWorking ? (
+                  <button 
+                    type="button"
+                    onClick={onStopResponse}
+                    className="w-10 h-10 rounded-2xl bg-black/20 text-[#14C89B] hover:bg-[#14C89B] hover:text-[#0A0A0A] flex items-center justify-center transition-all duration-300 shadow-sm shrink-0"
+                    title="Stop Response"
+                  >
+                    <Square size={16} className="fill-current" />
+                  </button>
+                ) : (
+                  <button 
+                    type="submit"
+                    disabled={isSendDisabled}
+                    className={`w-10 h-10 rounded-2xl bg-black/20 text-[#14C89B] flex items-center justify-center transition-all duration-300 shadow-sm font-normal shrink-0 ${
+                      isSendDisabled 
+                        ? "opacity-40 cursor-not-allowed" 
+                        : "hover:bg-[#14C89B] hover:text-[#0A0A0A]"
+                    }`}
+                    title="Send Message"
+                  >
+                    <ArrowUp size={20} />
+                  </button>
+                )}
               </div>
             </form>
           ) : (

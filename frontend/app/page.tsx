@@ -206,6 +206,9 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
   });
 
   const [transcribedText, setTranscribedText] = useState<string | null>(null);
+
+  const [ollamaOnline, setOllamaOnline] = useState(true);
+  const [whisperOnline, setWhisperOnline] = useState(true);
   
   const ws = useRef<WebSocket | null>(null);
   const activeLevelRef = useRef(activeLevel);
@@ -359,11 +362,17 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
         // Record activity on any incoming message
         localStorage.setItem("lastActiveTimestamp", Date.now().toString());
 
-        // --- SESSION TIMEOUT HANDLER (Resets State Without Logging Out) ---
+        // --- SESSION TIMEOUT HANDLER ---
         if (data.type === "session_expired") {
           console.log("⏱️ Backend session expired due to inactivity. Resetting dashboard to default state...");
           handleResetSession(false);
           return;
+        }
+
+        // --- HEALTH MONITOR HANDLER ---
+        if (data.type === "model_health") {
+          setOllamaOnline(data.ollama);
+          setWhisperOnline(data.whisper);
         }
 
         if (data.type === "llm_status") {
@@ -506,8 +515,6 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
             }
             return [...prev, { sender: "agent", text: replyText }];
           });
-          setAppState("resolved");
-          setLlmStatus(null); 
         }
 
         if (data.type === "resolved") {
@@ -716,6 +723,9 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
     setTimeframe("now");
     setLastHistoricalTimeframe("24h");
     
+    setOllamaOnline(true);
+    setWhisperOnline(true);
+    
     // Clear state items from localStorage
     localStorage.removeItem("mapSandbox");
     localStorage.removeItem("graphSandboxes");
@@ -728,6 +738,9 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
     localStorage.removeItem("currentViewType");
     localStorage.removeItem("timeframe");
     localStorage.removeItem("lastHistoricalTimeframe");
+    
+    localStorage.removeItem("ollamaOnline");
+    localStorage.removeItem("whisperOnline");
 
     // Re-initialize the active timestamp for the new fresh session
     localStorage.setItem("lastActiveTimestamp", Date.now().toString());
@@ -735,6 +748,14 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
     if (notifyBackend && ws.current && ws.current.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify({ type: "reset_session" }));
     }
+  };
+
+  const handleStopResponse = () => {
+    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
+      ws.current.send(JSON.stringify({ type: "stop_response" }));
+    }
+    setAppState("resolved");
+    setLlmStatus(null);
   };
 
   const activeViewArtifacts: Record<string, any> = {};
@@ -812,6 +833,7 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
           llmStatus={llmStatus}
           onSendMessage={handleUserMessage}
           onSendAudio={handleSendAudio}
+          onStopResponse={handleStopResponse}
           activeTools={activeTools}
           messages={messages}
           contextData={contextData}  
@@ -819,6 +841,8 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
           onResetSession={() => handleResetSession(true)}
           transcribedText={transcribedText}
           onClearTranscribedText={() => setTranscribedText(null)}
+          ollamaOnline={ollamaOnline}
+          whisperOnline={whisperOnline}
         />
       </div>
     </main>
