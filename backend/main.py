@@ -247,8 +247,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "https://hua.pali.autos",
-        "*"
+        "https://hua.pali.autos"
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -275,7 +274,7 @@ async def login(request: GoogleAuthRequest, response: Response):
         value=token,
         httponly=True,
         samesite="lax",
-        secure=True, # Set to True in production (HTTPS)
+        secure=True,
         max_age=24 * 3600
     )
     return {"message": "Authenticated successfully", "email": user_info["email"]}
@@ -448,5 +447,7 @@ if __name__ == "__main__":
         host="0.0.0.0", 
         port=8000, 
         reload=False,
-        log_config=None
+        log_config=None,
+        proxy_headers=True,
+        forwarded_allow_ips="*"
     )
