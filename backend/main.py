@@ -247,7 +247,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",
-        "https://hua.pali.autos"
+        "https://hua.pali.autos",
+        "*"
     ],
     allow_credentials=True,
     allow_methods=["*"],
