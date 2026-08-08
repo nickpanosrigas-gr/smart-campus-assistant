@@ -274,7 +274,7 @@ async def login(request: GoogleAuthRequest, response: Response):
         value=token,
         httponly=True,
         samesite="lax",
-        secure=False, # Set to True in production (HTTPS)
+        secure=True, # Set to True in production (HTTPS)
         max_age=24 * 3600
     )
     return {"message": "Authenticated successfully", "email": user_info["email"]}
