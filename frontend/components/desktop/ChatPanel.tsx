@@ -1,7 +1,7 @@
 // frontend/components/desktop/ChatPanel.tsx
 import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { Trash2, ChevronDown, CheckCircle2, Mic, Square, X, ArrowUp, AlertCircle, AlertTriangle } from 'lucide-react';
+import { Trash2, ChevronDown, CheckCircle2, Mic, Square, X, ArrowUp, AlertCircle, AlertTriangle, LogOut } from 'lucide-react';
 import { SENSOR_COLORS } from '@/components/map/constants';
 import remarkGfm from 'remark-gfm';
 import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
@@ -28,6 +28,7 @@ interface ChatPanelProps {
   activeLevel?: string;
   selectedRooms?: string[];
   timeframe?: string;
+  onLogout?: () => void;
 }
 
 export default function ChatPanel({ 
@@ -46,7 +47,8 @@ export default function ChatPanel({
   userName,
   activeLevel,
   selectedRooms,
-  timeframe
+  timeframe,
+  onLogout
 }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const [statusHistory, setStatusHistory] = useState<string[]>([]);
@@ -518,7 +520,7 @@ export default function ChatPanel({
   );
 
   return (
-    <div className="flex flex-col h-full bg-[#0A0A0A] border-2 border-[#0A664F] border-b-0 rounded-t-3xl rounded-b-none overflow-hidden shadow-[0_-10px_30px_rgba(0,0,0,0.5)] relative">
+    <div className="flex flex-col h-full bg-[#0A0A0A] md:border-2 md:border-[#0A664F] md:border-b-0 md:rounded-t-3xl rounded-none overflow-hidden md:shadow-[0_-10px_30px_rgba(0,0,0,0.5)] relative">
       
       {/* --- TOP: STATIC CONTEXT PILL SECTION --- */}
       <div className="px-4 pt-4 z-20 relative flex-shrink-0">
@@ -533,7 +535,7 @@ export default function ChatPanel({
                 </span>
               </div>
               
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 sm:gap-3">
                  <span 
                    className="text-xs font-mono font-bold bg-black/20 px-3 py-2 rounded-full shadow-inner"
                    style={{ color: statusColor }}
@@ -552,6 +554,21 @@ export default function ChatPanel({
                  >
                    <Trash2 size={18} />
                  </button>
+
+                 {/* Mobile-only logout button */}
+                 {onLogout && (
+                   <button
+                     type="button"
+                     onClick={(e) => {
+                       e.stopPropagation();
+                       onLogout();
+                     }}
+                     className="md:hidden w-10 h-10 rounded-2xl bg-[#8E2F3E] text-white flex items-center justify-center shrink-0 transition-all hover:bg-[#C84B5E] hover:text-[#0A0A0A] shadow-md cursor-pointer"
+                     title="Log Out"
+                   >
+                     <LogOut size={18} />
+                   </button>
+                 )}
               </div>
             </div>
             
