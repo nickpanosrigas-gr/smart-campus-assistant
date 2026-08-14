@@ -210,6 +210,14 @@ export default function ChatPanel({
   };
 
   const startRecording = async () => {
+    // Explicitly blur any focused input to prevent keyboard bounce
+    if (textareaRef.current) {
+      textareaRef.current.blur();
+    }
+    if (document.activeElement instanceof HTMLElement) {
+      document.activeElement.blur();
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -326,14 +334,11 @@ export default function ChatPanel({
   const pct = MAX_TOKENS > 0 ? (tokens / MAX_TOKENS) * 100 : 0;
   
   let statusColor = SENSOR_COLORS?.good || "#14C89B"; 
-  let statusText = "Good";
   
   if (pct >= 85) {
     statusColor = SENSOR_COLORS?.error || "#ef4444";
-    statusText = "Error";
   } else if (pct >= 50) {
     statusColor = SENSOR_COLORS?.warning || "#f97316";
-    statusText = "Warning";
   }
 
   const isWorking = appState === 'routing' || appState === 'tool_execution';
@@ -665,15 +670,23 @@ export default function ChatPanel({
                   marginBottom: "16px",
                   lineHeight: "20px",
                   minHeight: "20px",
-                  maxHeight: "100px", // Exactly 5 lines (5 * 20px line-height)
+                  maxHeight: "100px",
                 }}
               />
               
-              {/* Pinned to the bottom-right so they don't float upwards when the textarea expands */}
-              <div className="absolute right-0 bottom-0 flex items-center gap-1.5 h-[52px] pr-1.5">
+              {/* Button Cluster - Traps click/touch events from reaching the form */}
+              <div 
+                className="absolute right-0 bottom-0 flex items-center gap-1.5 h-[52px] pr-1.5"
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.preventDefault()}
+              >
                 <button 
                   type="button" 
-                  onClick={startRecording}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    startRecording();
+                  }}
+                  onMouseDown={(e) => e.preventDefault()}
                   disabled={isWorking || !whisperOnline || !ollamaOnline}
                   className={`w-10 h-10 rounded-2xl bg-black/20 text-[#14C89B] flex items-center justify-center transition-all duration-300 shadow-sm shrink-0 ${
                     (isWorking || !whisperOnline || !ollamaOnline) ? "opacity-40 cursor-not-allowed" : "hover:bg-[#14C89B] hover:text-[#0A0A0A]"
@@ -686,7 +699,11 @@ export default function ChatPanel({
                 {isWorking ? (
                   <button 
                     type="button"
-                    onClick={onStopResponse}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onStopResponse();
+                    }}
+                    onMouseDown={(e) => e.preventDefault()}
                     className="w-10 h-10 rounded-2xl bg-black/20 text-[#14C89B] hover:bg-[#14C89B] hover:text-[#0A0A0A] flex items-center justify-center transition-all duration-300 shadow-sm shrink-0"
                     title="Stop Response"
                   >
@@ -695,6 +712,7 @@ export default function ChatPanel({
                 ) : (
                   <button 
                     type="submit"
+                    onClick={(e) => e.stopPropagation()}
                     disabled={isSendDisabled}
                     className={`w-10 h-10 rounded-2xl bg-black/20 text-[#14C89B] flex items-center justify-center transition-all duration-300 shadow-sm font-normal shrink-0 ${
                       isSendDisabled 
