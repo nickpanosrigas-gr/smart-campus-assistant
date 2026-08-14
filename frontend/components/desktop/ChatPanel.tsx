@@ -55,7 +55,6 @@ export default function ChatPanel({
   const [isStatusLogExpanded, setIsStatusLogExpanded] = useState(false);
   
   const [selectedPromptTool, setSelectedPromptTool] = useState<string>("Air Quality");
-  // Updated interface to separate greeting_time and name, and include templates
   const [welcomeData, setWelcomeData] = useState<{ 
     greeting_time: string, 
     name: string, 
@@ -78,25 +77,17 @@ export default function ChatPanel({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const MAX_TOKENS = Number(process.env.OLLAMA_NUM_CTX) || 8192;
 
-  // --- NEW: Auto-expanding Textarea Logic ---
   useEffect(() => {
     const textarea = textareaRef.current;
     if (textarea) {
-      // Reset height to base height (1 line = 20px) to calculate shrinkage if user deletes text
       textarea.style.height = '20px';
       const scrollHeight = textarea.scrollHeight;
-      
-      // Cap the height to exactly 5 lines (100px)
       const newHeight = Math.min(scrollHeight, 100);
       textarea.style.height = `${newHeight}px`;
-      
-      // Hide the scrollbar unless we exceed the 5-line limit
       textarea.style.overflowY = scrollHeight > 100 ? 'auto' : 'hidden';
     }
   }, [input]);
   
-  // Update the existing scroll-to-bottom effect to also trigger on 'input' 
-  // so the chat scrolls if the text box pushes the messages up.
   useEffect(() => {
     const timeout = setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -106,12 +97,11 @@ export default function ChatPanel({
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault(); // Prevent default new line
+      e.preventDefault(); 
       handleSubmit(e);
     }
   };
 
-  // --- NEW: Floor-level tool disablement logic ---
   const isToolDisabled = (tool: string) => {
     const level = activeLevel || "B";
     if (tool === "Schedule" && ["B", "0", "-1", "-2", "-3"].includes(level)) return true;
@@ -119,7 +109,6 @@ export default function ChatPanel({
     return false;
   };
 
-  // 1. Initial tool selection on mount (ensuring we pick an enabled tool)
   useEffect(() => {
     const available = ALL_TOGGLES.filter(t => !isToolDisabled(t));
     if (available.length > 0) {
@@ -128,7 +117,6 @@ export default function ChatPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 2. Watch for floor changes to auto-kick disabled tools
   useEffect(() => {
     if (isToolDisabled(selectedPromptTool)) {
       const available = ALL_TOGGLES.filter(t => !isToolDisabled(t));
@@ -154,7 +142,6 @@ export default function ChatPanel({
             floor: activeLevel || "B",
             rooms: selectedRooms || [],
             timeframe: timeframe || "now",
-            // Pass previous state to preserve randomness on room clicks
             prev_msg: welcomeData?.welcome_message,
             prev_templates: welcomeData?.templates
           })
@@ -212,7 +199,6 @@ export default function ChatPanel({
     onResetSession();
   };
 
-  // --- AUDIO RECORDING & VISUALIZER LOGIC ---
   const cleanupAudio = () => {
     if (animationRef.current) cancelAnimationFrame(animationRef.current);
     if (audioContextRef.current?.state !== 'closed') audioContextRef.current?.close();
@@ -336,8 +322,6 @@ export default function ChatPanel({
     setIsRecording(false);
   };
 
-  // ------------------------------------------
-
   const tokens = contextData?.tokens || 0;
   const pct = MAX_TOKENS > 0 ? (tokens / MAX_TOKENS) * 100 : 0;
   
@@ -358,7 +342,6 @@ export default function ChatPanel({
   const renderWelcomeScreen = () => {
     if (!welcomeData) return <div className="flex-1" />;
 
-    // --- NEW: Split and sort tools for the bottom pills ---
     const unselectedTools = ALL_TOGGLES.filter(t => t !== selectedPromptTool);
     const enabledUnavailable = unselectedTools.filter(t => !isToolDisabled(t));
     const disabledUnavailable = unselectedTools.filter(t => isToolDisabled(t));
@@ -371,8 +354,6 @@ export default function ChatPanel({
         exit={{ opacity: 0, y: -20, filter: "blur(5px)" }}
         className="flex flex-col h-full px-2 w-full"
       >
-        
-        {/* --- TOP SECTION: Typography matched identically --- */}
         <div className="flex-1 flex flex-col items-center justify-center text-center gap-1.5">
           <h2 className="text-[clamp(1.25rem,1.5vw,1.5rem)] font-normal text-[#14C89B] tracking-wide">
             {welcomeData.greeting_time}, <span className="font-bold">{welcomeData.name}</span>!
@@ -382,7 +363,6 @@ export default function ChatPanel({
           </p>
         </div>
 
-        {/* --- BOTTOM SECTION: Questions & Tools --- */}
         <div className="flex flex-col w-full pb-0">
           <LayoutGroup>
             <div className="relative w-full flex flex-col mb-6">
@@ -432,7 +412,6 @@ export default function ChatPanel({
                 </motion.div>
               </AnimatePresence>
 
-              {/* Absolute Flying Text Overlay */}
               <div className="absolute inset-0 flex flex-col items-center justify-end pb-5 pointer-events-none z-20">
                 <motion.div
                   key={`selected-${selectedPromptTool}`}
@@ -451,7 +430,6 @@ export default function ChatPanel({
 
             </div>
 
-            {/* Grid for Unselected Tools */}
             <div className="flex justify-center w-full z-0">
               <div className="flex flex-wrap justify-center gap-2 bg-[#1A1A1A]/80 border border-[#333333] rounded-3xl p-2.5 shadow-inner w-full">
                 {sortedUnavailable.map(toggle => {
@@ -523,7 +501,7 @@ export default function ChatPanel({
     <div className="flex flex-col h-full bg-[#0A0A0A] md:border-2 md:border-[#0A664F] md:border-b-0 md:rounded-t-3xl rounded-none overflow-hidden md:shadow-[0_-10px_30px_rgba(0,0,0,0.5)] relative">
       
       {/* --- TOP: STATIC CONTEXT PILL SECTION --- */}
-      <div className="px-4 pt-4 z-20 relative flex-shrink-0">
+      <div className="px-4 pt-[calc(1rem+env(safe-area-inset-top,0px))] md:pt-4 z-20 relative flex-shrink-0">
         <div className="w-full bg-[#0A664F] border border-[#14C89B]/20 rounded-2xl overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.3)]">
           <div className="p-4 flex flex-col w-full">
             <div className="flex justify-between w-full items-center mb-3.5">
@@ -658,7 +636,7 @@ export default function ChatPanel({
       </div>
 
       {/* --- BOTTOM: INPUT FORM PILL --- */}
-      <div className="px-4 pb-4 z-20 relative flex-shrink-0">
+      <div className="px-4 pb-[calc(1rem+env(safe-area-inset-bottom,0px))] md:pb-4 z-20 relative flex-shrink-0">
         <div className="relative flex items-end rounded-3xl overflow-hidden shadow-[0_-10px_30px_rgba(0,0,0,0.3)] transition-all duration-300 bg-[#0A664F] border border-[#14C89B]/20 min-h-[64px] p-1.5">
           {!isRecording ? (
             <form 
@@ -677,7 +655,7 @@ export default function ChatPanel({
                 rows={1}
                 placeholder={!ollamaOnline ? "Connection lost..." : "Ask HUAssistant..."}
                 disabled={isWorking || !ollamaOnline}
-                className={`w-full bg-transparent border-none px-4 pr-28 text-sm text-[#0A0A0A] placeholder-[#0A0A0A] focus:outline-none focus:ring-0 font-normal resize-none chat-scrollbar ${
+                className={`w-full bg-transparent border-none px-4 pr-28 text-base md:text-sm text-[#0A0A0A] placeholder-[#0A0A0A] focus:outline-none focus:ring-0 font-normal resize-none chat-scrollbar ${
                   !ollamaOnline ? "opacity-50 cursor-not-allowed" : ""
                 }`}
                 style={{

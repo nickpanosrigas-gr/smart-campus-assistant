@@ -102,7 +102,7 @@ export default function Page() {
 
   if (user === undefined) {
     return (
-      <div className="w-full h-screen flex items-center justify-center bg-[#020604]">
+      <div className="w-full h-[100dvh] flex items-center justify-center bg-[#020604]">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-500"></div>
       </div>
     );
@@ -783,7 +783,7 @@ function DesktopDashboard({ user }: { user: { sub: string; name?: string; pictur
 
   return (
     <main 
-      className="w-full h-screen flex overflow-hidden text-[#A3B8B2]"
+      className="fixed inset-0 w-full h-[100dvh] flex overflow-hidden text-[#A3B8B2] overscroll-none"
       style={{
         background: "radial-gradient(circle at 30% 20%, #064E3B 0%, #020604 50%, #000000 100%)"
       }}
