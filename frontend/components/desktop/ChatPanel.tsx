@@ -73,7 +73,41 @@ export default function ChatPanel({
   const chunksRef = useRef<Blob[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const MAX_TOKENS = Number(process.env.OLLAMA_NUM_CTX) || 8192;
+
+  // --- NEW: Auto-expanding Textarea Logic ---
+  useEffect(() => {
+    const textarea = textareaRef.current;
+    if (textarea) {
+      // Reset height to base height (1 line = 20px) to calculate shrinkage if user deletes text
+      textarea.style.height = '20px';
+      const scrollHeight = textarea.scrollHeight;
+      
+      // Cap the height to exactly 5 lines (100px)
+      const newHeight = Math.min(scrollHeight, 100);
+      textarea.style.height = `${newHeight}px`;
+      
+      // Hide the scrollbar unless we exceed the 5-line limit
+      textarea.style.overflowY = scrollHeight > 100 ? 'auto' : 'hidden';
+    }
+  }, [input]);
+  
+  // Update the existing scroll-to-bottom effect to also trigger on 'input' 
+  // so the chat scrolls if the text box pushes the messages up.
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, 50);
+    return () => clearTimeout(timeout);
+  }, [messages, appState, isStatusLogExpanded, statusHistory, input]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault(); // Prevent default new line
+      handleSubmit(e);
+    }
+  };
 
   // --- NEW: Floor-level tool disablement logic ---
   const isToolDisabled = (tool: string) => {
@@ -608,20 +642,40 @@ export default function ChatPanel({
 
       {/* --- BOTTOM: INPUT FORM PILL --- */}
       <div className="px-4 pb-4 z-20 relative flex-shrink-0">
-        <div className="relative flex items-center rounded-3xl overflow-hidden shadow-[0_-10px_30px_rgba(0,0,0,0.3)] transition-all duration-300 bg-[#0A664F] border border-[#14C89B]/20 h-[64px] p-1.5">
+        <div className="relative flex items-end rounded-3xl overflow-hidden shadow-[0_-10px_30px_rgba(0,0,0,0.3)] transition-all duration-300 bg-[#0A664F] border border-[#14C89B]/20 min-h-[64px] p-1.5">
           {!isRecording ? (
-            <form onSubmit={handleSubmit} className="flex w-full items-center h-full">
-              <input
-                type="text"
+            <form 
+              onSubmit={handleSubmit} 
+              className="flex w-full items-end relative"
+              onClick={() => textareaRef.current?.focus()}
+            >
+              <textarea
+                ref={textareaRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                spellCheck={true}
+                autoCorrect="on"
+                autoCapitalize="sentences"
+                rows={1}
                 placeholder={!ollamaOnline ? "Connection lost..." : "Ask HUAssistant..."}
                 disabled={isWorking || !ollamaOnline}
-                className={`w-full bg-transparent border-none py-3 px-4 pr-28 text-sm text-[#0A0A0A] placeholder-[#0A0A0A] focus:outline-none focus:ring-0 transition-colors font-normal h-full ${
+                className={`w-full bg-transparent border-none px-4 pr-28 text-sm text-[#0A0A0A] placeholder-[#0A0A0A] focus:outline-none focus:ring-0 font-normal resize-none chat-scrollbar ${
                   !ollamaOnline ? "opacity-50 cursor-not-allowed" : ""
                 }`}
+                style={{
+                  paddingTop: "0",
+                  paddingBottom: "0",
+                  marginTop: "16px",
+                  marginBottom: "16px",
+                  lineHeight: "20px",
+                  minHeight: "20px",
+                  maxHeight: "100px", // Exactly 5 lines (5 * 20px line-height)
+                }}
               />
-              <div className="absolute right-1.5 flex items-center gap-1.5">
+              
+              {/* Pinned to the bottom-right so they don't float upwards when the textarea expands */}
+              <div className="absolute right-0 bottom-0 flex items-center gap-1.5 h-[52px] pr-1.5">
                 <button 
                   type="button" 
                   onClick={startRecording}
@@ -660,7 +714,7 @@ export default function ChatPanel({
               </div>
             </form>
           ) : (
-            <div className="flex w-full items-center gap-1.5 h-full">
+            <div className="flex w-full items-center gap-1.5 min-h-[52px]">
               <button 
                 type="button" 
                 onClick={cancelRecording}
