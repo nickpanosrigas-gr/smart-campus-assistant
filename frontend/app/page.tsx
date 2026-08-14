@@ -1,5 +1,7 @@
+// frontend/app/page.tsx
 "use client";
 import { useState, useEffect, useRef, useMemo } from "react";
+import { motion } from "framer-motion";
 import LandingPage from "@/components/LandingPage";
 import ChatPanel from "@/components/desktop/ChatPanel";
 import MapStage from "@/components/desktop/MapStage";
@@ -119,6 +121,25 @@ export default function Page() {
 // 2. MAIN DASHBOARD COMPONENT
 // ==========================================
 function DesktopDashboard({ user }: { user: { sub: string; name?: string; picture?: string } }) {
+
+  // --- MOBILE DETECTION ---
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 1024);
+    handleResize(); // Check on mount
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  // --- MOBILE BOTTOM SHEET STATE ---
+  const [sheetHeight, setSheetHeight] = useState("20vh");
+  const handlePanEnd = (e: any, info: any) => {
+    if (info.offset.y < -40) {
+      setSheetHeight("60vh"); // Swiped Up
+    } else if (info.offset.y > 40) {
+      setSheetHeight("20vh"); // Swiped Down
+    }
+  };
 
   const [appState, setAppState] = useState<AppState>("idle");
   const [llmStatus, setLlmStatus] = useState<LLMStatus | null>(() => {
@@ -771,6 +792,111 @@ function DesktopDashboard({ user }: { user: { sub: string; name?: string; pictur
     });
   }
 
+  // --- MOBILE RENDER ---
+  if (isMobile) {
+    return (
+      <main 
+        className="relative w-full h-screen overflow-hidden text-[#A3B8B2]"
+        style={{ background: "radial-gradient(circle at 30% 20%, #064E3B 0%, #020604 50%, #000000 100%)" }}
+      >
+        {/* SIDEBAR OVERLAY: Fixed left, expands over content due to z-50 */}
+        <div className="absolute top-0 left-0 h-full z-50 shadow-2xl">
+          <Sidebar 
+            activeLevel={activeLevel}
+            setActiveLevel={handleFloorChange}
+            selectedRooms={selectedRooms}
+            onRoomToggle={handleRoomSelect}
+            activeTools={activeTools}
+            floorStates={mapSandbox}
+            timeframe={timeframe}
+            onTimeframeChange={handleTimeframeChange}
+            viewMode={currentViewType}
+            onViewModeChange={handleViewModeChange}
+            artifactCache={artifactCache}
+            lastHistoricalTimeframe={lastHistoricalTimeframe}
+            userEmail={user.sub} 
+            userPicture={user.picture}
+            onLogout={async () => {
+              localStorage.clear();
+              try {
+                await fetch(`${API_BASE_URL}/api/auth/logout`, { method: "POST", credentials: "include" });
+                window.location.reload();
+              } catch (err) {
+                console.error("Failed to logout:", err);
+              }
+            }}
+          />
+        </div>
+
+        {/* MAIN CONTENT: Offset by the 88px closed sidebar width */}
+        <div className="absolute top-0 right-0 bottom-0 left-[88px] flex flex-col">
+          
+          {/* MAP STAGE: flex-1 ensures it fills whatever space the chat doesn't use */}
+          <div className="flex-1 w-full relative z-0 overflow-hidden">
+            <MapStage 
+              appState={appState} 
+              activeTools={activeTools}
+              activeLevel={activeLevel}
+              setActiveLevel={handleFloorChange} 
+              selectedRooms={selectedRooms}
+              onRoomToggle={handleRoomSelect}
+              viewMode={currentViewType} 
+              setViewMode={handleViewModeChange}
+              isZoomed={isZoomed}
+              setIsZoomed={(z) => updateMapFloor(activeLevel, { isZoomed: z })}
+              onToggleSelect={handleToggleSelect}
+              roomHealthData={currentRoomHealthData}
+              roomArtifacts={activeViewArtifacts} 
+              allArtifacts={artifactCache}
+              timeframe={timeframe}
+            />
+          </div>
+
+          {/* CHAT PANEL: Animated Bottom Sheet */}
+          <motion.div
+            onPanEnd={handlePanEnd}
+            animate={{ height: sheetHeight }}
+            transition={{ type: "spring", bounce: 0.2, duration: 0.5 }}
+            className="w-full z-40 relative flex flex-col"
+          >
+            {/* Invisible swipe target overlapping the ChatPanel's top pill */}
+            <div 
+              className="absolute top-0 left-0 w-full h-12 z-50 flex justify-center items-start pt-3 cursor-grab active:cursor-grabbing"
+              style={{ touchAction: "none" }} // Prevents browser scrolling while swiping
+            >
+              {/* Visual drag pill indicator */}
+              <div className="w-12 h-1.5 bg-[#14C89B]/50 hover:bg-[#14C89B] transition-colors rounded-full" />
+            </div>
+            
+            <div className="flex-1 w-full h-full overflow-hidden pointer-events-auto">
+              <ChatPanel 
+                appState={appState} 
+                llmStatus={llmStatus}
+                onSendMessage={handleUserMessage}
+                onSendAudio={handleSendAudio}
+                onStopResponse={handleStopResponse}
+                activeTools={activeTools}
+                messages={messages}
+                contextData={contextData}  
+                sessionTools={sessionTools} 
+                onResetSession={() => handleResetSession(true)}
+                transcribedText={transcribedText}
+                onClearTranscribedText={() => setTranscribedText(null)}
+                ollamaOnline={ollamaOnline}
+                whisperOnline={whisperOnline}
+                userName={user?.name?.split(' ')[0]} 
+                activeLevel={activeLevel}
+                selectedRooms={selectedRooms}
+                timeframe={timeframe}
+              />
+            </div>
+          </motion.div>
+        </div>
+      </main>
+    );
+  }
+
+  // --- DESKTOP RENDER ---
   return (
     <main 
       className="w-full h-screen flex overflow-hidden text-[#A3B8B2]"
