@@ -79,7 +79,7 @@ function isCacheValid(): boolean {
 // 1. MAIN APP WRAPPER (Handles Auth State)
 // ==========================================
 export default function Page() {
-  const [user, setUser] = useState<{ sub: string; picture?: string } | null | undefined>(undefined);
+  const [user, setUser] = useState<{ sub: string; name?: string; picture?: string } | null | undefined>(undefined);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -118,7 +118,7 @@ export default function Page() {
 // ==========================================
 // 2. MAIN DASHBOARD COMPONENT
 // ==========================================
-function DesktopDashboard({ user }: { user: { sub: string; picture?: string } }) {
+function DesktopDashboard({ user }: { user: { sub: string; name?: string; picture?: string } }) {
 
   const [appState, setAppState] = useState<AppState>("idle");
   const [llmStatus, setLlmStatus] = useState<LLMStatus | null>(() => {
@@ -300,6 +300,9 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
     if (activeTools.length === 0 || selectedRooms.length === 0) return;
 
     activeTools.forEach(tool => {
+      // 1. Create an array to batch all rooms that need fetching
+      const roomsToFetch: string[] = [];
+
       selectedRooms.forEach(room => {
         const roomMap = artifactCache[room] || {};
         const hasData = Object.keys(roomMap).some(
@@ -309,19 +312,24 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
         const requestKey = `${room}-${tool}-${timeframe}`.toLowerCase();
 
         if (!hasData && !inFlightRequests.current.has(requestKey)) {
-          console.log(`[SELF-HEALING FETCH] Requesting missing telemetry: Room ${room} | Tool: ${tool} | TF: ${timeframe}`);
-          
+          // 2. Add to our batch array and mark as in-flight
+          roomsToFetch.push(room);
           inFlightRequests.current.add(requestKey);
-
-          ws.current?.send(JSON.stringify({
-            type: "map_interaction",
-            rooms: [room],
-            floor: activeLevel,
-            domain: tool,
-            timeframe: timeframe
-          }));
         }
       });
+
+      // 3. Send ONE WebSocket message containing all missing rooms
+      if (roomsToFetch.length > 0) {
+        console.log(`[SELF-HEALING FETCH] Requesting missing telemetry: Rooms [${roomsToFetch.join(', ')}] | Tool: ${tool} | TF: ${timeframe}`);
+        
+        ws.current?.send(JSON.stringify({
+          type: "map_interaction",
+          rooms: roomsToFetch,
+          floor: activeLevel,
+          domain: tool,
+          timeframe: timeframe
+        }));
+      }
     });
   }, [timeframe, selectedRooms, activeTools, activeLevel, artifactCache]);
 
@@ -677,31 +685,24 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
   };
 
   const handleFloorChange = (newLevel: string) => {
-    // 1. Always update the active level for both modes
     setActiveLevel(newLevel);
 
-    // 2. Apply auto-restore logic ONLY when in Graph view
     if (isGraphMode) {
       const histTf = timeframe as HistoricalTimeframe;
       const currentBox = graphSandboxes[histTf] || { selectedRoom: null, roomTools: {} };
       const currentSelectedRoom = currentBox.selectedRoom;
 
-      // Check if the current room does NOT belong to the newly clicked floor
       if (!currentSelectedRoom || getFloorForRoom(currentSelectedRoom) !== newLevel) {
         
-        // Find all rooms on this new floor that have tools cached in the graph sandbox
         const floorRoomsWithData = Object.keys(currentBox.roomTools || {}).filter(
           (roomId) => getFloorForRoom(roomId) === newLevel
         );
 
         if (floorRoomsWithData.length > 0) {
-          // Auto-select a previously interacted room on this floor
-          // (Grabbing the last item in the array restores the most recently cached one)
           updateGraphSandbox(histTf, { 
             selectedRoom: floorRoomsWithData[floorRoomsWithData.length - 1] 
           });
         } else {
-          // If no data exists for this floor yet, clear the selection to prompt "Select a Room"
           updateGraphSandbox(histTf, { selectedRoom: null });
         }
       }
@@ -726,7 +727,6 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
     setOllamaOnline(true);
     setWhisperOnline(true);
     
-    // Clear state items from localStorage
     localStorage.removeItem("mapSandbox");
     localStorage.removeItem("graphSandboxes");
     localStorage.removeItem("activeLevel");
@@ -738,11 +738,9 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
     localStorage.removeItem("currentViewType");
     localStorage.removeItem("timeframe");
     localStorage.removeItem("lastHistoricalTimeframe");
-    
     localStorage.removeItem("ollamaOnline");
     localStorage.removeItem("whisperOnline");
 
-    // Re-initialize the active timestamp for the new fresh session
     localStorage.setItem("lastActiveTimestamp", Date.now().toString());
 
     if (notifyBackend && ws.current && ws.current.readyState === WebSocket.OPEN) {
@@ -843,6 +841,10 @@ function DesktopDashboard({ user }: { user: { sub: string; picture?: string } })
           onClearTranscribedText={() => setTranscribedText(null)}
           ollamaOnline={ollamaOnline}
           whisperOnline={whisperOnline}
+          userName={user?.name?.split(' ')[0]} 
+          activeLevel={activeLevel}
+          selectedRooms={selectedRooms}
+          timeframe={timeframe}
         />
       </div>
     </main>

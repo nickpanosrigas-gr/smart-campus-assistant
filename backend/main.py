@@ -20,9 +20,17 @@ from src.smart_campus_assistant.graph.workflow import (
     process_chat_message, handle_map_interaction, process_voice_message, process_transcribe_only
 )
 from src.smart_campus_assistant.config.settings import settings
+from src.smart_campus_assistant.utils.welcome_screen import generate_welcome_payload
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# --- Suppress Uvicorn Access Logs for /api/welcome ---
+class WelcomeLogFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/api/welcome" not in record.getMessage()
+
+logging.getLogger("uvicorn.access").addFilter(WelcomeLogFilter())
 
 # --- MODEL LIFECYCLE MANAGEMENT ---
 
@@ -288,7 +296,40 @@ async def logout(response: Response):
 async def get_me(current_user: dict = Depends(get_current_user)):
     return current_user
 
-# --- WEBSOCKET ENDPOINT ---
+class WelcomeRequest(BaseModel):
+    tool: str
+    floor: str = "B"
+    rooms: list[str] = []
+    timeframe: str = "now"
+    prev_msg: str | None = None
+    prev_templates: list[str] | None = None
+
+@app.post("/api/welcome")
+async def get_welcome_screen(request: WelcomeRequest, current_user: dict = Depends(get_current_user)):
+    user_email = current_user.get("sub", "Unknown")
+    full_name = current_user.get("name", "")
+    
+    if full_name:
+        first_name = full_name.split(" ")[0]
+    else:
+        first_name = user_email.split("@")[0].capitalize()
+
+    # Custom structured logging (Uvicorn's default log is now filtered out)
+    logger.info(
+        f"[WELCOME SCREEN] User: {user_email} | Tool: {request.tool} | Floor: {request.floor} | Rooms: {request.rooms} | Timeframe: {request.timeframe}"
+    )
+
+    from src.smart_campus_assistant.utils.welcome_screen import generate_welcome_payload
+    payload = generate_welcome_payload(
+        name=first_name,
+        tool=request.tool,
+        floor=request.floor,
+        rooms=request.rooms,
+        timeframe=request.timeframe,
+        prev_msg=request.prev_msg,
+        prev_templates=request.prev_templates
+    )
+    return payload
 
 @app.websocket("/ws/chat")
 async def websocket_endpoint(websocket: WebSocket):

@@ -2,8 +2,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Trash2, ChevronDown, CheckCircle2, Mic, Square, X, ArrowUp, AlertCircle, AlertTriangle } from 'lucide-react';
-import { SENSOR_COLORS, ROOM_COLORS } from '@/components/map/constants';
+import { SENSOR_COLORS } from '@/components/map/constants';
 import remarkGfm from 'remark-gfm';
+import { motion, AnimatePresence, LayoutGroup } from 'framer-motion';
+
+const API_BASE_URL = process.env.NODE_ENV === "production" ? "" : "http://localhost:8000";
+const ALL_TOGGLES = ["Occupancy", "Climate", "Air Quality", "Doors/Windows", "Lights", "Diagnostics", "Schedule"];
 
 interface ChatPanelProps {
   appState: "idle" | "routing" | "tool_execution" | "resolved";
@@ -20,6 +24,10 @@ interface ChatPanelProps {
   onClearTranscribedText?: () => void;
   ollamaOnline: boolean;
   whisperOnline: boolean;
+  userName?: string;
+  activeLevel?: string;
+  selectedRooms?: string[];
+  timeframe?: string;
 }
 
 export default function ChatPanel({ 
@@ -34,13 +42,26 @@ export default function ChatPanel({
   transcribedText,
   onClearTranscribedText,
   ollamaOnline,
-  whisperOnline
+  whisperOnline,
+  userName,
+  activeLevel,
+  selectedRooms,
+  timeframe
 }: ChatPanelProps) {
   const [input, setInput] = useState("");
   const [statusHistory, setStatusHistory] = useState<string[]>([]);
   const [isStatusLogExpanded, setIsStatusLogExpanded] = useState(false);
   
-  // Audio Recording States
+  const [selectedPromptTool, setSelectedPromptTool] = useState<string>("Air Quality");
+  // Updated interface to separate greeting_time and name, and include templates
+  const [welcomeData, setWelcomeData] = useState<{ 
+    greeting_time: string, 
+    name: string, 
+    welcome_message: string, 
+    questions: string[],
+    templates: string[]
+  } | null>(null);
+
   const [isRecording, setIsRecording] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -52,8 +73,70 @@ export default function ChatPanel({
   const chunksRef = useRef<Blob[]>([]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-
   const MAX_TOKENS = Number(process.env.OLLAMA_NUM_CTX) || 8192;
+
+  // --- NEW: Floor-level tool disablement logic ---
+  const isToolDisabled = (tool: string) => {
+    const level = activeLevel || "B";
+    if (tool === "Schedule" && ["B", "0", "-1", "-2", "-3"].includes(level)) return true;
+    if (tool === "Doors/Windows" && ["0", "-2", "-3"].includes(level)) return true;
+    return false;
+  };
+
+  // 1. Initial tool selection on mount (ensuring we pick an enabled tool)
+  useEffect(() => {
+    const available = ALL_TOGGLES.filter(t => !isToolDisabled(t));
+    if (available.length > 0) {
+      setSelectedPromptTool(available[Math.floor(Math.random() * available.length)]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // 2. Watch for floor changes to auto-kick disabled tools
+  useEffect(() => {
+    if (isToolDisabled(selectedPromptTool)) {
+      const available = ALL_TOGGLES.filter(t => !isToolDisabled(t));
+      if (available.length > 0) {
+        setSelectedPromptTool(available[Math.floor(Math.random() * available.length)]);
+      }
+    }
+  }, [activeLevel, selectedPromptTool]);
+
+  useEffect(() => {
+    setSelectedPromptTool(ALL_TOGGLES[Math.floor(Math.random() * ALL_TOGGLES.length)]);
+  }, []);
+
+  useEffect(() => {
+    const fetchPrompts = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/welcome`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include", 
+          body: JSON.stringify({ 
+            tool: selectedPromptTool,
+            floor: activeLevel || "B",
+            rooms: selectedRooms || [],
+            timeframe: timeframe || "now",
+            // Pass previous state to preserve randomness on room clicks
+            prev_msg: welcomeData?.welcome_message,
+            prev_templates: welcomeData?.templates
+          })
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setWelcomeData(data);
+        }
+      } catch (error) {
+        console.error("Failed to fetch welcome prompts", error);
+      }
+    };
+    
+    if (messages.length === 0) {
+      fetchPrompts();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPromptTool, activeLevel, selectedRooms, timeframe, messages.length]);
 
   useEffect(() => {
     if (transcribedText) {
@@ -234,8 +317,133 @@ export default function ChatPanel({
   }
 
   const isWorking = appState === 'routing' || appState === 'tool_execution';
-  // Check if Ollama is online. If offline, block sending message.
   const isSendDisabled = input.trim().length === 0 || isWorking || !ollamaOnline;
+
+  const renderWelcomeScreen = () => {
+    if (!welcomeData) return <div className="flex-1" />;
+
+    // --- NEW: Split and sort tools for the bottom pills ---
+    const unselectedTools = ALL_TOGGLES.filter(t => t !== selectedPromptTool);
+    const enabledUnavailable = unselectedTools.filter(t => !isToolDisabled(t));
+    const disabledUnavailable = unselectedTools.filter(t => isToolDisabled(t));
+    const sortedUnavailable = [...enabledUnavailable, ...disabledUnavailable];
+
+    return (
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0, y: -20, filter: "blur(5px)" }}
+        className="flex flex-col h-full px-2 w-full"
+      >
+        
+        {/* --- TOP SECTION: Typography matched identically --- */}
+        <div className="flex-1 flex flex-col items-center justify-center text-center gap-1.5">
+          <h2 className="text-[clamp(1.25rem,1.5vw,1.5rem)] font-normal text-[#14C89B] tracking-wide">
+            {welcomeData.greeting_time}, <span className="font-bold">{welcomeData.name}</span>!
+          </h2>
+          <p className="text-[clamp(1.25rem,1.5vw,1.5rem)] font-normal text-[#14C89B]">
+            {welcomeData.welcome_message}
+          </p>
+        </div>
+
+        {/* --- BOTTOM SECTION: Questions & Tools --- */}
+        <div className="flex flex-col w-full pb-0">
+          <LayoutGroup>
+            <div className="relative w-full flex flex-col mb-6">
+              
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={`cloud-${selectedPromptTool}`}
+                  initial={{ clipPath: "inset(100% 0 0 0)" }}
+                  animate={{ clipPath: "inset(0% 0 0 0)" }}
+                  exit={{ opacity: 0, transition: { duration: 0.15 } }}
+                  transition={{ duration: 0.4, delay: 0.3, ease: "easeOut" }}
+                  className="w-full flex flex-col"
+                >
+                  <div className="w-full bg-[#0A664F] rounded-t-3xl pt-8 px-5 pb-2 relative z-10">
+                    <div className="flex flex-col w-full gap-2">
+                      {welcomeData.questions.map((q, idx) => {
+                        const staggerDelay = 0.35 + ((welcomeData.questions.length - 1 - idx) * 0.1);
+                        return (
+                          <motion.button
+                            key={`${selectedPromptTool}-q-${idx}`}
+                            initial={{ opacity: 0, y: 15 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.4, delay: staggerDelay, ease: "easeOut" }}
+                            onClick={() => {
+                              setStatusHistory([]);
+                              setIsStatusLogExpanded(false);
+                              onSendMessage(q);
+                            }}
+                            className="w-full text-left p-3.5 rounded-2xl bg-black/20 text-[#14C89B] font-semibold text-sm hover:bg-[#14C89B] hover:text-[#0A0A0A] transition-colors shadow-sm"
+                          >
+                            {q}
+                          </motion.button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                  
+                  <div className="w-full flex items-start z-10 relative -mt-[1px]">
+                    <div className="flex-1 h-7 bg-[#0A664F] rounded-bl-3xl -mr-[1px]"></div>
+                    <div className="bg-[#0A664F] flex flex-col items-center justify-center px-[clamp(1.5rem,2.5vw,2rem)] pt-2 pb-5 rounded-b-3xl relative z-10">
+                      <div className="opacity-0 text-[clamp(0.75rem,0.85vw,0.875rem)] font-bold whitespace-nowrap">
+                        {selectedPromptTool}
+                      </div>
+                    </div>
+                    <div className="flex-1 h-7 bg-[#0A664F] rounded-br-3xl -ml-[1px]"></div>
+                  </div>
+                </motion.div>
+              </AnimatePresence>
+
+              {/* Absolute Flying Text Overlay */}
+              <div className="absolute inset-0 flex flex-col items-center justify-end pb-5 pointer-events-none z-20">
+                <motion.div
+                  key={`selected-${selectedPromptTool}`}
+                  layoutId={`tool-${selectedPromptTool}`}
+                  initial={{ color: "#A3B8B2" }}
+                  animate={{ color: "#0A0A0A" }}
+                  transition={{ 
+                    layout: { type: "spring", stiffness: 280, damping: 25 },
+                    color: { delay: 0.3, duration: 0.15, ease: "easeIn" }
+                  }}
+                  className="text-[clamp(0.75rem,0.85vw,0.875rem)] font-bold whitespace-nowrap"
+                >
+                  {selectedPromptTool}
+                </motion.div>
+              </div>
+
+            </div>
+
+            {/* Grid for Unselected Tools */}
+            <div className="flex justify-center w-full z-0">
+              <div className="flex flex-wrap justify-center gap-2 bg-[#1A1A1A]/80 border border-[#333333] rounded-3xl p-2.5 shadow-inner w-full">
+                {sortedUnavailable.map(toggle => {
+                  const isDisabled = isToolDisabled(toggle);
+                  return (
+                    <motion.button
+                      layoutId={`tool-${toggle}`}
+                      key={toggle}
+                      onClick={() => { if (!isDisabled) setSelectedPromptTool(toggle); }}
+                      disabled={isDisabled}
+                      className={`px-[clamp(0.6rem,1vw,1.25rem)] py-[clamp(0.35rem,0.6vh,0.625rem)] rounded-full text-[clamp(0.75rem,0.85vw,0.875rem)] font-medium whitespace-nowrap bg-transparent transition-colors ${
+                        isDisabled
+                          ? "text-[#A3B8B2]/20 cursor-not-allowed"
+                          : "text-[#A3B8B2]/50 hover:text-[#A3B8B2] hover:bg-[#2A2A2A]"
+                      }`}
+                    >
+                      {toggle}
+                    </motion.button>
+                  );
+                })}
+              </div>
+            </div>
+
+          </LayoutGroup>
+        </div>
+      </motion.div>
+    );
+  };
 
   const renderStatusBlock = () => (
     <div className="flex justify-start w-full">
@@ -284,7 +492,6 @@ export default function ChatPanel({
           <div className="p-4 flex flex-col w-full">
             <div className="flex justify-between w-full items-center mb-3.5">
               
-              {/* Header Logo & Name */}
               <div className="flex items-center gap-3">
                 <img src="/icon.png" alt="HUAssistant Logo" className="w-8 h-8 rounded-xl shrink-0 object-contain" />
                 <span className="font-bold text-[#14C89B] text-base tracking-wide">
@@ -292,7 +499,6 @@ export default function ChatPanel({
                 </span>
               </div>
               
-              {/* Token Counter & Reset Session Squircle */}
               <div className="flex items-center gap-3">
                  <span 
                    className="text-xs font-mono font-bold bg-black/20 px-3 py-2 rounded-full shadow-inner"
@@ -315,7 +521,6 @@ export default function ChatPanel({
               </div>
             </div>
             
-            {/* Progress Bar */}
             <div className="w-full h-2 bg-black/30 rounded-full overflow-hidden p-0.5 shadow-inner">
               <div className="h-full rounded-full transition-all duration-500 ease-out" style={{ width: `${Math.min(pct, 100)}%`, backgroundColor: statusColor }} />
             </div>
@@ -323,13 +528,12 @@ export default function ChatPanel({
         </div>
       </div>
 
-      {/* --- MIDDLE: CHAT MESSAGES --- */}
+      {/* --- MIDDLE: CHAT MESSAGES / WELCOME SCREEN --- */}
       <div className="flex-1 relative flex flex-col overflow-hidden bg-transparent">
         <div className="absolute top-0 left-0 right-0 h-8 bg-gradient-to-b from-[#0A0A0A] to-transparent z-10 pointer-events-none"></div>
 
         <div className="flex-1 overflow-y-auto px-5 py-6 z-0 chat-scrollbar flex flex-col gap-4">
           
-          {/* Dynamic Error Pills - Placed right below the top fade gradient */}
           {!ollamaOnline && (
             <div className="mx-auto w-fit max-w-[90%] px-4 py-2.5 rounded-full bg-white/5 border border-white/5 shadow-md flex items-center gap-3 mb-2 shrink-0">
                <AlertCircle size={16} className="text-[#ef4444] shrink-0" />
@@ -343,49 +547,60 @@ export default function ChatPanel({
             </div>
           )}
 
-          {messages.map((msg, idx) => {
-            const isLastMessage = idx === messages.length - 1;
-            const isLastAgentMessage = isLastMessage && msg.sender === 'agent';
-            const isTranscribing = llmStatus?.state === 'transcribing';
-            
-            const showBeforeThisAgentMsg = isLastAgentMessage && statusHistory.length > 0 && !isTranscribing;
+          <AnimatePresence mode="wait">
+            {messages.length === 0 ? (
+              renderWelcomeScreen()
+            ) : (
+              <motion.div 
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="flex flex-col gap-4 w-full h-full justify-start"
+              >
+                {messages.map((msg, idx) => {
+                  const isLastMessage = idx === messages.length - 1;
+                  const isLastAgentMessage = isLastMessage && msg.sender === 'agent';
+                  const isTranscribing = llmStatus?.state === 'transcribing';
+                  
+                  const showBeforeThisAgentMsg = isLastAgentMessage && statusHistory.length > 0 && !isTranscribing;
 
-            return (
-              <React.Fragment key={idx}>
-                {showBeforeThisAgentMsg && renderStatusBlock()}
-                
-                <div className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[90%] p-4 rounded-3xl shadow-md transition-all duration-200 ${
-                    msg.sender === 'user' 
-                      ? 'bg-[#0A664F] text-[#0A0A0A] rounded-tr-sm font-bold' 
-                      : 'bg-white/5 text-[#14C89B] border border-white/5 rounded-tl-sm font-normal'
-                  }`}>
-                    {msg.sender === 'agent' ? (
-                      <div className="text-sm space-y-2 text-[#14C89B] prose prose-p:text-[#14C89B] prose-strong:text-[#14C89B] prose-li:text-[#14C89B] prose-headings:text-[#14C89B] prose-a:text-[#14C89B] prose-code:text-[#14C89B] prose-td:text-[#14C89B] prose-th:text-[#14C89B] prose-p:leading-relaxed prose-td:border-gray-700 prose-th:border-gray-700 max-w-none">
-                        <ReactMarkdown 
-                          remarkPlugins={[remarkGfm]}
-                          components={{
-                            th: ({node, ...props}) => <th {...props} style={{ textAlign: 'center' }} />,
-                            td: ({node, ...props}) => <td {...props} style={{ textAlign: 'center' }} />
-                          }}
-                        >
-                          {msg.text}
-                        </ReactMarkdown>
+                  return (
+                    <React.Fragment key={idx}>
+                      {showBeforeThisAgentMsg && renderStatusBlock()}
+                      
+                      <div className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-[90%] p-4 rounded-3xl shadow-md transition-all duration-200 ${
+                          msg.sender === 'user' 
+                            ? 'bg-[#0A664F] text-[#0A0A0A] rounded-tr-sm font-bold' 
+                            : 'bg-white/5 text-[#14C89B] border border-white/5 rounded-tl-sm font-normal'
+                        }`}>
+                          {msg.sender === 'agent' ? (
+                            <div className="text-sm space-y-2 text-[#14C89B] prose prose-p:text-[#14C89B] prose-strong:text-[#14C89B] prose-li:text-[#14C89B] prose-headings:text-[#14C89B] prose-a:text-[#14C89B] prose-code:text-[#14C89B] prose-td:text-[#14C89B] prose-th:text-[#14C89B] prose-p:leading-relaxed prose-td:border-gray-700 prose-th:border-gray-700 max-w-none">
+                              <ReactMarkdown 
+                                remarkPlugins={[remarkGfm]}
+                                components={{
+                                  th: ({node, ...props}) => <th {...props} style={{ textAlign: 'center' }} />,
+                                  td: ({node, ...props}) => <td {...props} style={{ textAlign: 'center' }} />
+                                }}
+                              >
+                                {msg.text}
+                              </ReactMarkdown>
+                            </div>
+                          ) : (
+                            <p className="text-sm font-bold leading-relaxed">{msg.text}</p>
+                          )}
+                        </div>
                       </div>
-                    ) : (
-                      <p className="text-sm font-bold leading-relaxed">{msg.text}</p>
-                    )}
-                  </div>
-                </div>
 
-                {isLastMessage && msg.sender === 'user' && statusHistory.length > 0 && renderStatusBlock()}
-              </React.Fragment>
-            )
-          })}
+                      {isLastMessage && msg.sender === 'user' && statusHistory.length > 0 && renderStatusBlock()}
+                    </React.Fragment>
+                  )
+                })}
 
-          {((llmStatus?.state === 'transcribing' || messages.length === 0) && statusHistory.length > 0) && renderStatusBlock()}
-
-          <div ref={messagesEndRef} className="h-4 w-full flex-shrink-0" />
+                {((llmStatus?.state === 'transcribing' || messages.length === 0) && statusHistory.length > 0) && renderStatusBlock()}
+                <div ref={messagesEndRef} className="h-4 w-full flex-shrink-0" />
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-[#0A0A0A] to-transparent z-10 pointer-events-none"></div>

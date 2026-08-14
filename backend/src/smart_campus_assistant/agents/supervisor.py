@@ -34,13 +34,17 @@ BUILDING TOPOLOGY (OMIROU BUILDING)
 =========================================
 You monitor an 8-level building. Do not hallucinate rooms outside this list.
 * Zones: Floors 0 to 5 are Public/Student access. Floors -3 to -1 are Restricted Staff access.
-* Underground: -3 & -2 (Staff Parking), -1 (Main Data Center [monitored], Kitchen, Utilities).
-* Ground (0): Main Entrance (security desk), Restaurant (buffet queue).
-* Floor 1: Main Amphitheater (1.2), Conference Room (1.1).
-* Floor 2: Secretariat (2.1), PG Lab (2.2), UG Computer Lab (2.4).
-* Floor 3 & 4: Faculty Offices (no sensors), Server room (3.8), UG Lab (4.9).
-* Floor 5: Faculty Offices, Server room (5.6), PhD Lab (5.7), Roof Balcony (Outdoor Weather Station).
+* Floor -3: Underground Parking C that spans the whole floor (parkin.c).
+* Floor -2: Underground Parking B that spans the whole floor (parkin.b).
+* Floor -1: Utility Rooms with no sensors (Archive folder room, Storage room, Infrastructure (Lifts Equipment), Electrical (UPS and Electrical Equipment)), Main Data Center/Server (data_center), Food preparation room (kitchen). 
+* Floor 0 (Ground Floor with Mezzanine): Main Entrance (security desk), Restaurant (buffet queue) that has sitting area across the mezzanine and ground floor.
+* Floor 1: Conference Room (1.1), Main Amphitheater (1.2).
+* Floor 2: Secretariat (2.1), Post Graduate Lab (2.2), Small Amphitheater (2.3), Under Graduate Computer Lab (2.4).
+* Floor 3: Small Amphitheater (3.7), Small Server room (3.8), Small Amphitheater (3.9), Faculty Offices with no sensors (3.1, 3.2, 3.3, 3.4, 3.5, 3.6).
+* Floor 4: Under Graduate Lab (4.9), Faculty Offices with no sensors (4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8).
+* Floor 5: Small Server room (5.6), Post Graduate Lab (5.7), Roof Balcony (Outdoor Weather Station), Faculty Offices with no sensors (5.1, 5.2, 5.3, 5.4, 5.5).
 * Lifts: Front lifts serve 0-5. Back service lift serves -3 to 4. Car lift serves 0 to -3.
+* Toilets: They are available on Floor -1 and every above-ground floor from Floor 1 through Floor 5.
 
 =========================================
 MAP INTERACTIONS & SYSTEM LOGS

@@ -66,11 +66,9 @@ def check_ollama() -> bool:
 
 def check_whisper() -> bool:
     """Verifies if the Whisper API container is online."""
-    # Strip path to check container root host
     base_whisper_url = settings.WHISPER_API_URL.split("/transcribe")[0].rstrip('/')
     logger.info(f"Checking Whisper API at {base_whisper_url}...")
     try:
-        # Check docs or root path for clean HTTP 200 health check
         response = requests.get(f"{base_whisper_url}/docs", timeout=5)
         response.raise_for_status()
         logger.info(
@@ -78,7 +76,6 @@ def check_whisper() -> bool:
         )
         return True
     except RequestException as e:
-        # Fallback check on full URL
         try:
             requests.get(settings.WHISPER_API_URL, timeout=5)
             logger.info(
@@ -89,14 +86,49 @@ def check_whisper() -> bool:
             logger.error(f"Whisper API is offline or unreachable: {fallback_e}")
             return False
 
+def check_thingsboard() -> bool:
+    """Verifies if ThingsBoard is online and credentials are valid."""
+    logger.info(f"Checking ThingsBoard API at {settings.THINGSBOARD_BASE_URL}...")
+    url = f"{settings.THINGSBOARD_BASE_URL.rstrip('/')}/api/auth/login"
+    payload = {"username": settings.THINGSBOARD_USERNAME, "password": settings.THINGSBOARD_PASSWORD}
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=5)
+        response.raise_for_status()
+        logger.info("ThingsBoard API is online and authenticated.")
+        return True
+    except RequestException as e:
+        logger.error(f"ThingsBoard is offline, unreachable, or credentials invalid: {e}")
+        return False
+
+def check_google_auth() -> bool:
+    """Verifies if Google Auth env variables are present and Google's API is reachable."""
+    logger.info("Checking Google Auth setup and internet reachability...")
+    
+    # 1. Check required configuration
+    if not settings.GOOGLE_CLIENT_ID or not settings.JWT_SECRET_KEY or not settings.ALLOWED_EMAILS:
+        logger.error("Google Auth is misconfigured: Missing GOOGLE_CLIENT_ID, JWT_SECRET_KEY, or ALLOWED_EMAILS.")
+        return False
+        
+    # 2. Check outbound internet access to Google's token verification servers
+    try:
+        requests.get("https://www.googleapis.com/oauth2/v3/certs", timeout=5)
+        logger.info("Google Auth is configured and Google API is reachable.")
+        return True
+    except RequestException as e:
+        logger.error(f"Google API is unreachable. Check container outbound internet connection: {e}")
+        return False
+
 def unload_ollama_embed_model():
     """Sends a termination signal to Ollama to instantly drop the embedding model from VRAM."""
     logger.info(f"Evicting embedding model '{settings.OLLAMA_EMBED_MODEL}' from VRAM...")
     
     base_url = settings.OLLAMA_BASE_URL.rstrip('/')
-    url = f"{base_url}/api/generate"
+    url = f"{base_url}/api/embed"
     payload = {
         "model": settings.OLLAMA_EMBED_MODEL,
+        "input": "",
         "keep_alive": 0
     }
     
@@ -118,9 +150,28 @@ def run_initialization() -> bool:
     qdrant_ok = check_qdrant()
     ollama_ok = check_ollama()
     whisper_ok = check_whisper()
+    tb_ok = check_thingsboard()
+    auth_ok = check_google_auth()
     
-    if not (qdrant_ok and ollama_ok and whisper_ok):
-        logger.error("One or more critical services are offline. Initialization aborted.")
+    failed_services = []
+    if not qdrant_ok:
+        failed_services.append("Qdrant Vector DB")
+    if not ollama_ok:
+        failed_services.append("Ollama (LLM or Embed Model)")
+    if not whisper_ok:
+        failed_services.append("Whisper API")
+    if not tb_ok:
+        failed_services.append("ThingsBoard (Offline or Auth Failed)")
+    if not auth_ok:
+        failed_services.append("Google Auth (Misconfigured or Google Unreachable)")
+    
+    if failed_services:
+        failed_list_str = "\n - ".join(failed_services)
+        logger.critical(
+            f"CRITICAL ERROR: Initialization aborted! The following required services are offline or misconfigured:\n"
+            f" - {failed_list_str}\n"
+            f"Please verify your docker-compose logs, ensure the services are running, and check network routing."
+        )
         return False
         
     logger.info("All services are online. Proceeding to Vector DB Synchronization.")
