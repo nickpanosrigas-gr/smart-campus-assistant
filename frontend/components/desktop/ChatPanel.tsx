@@ -90,7 +90,9 @@ export default function ChatPanel({
   
   useEffect(() => {
     const timeout = setTimeout(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      // Use 'auto' during streams to prevent layout thrashing, 'smooth' otherwise
+      const isStreaming = appState === 'routing' || appState === 'tool_execution';
+      messagesEndRef.current?.scrollIntoView({ behavior: isStreaming ? "auto" : "smooth" });
     }, 50);
     return () => clearTimeout(timeout);
   }, [messages, appState, isStatusLogExpanded, statusHistory, input]);

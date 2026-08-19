@@ -286,7 +286,13 @@ function DesktopDashboard({ user }: { user: { sub: string; name?: string; pictur
     localStorage.setItem("activeLevel", activeLevel);
     activeLevelRef.current = activeLevel; 
   }, [activeLevel]);
-  useEffect(() => { localStorage.setItem("chatMessages", JSON.stringify(messages)); }, [messages]);
+  useEffect(() => { 
+    // Debounce the disk write by 500ms to prevent CPU lockup during streaming
+    const timeoutId = setTimeout(() => {
+      localStorage.setItem("chatMessages", JSON.stringify(messages)); 
+    }, 500);
+    return () => clearTimeout(timeoutId);
+  }, [messages]);
   useEffect(() => { localStorage.setItem("artifactCache", JSON.stringify(artifactCache)); }, [artifactCache]);
   useEffect(() => { localStorage.setItem("sessionTools", JSON.stringify(sessionTools)); }, [sessionTools]);
   useEffect(() => { localStorage.setItem("contextData", JSON.stringify(contextData)); }, [contextData]);
@@ -514,14 +520,18 @@ function DesktopDashboard({ user }: { user: { sub: string; name?: string; pictur
         }
 
         if (data.type === "text" && data.text) {
-          const replyText = data.text;
+          const chunk = data.text;
           setMessages(prev => {
             if (prev.length > 0 && prev[prev.length - 1].sender === "agent") {
               const updated = [...prev];
-              updated[updated.length - 1] = { sender: "agent", text: replyText };
+              // Append the new chunk to the existing text
+              updated[updated.length - 1] = { 
+                sender: "agent", 
+                text: updated[updated.length - 1].text + chunk 
+              };
               return updated;
             }
-            return [...prev, { sender: "agent", text: replyText }];
+            return [...prev, { sender: "agent", text: chunk }];
           });
         }
 

@@ -268,10 +268,10 @@ async def process_chat_message(user_query: str, thread_id: str, websocket):
                 chunk = event["data"]["chunk"].content
                 
                 if isinstance(chunk, str) and chunk:
-                    accumulated_text += chunk
+                    # We no longer send accumulated_text, just the new chunk
                     await websocket.send_json({
                         "type": "text",
-                        "text": accumulated_text
+                        "text": chunk
                     })
                     
     except asyncio.CancelledError:
@@ -545,7 +545,7 @@ async def process_voice_message(base64_audio: str, audio_format: str, prepend_te
         if not final_text:
             await websocket.send_json({
                 "type": "text", 
-                "text": "\n[Could not transcribe audio. Please try speaking again.]"
+                "text": "\nCould not transcribe audio. Please try speaking again."
             })
             return
 
@@ -566,7 +566,7 @@ async def process_voice_message(base64_audio: str, audio_format: str, prepend_te
         logger.error(f"[VOICE PROCESS ERROR] {e}")
         await websocket.send_json({
             "type": "text", 
-            "text": "\n[System Error: Unable to process voice message.]"
+            "text": "\nSystem Error: Unable to process voice message."
         })
 
 async def process_transcribe_only(base64_audio: str, audio_format: str, websocket):
@@ -591,7 +591,7 @@ async def process_transcribe_only(base64_audio: str, audio_format: str, websocke
         if not transcribed_text:
             await websocket.send_json({
                 "type": "text", 
-                "text": "\n[Could not transcribe audio.]"
+                "text": "\nCould not transcribe audio."
             })
             return
 
@@ -609,5 +609,5 @@ async def process_transcribe_only(base64_audio: str, audio_format: str, websocke
         logger.error(f"[TRANSCRIBE ONLY ERROR] {e}")
         await websocket.send_json({
             "type": "text", 
-            "text": "\n[System Error: Transcription failed.]"
+            "text": "\nSystem Error: Transcription failed."
         })

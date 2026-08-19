@@ -1,3 +1,4 @@
+// frontend/components/map/graphs/OccupancyGraph.tsx
 "use client";
 import React, { useMemo } from "react";
 import {
@@ -131,16 +132,6 @@ export default function OccupancyGraph({ artifact }: OccupancyGraphProps) {
       });
     }
 
-    // ---> EPSILON HACK: If all values are identical, add 0.0001 to point 0. <---
-    // This gives the SVG DOM a valid height (>0) for objectBoundingBox without altering visual flatness!
-    if (grid.length > 0) {
-      const firstVal = grid[0].PlotValue;
-      const allSame = grid.every((pt: any) => pt.PlotValue === firstVal);
-      if (allSame) {
-        grid[0].PlotValue += 0.0001;
-      }
-    }
-
     return grid;
   }, [artifact, isMotionOnly]);
 
@@ -254,7 +245,6 @@ export default function OccupancyGraph({ artifact }: OccupancyGraphProps) {
         timeStr = `${startTime} – ${endTime}`;
       }
 
-      // Round out the 0.0001 epsilon hack so tooltips display clean integers!
       const val = Math.round(dataPoint.Occupancy);
       const isMotionActive = dataPoint.Motion === 1;
 
@@ -312,6 +302,12 @@ export default function OccupancyGraph({ artifact }: OccupancyGraphProps) {
     const color = payload.Motion === 1 ? SENSOR_COLORS.critical : SENSOR_COLORS.good;
     return <circle cx={cx} cy={cy} r={6} fill={color} stroke="#0A0A0A" strokeWidth={2} />;
   };
+
+  const firstVal = formattedData[0]?.PlotValue;
+  const isFlat = formattedData.length > 0 && formattedData.every((pt: any) => pt.PlotValue === firstVal);
+  const strokeFill = isFlat 
+    ? (formattedData[0]?.Motion === 1 ? SENSOR_COLORS.critical : SENSOR_COLORS.good) 
+    : "url(#motionStrokeGradMinimal)";
 
   return (
     <div className="w-full h-full flex flex-col bg-transparent p-4 pb-4 select-none overflow-hidden">
@@ -378,7 +374,7 @@ export default function OccupancyGraph({ artifact }: OccupancyGraphProps) {
               type="stepAfter"
               dataKey="PlotValue"
               stroke="none"
-              fill="url(#motionStrokeGradMinimal)"
+              fill={strokeFill}
               mask="url(#occAreaMask)"
               isAnimationActive={false}
               activeDot={false}
@@ -387,7 +383,7 @@ export default function OccupancyGraph({ artifact }: OccupancyGraphProps) {
             <Line
               type="stepAfter"
               dataKey="PlotValue"
-              stroke="url(#motionStrokeGradMinimal)"
+              stroke={strokeFill}
               strokeWidth={2.5}
               isAnimationActive={false}
               dot={false}

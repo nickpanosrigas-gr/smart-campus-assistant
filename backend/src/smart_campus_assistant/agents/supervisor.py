@@ -87,7 +87,6 @@ llm = ChatOllama(
     base_url=settings.OLLAMA_BASE_URL,
     model=settings.OLLAMA_MODEL,
     num_ctx=settings.OLLAMA_NUM_CTX, 
-    temperature=0,
     think=False,
     disable_thinking=True
 )

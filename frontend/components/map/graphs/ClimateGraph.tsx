@@ -131,19 +131,6 @@ export default function ClimateGraph({ artifact }: ClimateGraphProps) {
       grid.push(dataPoint);
     }
 
-    // EPSILON HACK (from LightsGraph): Prevent SVG render crashes on perfectly flat lines
-    if (grid.length > 0) {
-      METRICS.forEach(m => {
-        const firstVal = grid[0][m.key];
-        if (firstVal !== null && firstVal !== undefined) {
-          const allSame = grid.every((pt: any) => pt[m.key] === firstVal);
-          if (allSame) {
-            grid[0][m.key] += 0.0001;
-          }
-        }
-      });
-    }
-
     return grid;
   }, [artifact]);
 
@@ -201,7 +188,6 @@ export default function ClimateGraph({ artifact }: ClimateGraphProps) {
         timeStr = `${startTime} – ${endTime}`;
       }
 
-      // Filter out the Epsilon Hack decimal
       const rawVal = payload[0].value;
       const displayVal = typeof rawVal === "number" ? Number(rawVal.toFixed(2)) : rawVal;
 
@@ -243,80 +229,87 @@ export default function ClimateGraph({ artifact }: ClimateGraphProps) {
     <div className="w-full h-full flex flex-col bg-transparent p-4 pb-4 select-none overflow-hidden">
       {/* --- Scrollable Graphs Container --- */}
       <div className="flex-1 w-full overflow-y-auto overflow-x-hidden chat-scrollbar pr-2 flex flex-col gap-6">
-        {METRICS.map((metric) => (
-          <div key={metric.key} className="w-full shrink-0 min-h-[220px] relative mt-2">
-            <h3 className="absolute top-1 left-8 text-[10px] font-mono uppercase tracking-widest text-[#A3B8B2]/60 z-10">
-              {metric.label}
-            </h3>
-            
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart
-                data={formattedData}
-                margin={{ top: 25, right: 30, left: 0, bottom: 5 }}
-              >
-                <defs>
-                  <linearGradient id={`areaFade-${metric.key}`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor={metric.color} stopOpacity={0.35} />
-                    <stop offset="95%" stopColor={metric.color} stopOpacity={0.0} />
-                  </linearGradient>
-                </defs>
+        {METRICS.map((metric) => {
+          const firstVal = formattedData[0]?.[metric.key];
+          const isFlat = formattedData.length > 0 && formattedData.every((pt: any) => pt[metric.key] === firstVal);
+          const areaFill = isFlat ? metric.color : `url(#areaFade-${metric.key})`;
+          
+          return (
+            <div key={metric.key} className="w-full shrink-0 min-h-[220px] relative mt-2">
+              <h3 className="absolute top-1 left-8 text-[10px] font-mono uppercase tracking-widest text-[#A3B8B2]/60 z-10">
+                {metric.label}
+              </h3>
+              
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart
+                  data={formattedData}
+                  margin={{ top: 25, right: 30, left: 0, bottom: 5 }}
+                >
+                  <defs>
+                    <linearGradient id={`areaFade-${metric.key}`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={metric.color} stopOpacity={0.35} />
+                      <stop offset="95%" stopColor={metric.color} stopOpacity={0.0} />
+                    </linearGradient>
+                  </defs>
 
-                <XAxis
-                  dataKey="timeMs"
-                  type="number"
-                  domain={[formattedData[0]?.timeMs, formattedData[formattedData.length - 1]?.timeMs]}
-                  ticks={majorTicks}
-                  tickFormatter={formatXAxisTick}
-                  stroke="#A3B8B2"
-                  strokeOpacity={0.4}
-                  fontSize={11}
-                  tickLine={false}
-                  axisLine={false}
-                  tick={false} // Ticks are mapped to the fixed bottom axis
-                  minTickGap={25}
-                  interval="preserveStartEnd"
-                />
+                  <XAxis
+                    dataKey="timeMs"
+                    type="number"
+                    domain={[formattedData[0]?.timeMs, formattedData[formattedData.length - 1]?.timeMs]}
+                    ticks={majorTicks}
+                    tickFormatter={formatXAxisTick}
+                    stroke="#A3B8B2"
+                    strokeOpacity={0.4}
+                    fontSize={11}
+                    tickLine={false}
+                    axisLine={false}
+                    tick={false} // Ticks are mapped to the fixed bottom axis
+                    minTickGap={25}
+                    interval="preserveStartEnd"
+                  />
 
-                <YAxis
-                  width={45} // Fixed width guarantees correct left alignment without clipping
-                  domain={metric.domain}
-                  stroke="#A3B8B2"
-                  strokeOpacity={0.6}
-                  fontSize={10}
-                  axisLine={false}
-                  tickLine={false}
-                  allowDataOverflow={true}
-                />
+                  <YAxis
+                    width={45} // Fixed width guarantees correct left alignment without clipping
+                    domain={metric.domain}
+                    stroke="#A3B8B2"
+                    strokeOpacity={0.6}
+                    fontSize={10}
+                    axisLine={false}
+                    tickLine={false}
+                    allowDataOverflow={true}
+                  />
 
-                <Tooltip
-                  content={<CustomTooltip metric={metric} />}
-                  cursor={{ stroke: "#ffffff", strokeWidth: 1, strokeDasharray: "3 3", strokeOpacity: 0.25 }}
-                />
+                  <Tooltip
+                    content={<CustomTooltip metric={metric} />}
+                    cursor={{ stroke: "#ffffff", strokeWidth: 1, strokeDasharray: "3 3", strokeOpacity: 0.25 }}
+                  />
 
-                <Area
-                  type="monotone"
-                  dataKey={metric.key}
-                  stroke="none"
-                  fill={`url(#areaFade-${metric.key})`}
-                  isAnimationActive={false}
-                  activeDot={false}
-                  connectNulls={true}
-                />
+                  <Area
+                    type="monotone"
+                    dataKey={metric.key}
+                    stroke="none"
+                    fill={areaFill}
+                    fillOpacity={isFlat ? 0.15 : 1}
+                    isAnimationActive={false}
+                    activeDot={false}
+                    connectNulls={true}
+                  />
 
-                <Line
-                  type="monotone"
-                  dataKey={metric.key}
-                  stroke={metric.color}
-                  strokeWidth={2}
-                  dot={false}
-                  isAnimationActive={false}
-                  connectNulls={true}
-                  activeDot={<CustomActiveDot metric={metric} />}
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-        ))}
+                  <Line
+                    type="monotone"
+                    dataKey={metric.key}
+                    stroke={metric.color}
+                    strokeWidth={2}
+                    dot={false}
+                    isAnimationActive={false}
+                    connectNulls={true}
+                    activeDot={<CustomActiveDot metric={metric} />}
+                  />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          )
+        })}
       </div>
 
       {/* --- Fixed Bottom X-Axis Container --- */}
