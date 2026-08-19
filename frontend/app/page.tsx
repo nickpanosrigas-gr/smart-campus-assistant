@@ -302,11 +302,16 @@ function DesktopDashboard({ user }: { user: { sub: string; name?: string; pictur
   useEffect(() => { localStorage.setItem("lastHistoricalTimeframe", lastHistoricalTimeframe); }, [lastHistoricalTimeframe]);
 
   useEffect(() => {
+    // 1. THE GUARD: Abort the fetch if the LLM is currently generating or routing
+    if (appState === "routing" || appState === "tool_execution") {
+      return; 
+    }
+
     if (!ws.current || ws.current.readyState !== WebSocket.OPEN) return;
     if (activeTools.length === 0 || selectedRooms.length === 0) return;
 
     activeTools.forEach(tool => {
-      // 1. Create an array to batch all rooms that need fetching
+      // Create an array to batch all rooms that need fetching
       const roomsToFetch: string[] = [];
 
       selectedRooms.forEach(room => {
@@ -318,13 +323,12 @@ function DesktopDashboard({ user }: { user: { sub: string; name?: string; pictur
         const requestKey = `${room}-${tool}-${timeframe}`.toLowerCase();
 
         if (!hasData && !inFlightRequests.current.has(requestKey)) {
-          // 2. Add to our batch array and mark as in-flight
           roomsToFetch.push(room);
           inFlightRequests.current.add(requestKey);
         }
       });
 
-      // 3. Send ONE WebSocket message containing all missing rooms
+      // Send ONE WebSocket message containing all missing rooms
       if (roomsToFetch.length > 0) {
         console.log(`[SELF-HEALING FETCH] Requesting missing telemetry: Rooms [${roomsToFetch.join(', ')}] | Tool: ${tool} | TF: ${timeframe}`);
         
@@ -337,7 +341,9 @@ function DesktopDashboard({ user }: { user: { sub: string; name?: string; pictur
         }));
       }
     });
-  }, [timeframe, selectedRooms, activeTools, activeLevel, artifactCache]);
+    
+  // 2. THE TRIGGER: Add appState so this hook re-runs the second the LLM finishes
+  }, [timeframe, selectedRooms, activeTools, activeLevel, artifactCache, appState]);
 
   // --- WEBSOCKET CONNECTION & EVENT HANDLER ---
   useEffect(() => {

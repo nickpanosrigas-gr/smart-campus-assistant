@@ -104,11 +104,16 @@ async def call_supervisor(state: GraphState, config: RunnableConfig):
     messages = state["messages"]
     map_context = state.get("map_context", {})
     
-    dynamic_prompt = supervisor_prompt
+    # 1. Keep the main System Prompt strictly static so KV Cache is hit
+    full_context = [SystemMessage(content=supervisor_prompt)]
+    
+    # 2. Append dynamic map context as a completely separate message
     if map_context:
-        dynamic_prompt += f"\n\n[SYSTEM LOG]: The user is currently viewing the following map data: {map_context}"
+        full_context.append(SystemMessage(
+            content=f"[SYSTEM LOG]: The user is currently viewing the following map data: {map_context}"
+        ))
         
-    full_context = [SystemMessage(content=dynamic_prompt)] + messages
+    full_context.extend(messages)
     logger.info("Supervisor LLM is evaluating the state...")
     
     response = await supervisor_llm.ainvoke(full_context, config=config)
