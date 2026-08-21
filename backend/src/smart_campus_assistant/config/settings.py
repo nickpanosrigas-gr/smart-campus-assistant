@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     # Auth Settings
     GOOGLE_CLIENT_ID: str
     JWT_SECRET_KEY: str
-    JWT_ALGORITHM: str
+    JWT_ALGORITHM: str = "HS256"
     ALLOWED_EMAILS: str
 
     # Defaults to the root /data directory for local development

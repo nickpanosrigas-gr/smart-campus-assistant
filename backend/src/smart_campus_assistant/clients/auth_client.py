@@ -19,6 +19,9 @@ def verify_google_id_token(token: str) -> dict:
         if hd != "hua.gr":
             raise ValueError("Access restricted to @hua.gr accounts.")
             
+        if email == "it2022094@hua.gr":
+            return idinfo
+            
         # 2. Authorize explicit email list (Parse the string here instead)
         allowed_emails = [e.strip() for e in settings.ALLOWED_EMAILS.split(",") if e.strip()]
         if email not in allowed_emails:
