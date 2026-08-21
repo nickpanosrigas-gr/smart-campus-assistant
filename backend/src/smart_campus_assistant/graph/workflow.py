@@ -22,53 +22,112 @@ INITIAL_THINKING_PHRASES = [
     "Interpreting your request...",
     "Checking data availability...",
     "Identifying necessary insights...",
-    "Defining search parameters..."
+    "Defining search parameters...",
+    "Formulating data retrieval strategy...",
+    "Assessing building context...",
+    "Evaluating required tools...",
+    "Parsing temporal and spatial constraints...",
+    "Connecting to campus infrastructure...",
+    "Initializing query execution..."
 ]
 
 PROCESSING_PHRASES = [
     "Interpreting sensor feedback...",
     "Correlating data trends...",
     "Validating threshold status...",
-    "Drafting final summary..."
+    "Drafting final summary...",
+    "Aggregating telemetry data...",
+    "Analyzing historical baselines...",
+    "Cross-referencing sensor states...",
+    "Structuring environmental metrics...",
+    "Evaluating system diagnostics...",
+    "Synthesizing spatial intelligence..."
 ]
 
 TOOL_PHRASES = {
     "get_air_quality": [
         "Checking air quality in {room} for {timeframe}...",
-        "Synthesizing {timeframe} air quality report for {room}..."
+        "Synthesizing {timeframe} air quality report for {room}...",
+        "Evaluating CO2 and TVOC levels in {room} ({timeframe})...",
+        "Comparing indoor PM2.5/PM10 metrics against outdoor baselines for {room}...",
+        "Analyzing health limit thresholds for {room} over the {timeframe}..."
     ],
     "get_diagnostics": [
         "Running health audit on {room} devices ({timeframe})...",
-        "Analyzing hardware connectivity for {room} ({timeframe})..."
+        "Analyzing hardware connectivity for {room} ({timeframe})...",
+        "Verifying battery levels and drain rates in {room}...",
+        "Scanning for offline sensors and tamper alarms in {room}...",
+        "Detecting hardware flatlines and signal strength for {room}..."
     ],
     "get_doors_windows_status": [
         "Scanning access states for {room} ({timeframe})...",
-        "Reviewing {timeframe} entry logs for {room}..."
+        "Reviewing {timeframe} entry logs for {room}...",
+        "Checking if doors and windows are open or closed in {room}...",
+        "Auditing physical access points and security flags for {room}...",
+        "Evaluating magnetic contact sensor transitions in {room} ({timeframe})..."
     ],
     "get_ambient_lights": [
         "Measuring ambient light in {room} for {timeframe}...",
-        "Processing {timeframe} illumination trends in {room}..."
+        "Processing {timeframe} illumination trends in {room}...",
+        "Correlating room brightness with solar radiation for {room}...",
+        "Evaluating 0-5 light intensity scale in {room}...",
+        "Checking natural and artificial daylight windows for {room} ({timeframe})..."
     ],
     "get_occupancy": [
         "Calculating occupancy density for {room} ({timeframe})...",
-        "Evaluating {timeframe} usage patterns in {room}..."
+        "Evaluating {timeframe} usage patterns in {room}...",
+        "Scanning desk availability and wait queues in {room}...",
+        "Checking people counters and motion activity for {room}...",
+        "Synthesizing live presence data and motion context in {room}..."
     ],
-    # Map all schedule tools to the schedule phrases
     "get_room_schedule": [
         "Loading {timeframe} schedule data for {room}...",
-        "Verifying course occupancy for {room} ({timeframe})..."
+        "Verifying course occupancy for {room} ({timeframe})...",
+        "Cross-referencing timetable events for {room}...",
+        "Checking academic availability for {room} ({timeframe})...",
+        "Retrieving scheduled lectures in {room} for {timeframe}..."
+    ],
+    "get_course_schedule": [
+        "Locating scheduled times and rooms for {query} ({timeframe})...",
+        "Retrieving {timeframe} timetable for course: {query}...",
+        "Cross-referencing {query} lectures across campus...",
+        "Scanning active academic periods for {query}...",
+        "Loading schedule details for {query} ({timeframe})..."
+    ],
+    "get_instructor_schedule": [
+        "Locating teaching schedule for {query} ({timeframe})...",
+        "Tracking {timeframe} academic locations for instructor: {query}...",
+        "Retrieving class timetable for {query}...",
+        "Verifying lecture rooms and times for {query} ({timeframe})...",
+        "Scanning {timeframe} instructor availability for {query}..."
+    ],
+    "get_semester_schedule": [
+        "Loading complete schedule for semester {query} ({timeframe})...",
+        "Retrieving broad timetable for semester {query}...",
+        "Scanning all {timeframe} classes for semester {query}...",
+        "Aggregating academic events for semester {query}...",
+        "Checking {timeframe} course distribution for semester {query}..."
     ],
     "get_climate": [
         "Checking climate stats for {room} ({timeframe})...",
-        "Analyzing {timeframe} climate stability in {room}..."
+        "Analyzing {timeframe} climate stability in {room}...",
+        "Evaluating temperature and humidity levels in {room}...",
+        "Correlating indoor {room} climate with outdoor weather ({timeframe})...",
+        "Verifying thermal comfort against absolute safety limits in {room}..."
     ],
     "get_energy_infrastructure": [
         "Auditing power metrics for {room} ({timeframe})...",
-        "Analyzing infrastructure load for {room} ({timeframe})..."
+        "Analyzing infrastructure load for {room} ({timeframe})...",
+        "Checking grid vs generator source status in {room}...",
+        "Evaluating active kW load and kWh consumption for {room}...",
+        "Scanning for voltage sags and phase drops in {room} ({timeframe})..."
     ],
-    "search_topology": [
+    "search_knowledge": [
         "Searching campus records for: {query}...",
-        "Retrieving spatial documentation for your query..."
+        "Retrieving spatial documentation for your query...",
+        "Querying vector database for faculty offices and staff info...",
+        "Scanning internal Markdown files for building topology details...",
+        "Retrieving dynamic campus policies and general information..."
     ]
 }
 
@@ -87,7 +146,7 @@ BACKEND_TO_UI_TOOLS = {
     "get_ambient_lights": "Lights",
     "get_diagnostics": "Diagnostics",
     "get_energy_infrastructure": "Energy",
-    "search_topology": "Topology"
+    "search_knowledge": "Knowledge"
 }
 
 # ==========================================

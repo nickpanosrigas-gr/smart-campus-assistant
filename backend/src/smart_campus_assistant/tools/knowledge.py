@@ -62,24 +62,24 @@ PersonEnum = Enum("PersonEnum", {sanitize_key("PERSON", p): p for p in LIVE_PEOP
 # ==========================================
 # 3. DEFINE THE PYDANTIC SCHEMA
 # ==========================================
-class TopologyQueryInput(BaseModel):
+class KnowledgeQueryInput(BaseModel):
     query: Optional[str] = Field(
         default="", 
         description="The semantic search query. E.g., 'What are the office hours?' Leave empty if only using filters."
     )
-    room_id: Optional[List[RoomEnum]] = Field(  # type: ignore
+    room_id: Optional[List[RoomEnum]] = Field(      # type: ignore
         None, 
         description="STRICT filter by exact room IDs. MUST BE FORMATTED AS A LIST. Example: ['2.1', '2.2']"
     )
-    floor: Optional[List[FloorEnum]] = Field(   # type: ignore
+    floor: Optional[List[FloorEnum]] = Field(       # type: ignore
         None, 
         description="STRICT filter by floor level. MUST BE FORMATTED AS A LIST. Example: [2] or [3]"
     )
-    doc_type: Optional[DocTypeEnum] = Field(    # type: ignore
+    doc_type: Optional[DocTypeEnum] = Field(        # type: ignore
         None, 
         description="STRICT filter by document type. Must be a single value, not a list. Example: 'room_info'"
     )
-    person: Optional[PersonEnum] = Field(   # type: ignore
+    person: Optional[PersonEnum] = Field(           # type: ignore
         None,
         description="STRICT filter by a specific person's name. Must be a single value, not a list."
     )
@@ -91,8 +91,8 @@ class TopologyQueryInput(BaseModel):
 # ==========================================
 # 4. DEFINE THE TOOL
 # ==========================================
-@tool("search_topology", args_schema=TopologyQueryInput)
-def search_topology(
+@tool("search_knowledge", args_schema=KnowledgeQueryInput)
+def search_knowledge(
     query: str, 
     room_id: Optional[List[RoomEnum]] = None,   # type: ignore
     floor: Optional[List[FloorEnum]] = None,    # type: ignore

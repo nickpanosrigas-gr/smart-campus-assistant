@@ -15,29 +15,24 @@ class Settings(BaseSettings):
     # Qdrant
     QDRANT_URL: str
     QDRANT_API_KEY: str
-    QDRANT_COLLECTION_NAME: str
-    
-    # Langfuse
-    LANGFUSE_SECRET_KEY: str
-    LANGFUSE_PUBLIC_KEY: str
-    LANGFUSE_HOST: str
+    QDRANT_COLLECTION_NAME: str = "smart-campus-assistant"
     
     # Local AI Endpoints
     OLLAMA_BASE_URL: str
-    OLLAMA_MODEL: str
-    OLLAMA_EMBED_MODEL: str
-    OLLAMA_NUM_CTX: int
+    OLLAMA_MODEL: str = "gemma4:12b"
+    OLLAMA_EMBED_MODEL: str = "nomic-embed-text:latest"
+    OLLAMA_NUM_CTX: int = 32000
     
     # Whisper
     WHISPER_API_URL: str
-    WHISPER_MODEL: str
+    WHISPER_MODEL: str = "large-v3-turbo"
     WHISPER_COMPUTE_TYPE: str = "int8_float16"
-    WHISPER_LANGUAGE: str
+    WHISPER_LANGUAGE: str = "en"
     
     # Astral
-    LATITUDE: float
-    LONGITUDE: float
-    TIMEZONE: str
+    LATITUDE: float = 37.9610
+    LONGITUDE: float = 23.7045
+    TIMEZONE: str = "Europe/Athens"
     
     # Auth Settings
     GOOGLE_CLIENT_ID: str
