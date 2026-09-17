@@ -132,6 +132,16 @@ export default function OccupancyGraph({ artifact }: OccupancyGraphProps) {
       });
     }
 
+    // Prevent SVG zero-height bounding box bug on horizontal flat lines
+    if (grid.length > 1) {
+      const firstPlot = grid[0].PlotValue;
+      const isCompletelyFlat = grid.every((pt: any) => pt.PlotValue === firstPlot);
+      if (isCompletelyFlat) {
+        // Microscopic delta prevents height=0 so SVG linearGradient renders
+        grid[grid.length - 1].PlotValue = firstPlot + 0.001;
+      }
+    }
+
     return grid;
   }, [artifact, isMotionOnly]);
 
@@ -303,10 +313,10 @@ export default function OccupancyGraph({ artifact }: OccupancyGraphProps) {
     return <circle cx={cx} cy={cy} r={6} fill={color} stroke="#0A0A0A" strokeWidth={2} />;
   };
 
-  const firstVal = formattedData[0]?.PlotValue;
-  const isFlat = formattedData.length > 0 && formattedData.every((pt: any) => pt.PlotValue === firstVal);
-  const strokeFill = isFlat 
-    ? (formattedData[0]?.Motion === 1 ? SENSOR_COLORS.critical : SENSOR_COLORS.good) 
+  const firstMotion = formattedData[0]?.Motion;
+  const isMotionUniform = formattedData.length > 0 && formattedData.every((pt: any) => pt.Motion === firstMotion);
+  const strokeFill = isMotionUniform
+    ? (firstMotion === 1 ? SENSOR_COLORS.critical : SENSOR_COLORS.good)
     : "url(#motionStrokeGradMinimal)";
 
   return (
