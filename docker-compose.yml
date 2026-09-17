@@ -10,6 +10,8 @@ services:
       - "${BACKEND_PORT}:8000"
     volumes:
       - /home/nick/docker/smart-campus-assistant/data:/data
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
     environment:
       - THINGSBOARD_BASE_URL
       - THINGSBOARD_USERNAME
