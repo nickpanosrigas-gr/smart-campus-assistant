@@ -946,7 +946,7 @@ if __name__ == "__main__":
     
     try:
         print("\n[Testing]")
-        summary, raw_data = get_climate.func(room="restaurant", timeframe="2h")
+        summary, raw_data = get_climate.func(room="restaurant", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
@@ -960,7 +960,14 @@ if __name__ == "__main__":
         print("\n" + "="*50)
         
         print("\n[Testing]")
-        summary, raw_data = get_climate.func(room="restaurant", timeframe="30d")
+        summary, raw_data = get_climate.func(room="building", timeframe="now")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("\n" + "="*50)
+        
+        print("\n[Testing]")
+        summary, raw_data = get_climate.func(room="building", timeframe="24h")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)

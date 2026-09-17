@@ -35,7 +35,6 @@ CONTEXT_NAMES = {
     "weekend_nonwork": "Weekends (Sat-Sun) Non-Working_Hours (22:00-08:00)"
 }
 
-# UNIFIED ROOM INPUT (Matches Telemetry Tools exactly)
 Rooms = Literal[
     'car_lift', 'front_lift', 'back_lift', 'hvac', 'entrance', 'restaurant', 
     '1.1', '1.2', 'kitchen', '2.1', '2.2', '2.3', '2.4', 
@@ -367,33 +366,29 @@ def get_energy_infrastructure(room: Rooms, timeframe: Timeframes) -> str:
 
     return "\n".join(output)
 
+# ==========================================
+# TEST EXECUTION BLOCK
+# ==========================================
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
-    print("Testing Energy Infrastructure Tool...")
-    print("=" * 60)
+    logger = logging.getLogger(__name__)
 
-    test_cases = [
-        {"room": "hvac", "timeframe": "now"},          
-        {"room": "hvac", "timeframe": "2h"},      
-        {"room": "hvac", "timeframe": "24h"},          
-        {"room": "hvac", "timeframe": "7d"},    
-        {"room": "hvac", "timeframe": "30d"},         
-        {"room": "hvac", "timeframe": "90d"}    
-    ]
+    print("Testing Energy Infrastructure Tool Invocations...")
+    print("-" * 50)
 
-    for case in test_cases:
-        room_val = case["room"]
-        tf = case["timeframe"]
-        
-        print(f"\n[TEST] Target: {room_val.upper()} | Timeframe: {tf}")
-        print("-" * 40)
-        
-        try:
-            result = get_energy_infrastructure.invoke({"room": room_val, "timeframe": tf})
-            print(result)
-        except Exception as e:
-            print(f"Error executing test for {room_val}/{tf}: {e}")
-        
-        print("\n" + "=" * 60)
+    try:
+        print("\n[Testing Energy Snapshot (Now)...]")
+        result0 = get_energy_infrastructure.func(room="hvac", timeframe="now")
+        print(result0)
 
-    print("\nTesting Complete.")
+        print("\n" + "=" * 50)
+
+        print("\n[Testing Energy Timeline (24h)...]")
+        result1 = get_energy_infrastructure.func(room="hvac", timeframe="24h")
+        print(result1)
+        
+        print("\n" + "-" * 50)
+        print("All Energy Infrastructure tool tests completed successfully.")
+
+    except Exception as e:
+        logger.error(f"\nError during execution: {e}", exc_info=True)

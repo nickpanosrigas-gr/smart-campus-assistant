@@ -211,7 +211,7 @@ if __name__ == "__main__":
     print("-" * 50)
     
     try:
-        print("\n[Testing...]")
+        print("\n[Testing Room Schedule...]")
         summary, raw_data = get_room_schedule.func(room="1.1", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
@@ -219,7 +219,7 @@ if __name__ == "__main__":
         
         print("\n" + "="*50)
         
-        print("\n[Testing...]")
+        print("\n[Testing Semester Schedule...]")
         summary2, raw_data2 = get_semester_schedule.func(semester="8", timeframe="now")
         print(summary2)
         print("\n[Artifact Payload]")
@@ -227,11 +227,19 @@ if __name__ == "__main__":
         
         print("\n" + "="*50)
         
-        print("\n[Testing...]")
-        summary3, raw_data3 = get_instructor_schedule.func(instructor_name="Eirini Liotou ", timeframe="week")
+        print("\n[Testing Instructor Schedule...]")
+        summary3, raw_data3 = get_instructor_schedule.func(instructor_name="Eirini Liotou", timeframe="week")
         print(summary3)
         print("\n[Artifact Payload]")
         print(raw_data3)
+
+        print("\n" + "="*50)
+
+        print("\n[Testing Course / Lesson Schedule...]")
+        summary4, raw_data4 = get_course_schedule.func(course_name="Object-Oriented Programming I", timeframe="week")
+        print(summary4)
+        print("\n[Artifact Payload]")
+        print(raw_data4)
 
         print("\n" + "-"*50)
         print("All Schedule tool tests completed successfully.")

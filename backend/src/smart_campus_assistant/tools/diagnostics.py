@@ -894,26 +894,32 @@ if __name__ == "__main__":
 
     try:
         print("\n[Testing]")
-        summary, raw_data = get_diagnostics.func(target="2.4", timeframe="2h")
+        summary, raw_data = get_diagnostics.func(target="restaurant", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("\n" + "-"*50)
         
         print("\n[Testing]")
-        summary, raw_data = get_diagnostics.func(target="2.4", timeframe="24h")
+        summary, raw_data = get_diagnostics.func(target="restaurant", timeframe="24h")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("\n" + "-"*50)
         
         print("\n[Testing]")
-        summary, raw_data = get_diagnostics.func(target="2.4", timeframe="30d")
+        summary, raw_data = get_diagnostics.func(target="building", timeframe="now")
         print(summary)
         print("\n[Artifact Payload]")
         print(raw_data)
         print("\n" + "-"*50)
-
+        
+        print("\n[Testing]")
+        summary, raw_data = get_diagnostics.func(target="building", timeframe="24h")
+        print(summary)
+        print("\n[Artifact Payload]")
+        print(raw_data)
+        print("\n" + "-"*50)
 
     except Exception as e:
         logger.error(f"\nError during execution: {e}", exc_info=True)

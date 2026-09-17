@@ -187,11 +187,11 @@ def get_greeting_by_time() -> str:
     hour = datetime.now(tz).hour
     
     if 5 <= hour < 12:
-        return "Καλημέρα"
+        return "Good morning"
     elif 12 <= hour < 20:
-        return "Καλησπέρα"
+        return "Good evening"
     else:
-        return "Καληνύχτα"
+        return "Good night"
 
 def format_room_targets(rooms: list[str], floor: str) -> str:
     """Formats multiple rooms into grammatically correct text with 'and'."""
