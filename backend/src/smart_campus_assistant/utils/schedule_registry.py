@@ -57,9 +57,19 @@ class ScheduleRegistry:
             target_days = [timeframe.capitalize()]
 
         for entry in self.schedule:
+            # Check room list
             if key == "room_ids":
                 if value not in entry.get("room_ids", []):
                     continue
+
+            # Check instructor (handles multi-instructor comma-separated entries)
+            elif key == "instructor_name":
+                raw_instructors = entry.get("instructor_name", "")
+                instructors = [inst.strip().lower() for inst in raw_instructors.split(",")]
+                if value.strip().lower() not in instructors:
+                    continue
+
+            # Standard exact-match fields (course_name, semester)
             elif entry.get(key) != value:
                 continue
 
@@ -162,7 +172,15 @@ class ScheduleRegistry:
     # --- UTILITY GETTERS (Global Extracts) ---
 
     def get_all_instructors(self) -> List[str]:
-        instructors = {entry.get("instructor_name") for entry in self.schedule if entry.get("instructor_name")}
+        """Extracts unique, individual instructor names by splitting comma-separated entries."""
+        instructors = set()
+        for entry in self.schedule:
+            raw_instructors = entry.get("instructor_name")
+            if raw_instructors:
+                for name in raw_instructors.split(","):
+                    cleaned = name.strip()
+                    if cleaned:
+                        instructors.add(cleaned)
         return sorted(list(instructors))
 
     def get_all_rooms(self) -> List[str]:
