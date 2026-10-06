@@ -108,7 +108,7 @@ def transcribe_audio(
                 logger.info("Model loaded into VRAM successfully!")
 
         logger.info(f"Transcribing {temp_file} in '{language}'...")
-        segments, info = model.transcribe(temp_file, beam_size=5, language=language) 
+        segments, info = model.transcribe(temp_file, beam_size=1, language=language, condition_on_previous_text=False, vad_filter=True) 
 
         transcription = "".join([segment.text + " " for segment in segments])
         logger.info("Transcription complete.")
