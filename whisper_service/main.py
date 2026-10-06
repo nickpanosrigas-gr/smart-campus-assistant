@@ -1,5 +1,6 @@
 import os
 import shutil
+import ctypes
 import gc
 import uuid
 import logging
@@ -24,17 +25,21 @@ current_model_size = None
 current_compute_type = None
 
 def unload_model():
-    """Safely drops the model from VRAM."""
+    """Safely drops the model from VRAM and returns host RAM to the OS."""
     global model, current_model_size, current_compute_type
     with model_lock:
         if model is not None:
-            logger.info("Keep-alive expired or manual unload requested. Unloading Whisper from VRAM...")
+            logger.info("Unloading Whisper model...")
             del model
             model = None
             current_model_size = None
             current_compute_type = None
-            gc.collect()  # Forces garbage collection
-            logger.info("VRAM flushed.")
+            gc.collect()
+            try:
+                ctypes.CDLL("libc.so.6").malloc_trim(0)
+            except Exception as e:
+                logger.warning(f"Failed to run malloc_trim: {e}")
+            logger.info("VRAM and host RAM flushed.")
 
 def reset_timer(keep_alive_seconds: int):
     """Resets the background countdown timer."""
