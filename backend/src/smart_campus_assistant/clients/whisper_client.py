@@ -12,7 +12,9 @@ class WhisperClient:
 
     def _get_base_url(self) -> str:
         url = settings.SPEECH_API_URL.rstrip("/")
-        if url.endswith("/transcribe"):
+        if url.endswith("/stt"):
+            url = url.removesuffix("/stt")
+        elif url.endswith("/transcribe"):
             url = url.removesuffix("/transcribe")
         return url
 
@@ -22,19 +24,16 @@ class WhisperClient:
         speech_service LXC container API for transcription.
         """
         try:
-            # Strip data URI header if present (e.g., "data:audio/webm;base64,...")
             if "," in base64_audio:
                 base64_audio = base64_audio.split(",")[1]
 
-            # Decode to raw bytes in memory
             audio_bytes = base64.b64decode(base64_audio)
             ext = file_extension.lstrip(".")
             filename = f"voice_message.{ext}"
 
-            transcribe_url = f"{self._get_base_url()}/transcribe"
+            stt_url = f"{self._get_base_url()}/stt"
             files = {'file': (filename, audio_bytes, f'audio/{ext}')}
             
-            # Include model_size, compute_type, and language from settings
             data = {
                 'model_size': settings.WHISPER_MODEL,
                 'compute_type': settings.WHISPER_COMPUTE_TYPE,
@@ -43,13 +42,12 @@ class WhisperClient:
             }
 
             logger.info(
-                f"[SPEECH SERVICE] Sending audio ({len(audio_bytes)} bytes) to API at {transcribe_url} "
+                f"[SPEECH SERVICE] Sending audio ({len(audio_bytes)} bytes) to API at {stt_url} "
                 f"[{settings.WHISPER_MODEL} | {settings.WHISPER_COMPUTE_TYPE}]..."
             )
 
-            # Wrap synchronous requests.post in a thread to avoid blocking the WebSocket event loop
             def fetch_transcription():
-                response = requests.post(transcribe_url, files=files, data=data, timeout=60)
+                response = requests.post(stt_url, files=files, data=data, timeout=60)
                 response.raise_for_status()
                 return response.json()
 
@@ -67,10 +65,7 @@ class WhisperClient:
             raise e
 
     async def manage_stt(self, keep_alive: int = 3600) -> dict:
-        """
-        Manages Faster-Whisper VRAM state on speech_service (/manage/stt).
-        Pass keep_alive=0 to immediately purge Whisper from VRAM.
-        """
+        """Manages Faster-Whisper VRAM state on speech_service (/manage/stt)."""
         try:
             manage_url = f"{self._get_base_url()}/manage/stt"
             payload = {

@@ -72,12 +72,20 @@ def sync_check_ollama(timeout_sec: int = 15):
         logger.warning(f"Ollama Health Check Failed: {e}")
         return False
 
+def _get_speech_base_url() -> str:
+    url = settings.SPEECH_API_URL.rstrip('/')
+    if url.endswith("/stt"):
+        url = url.removesuffix("/stt")
+    elif url.endswith("/transcribe"):
+        url = url.removesuffix("/transcribe")
+    return url
+
 def sync_check_whisper(timeout_sec: int = 15):
-    """Runs synchronously in a background thread to ping/warm Whisper."""
+    """Runs synchronously in a background thread to ping/warm Speech Service STT."""
     try:
-        whisper_manage_url = settings.SPEECH_API_URL.replace("/transcribe", "/manage")
+        manage_url = f"{_get_speech_base_url()}/manage/stt"
         res_whisper = requests.post(
-            whisper_manage_url, 
+            manage_url, 
             json={
                 "model_size": settings.WHISPER_MODEL, 
                 "compute_type": settings.WHISPER_COMPUTE_TYPE,
@@ -177,8 +185,8 @@ async def execute_unload():
                 except Exception: pass
                 
                 try:
-                    whisper_manage_url = settings.SPEECH_API_URL.replace("/transcribe", "/manage")
-                    requests.post(whisper_manage_url, json={"keep_alive": 0}, timeout=5)
+                    manage_url = f"{_get_speech_base_url()}/manage/stt"
+                    requests.post(manage_url, json={"keep_alive": 0}, timeout=5)
                 except Exception: pass
                 
             await asyncio.to_thread(free_models)

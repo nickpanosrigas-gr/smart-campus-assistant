@@ -247,9 +247,7 @@ class TTSRequest(BaseModel):
     keep_alive: int = 0
 
 @app.post("/manage/stt")
-@app.post("/manage", include_in_schema=False)
 def manage_stt(req: ManageSTTRequest):
-    """Keep-alive management endpoint for Whisper STT."""
     if req.keep_alive <= 0:
         unload_whisper()
         return {"status": "unloaded", "target": "stt"}
@@ -268,7 +266,6 @@ def manage_stt(req: ManageSTTRequest):
 
 @app.post("/manage/tts")
 def manage_tts(req: ManageTTSRequest):
-    """Keep-alive management endpoint for Kokoro-82M TTS."""
     if req.keep_alive <= 0:
         unload_kokoro()
         return {"status": "unloaded", "target": "tts"}
@@ -284,8 +281,8 @@ def manage_tts(req: ManageTTSRequest):
         "lang_code": req.lang_code
     }
 
-@app.post("/transcribe")
-def transcribe_audio(
+@app.post("/stt")
+def speech_to_text(
     file: UploadFile = File(...),
     model_size: str = Form("large-v3-turbo"),
     compute_type: str = Form("int8_float16"),

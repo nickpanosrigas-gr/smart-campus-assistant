@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     OLLAMA_EMBED_MODEL: str = "nomic-embed-text:latest"
     OLLAMA_NUM_CTX: int = 32000
     
-    # Speech Service (STT) - Accepts either SPEECH_API_URL or legacy WHISPER_API_URL
+    # Speech Service (STT)
     SPEECH_API_URL: str
     WHISPER_MODEL: str = "large-v3-turbo"
     WHISPER_COMPUTE_TYPE: str = "int8_float16"

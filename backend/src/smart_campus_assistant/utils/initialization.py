@@ -61,14 +61,15 @@ def check_ollama() -> bool:
 
 
 def check_whisper() -> bool:
-    """Verifies if the Speech Service (Whisper API) container is online."""
+    """Verifies if the Speech Service API container is online."""
     base_url = settings.SPEECH_API_URL.rstrip('/')
-    if base_url.endswith("/transcribe"):
+    if base_url.endswith("/stt"):
+        base_url = base_url.removesuffix("/stt")
+    elif base_url.endswith("/transcribe"):
         base_url = base_url.removesuffix("/transcribe")
 
     logger.info(f"Checking Speech Service API at {base_url}...")
     try:
-        # Check FastAPI openapi endpoint or docs
         response = requests.get(f"{base_url}/openapi.json", timeout=5)
         response.raise_for_status()
         logger.info(

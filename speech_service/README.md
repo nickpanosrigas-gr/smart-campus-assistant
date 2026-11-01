@@ -84,7 +84,7 @@ docker logs -f speech-api
 Uploads an audio file for transcription and keeps the model loaded in VRAM for the specified duration (`keep_alive=0` unloads immediately).
 
 ```bash
-curl -X POST "http://127.0.0.1:8000/transcribe" \
+curl -X POST "http://127.0.0.1:8000/stt" \
   -F "file=@audio.mp3" \
   -F "model_size=large-v3-turbo" \
   -F "compute_type=int8_float16" \
