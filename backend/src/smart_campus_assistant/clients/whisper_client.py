@@ -10,10 +10,16 @@ class WhisperClient:
     def __init__(self):
         pass
 
+    def _get_base_url(self) -> str:
+        url = settings.SPEECH_API_URL.rstrip("/")
+        if url.endswith("/transcribe"):
+            url = url.removesuffix("/transcribe")
+        return url
+
     async def transcribe_base64_audio(self, base64_audio: str, file_extension: str = "webm") -> str:
         """
         Decodes base64 audio and sends the binary stream directly to the 
-        Faster-Whisper LXC container API for transcription.
+        speech_service LXC container API for transcription.
         """
         try:
             # Strip data URI header if present (e.g., "data:audio/webm;base64,...")
@@ -25,7 +31,7 @@ class WhisperClient:
             ext = file_extension.lstrip(".")
             filename = f"voice_message.{ext}"
 
-            url = settings.WHISPER_API_URL
+            transcribe_url = f"{self._get_base_url()}/transcribe"
             files = {'file': (filename, audio_bytes, f'audio/{ext}')}
             
             # Include model_size, compute_type, and language from settings
@@ -37,27 +43,55 @@ class WhisperClient:
             }
 
             logger.info(
-                f"[WHISPER] Sending audio ({len(audio_bytes)} bytes) to LXC API at {url} "
+                f"[SPEECH SERVICE] Sending audio ({len(audio_bytes)} bytes) to API at {transcribe_url} "
                 f"[{settings.WHISPER_MODEL} | {settings.WHISPER_COMPUTE_TYPE}]..."
             )
 
             # Wrap synchronous requests.post in a thread to avoid blocking the WebSocket event loop
             def fetch_transcription():
-                response = requests.post(url, files=files, data=data, timeout=60)
+                response = requests.post(transcribe_url, files=files, data=data, timeout=60)
                 response.raise_for_status()
                 return response.json()
 
             result = await asyncio.to_thread(fetch_transcription)
             transcription = result.get("text", "").strip()
             
-            logger.info(f"[WHISPER] Transcription complete: '{transcription}'")
+            logger.info(f"[SPEECH SERVICE] Transcription complete: '{transcription}'")
             return transcription
 
         except requests.exceptions.RequestException as e:
-            logger.error(f"[WHISPER ERROR] API Network/HTTP error: {e}")
+            logger.error(f"[SPEECH SERVICE ERROR] API Network/HTTP error: {e}")
             raise e
         except Exception as e:
-            logger.error(f"[WHISPER ERROR] Audio transcription failed: {e}")
+            logger.error(f"[SPEECH SERVICE ERROR] Audio transcription failed: {e}")
+            raise e
+
+    async def manage_stt(self, keep_alive: int = 3600) -> dict:
+        """
+        Manages Faster-Whisper VRAM state on speech_service (/manage/stt).
+        Pass keep_alive=0 to immediately purge Whisper from VRAM.
+        """
+        try:
+            manage_url = f"{self._get_base_url()}/manage/stt"
+            payload = {
+                "model_size": settings.WHISPER_MODEL,
+                "compute_type": settings.WHISPER_COMPUTE_TYPE,
+                "keep_alive": keep_alive
+            }
+
+            def send_manage():
+                response = requests.post(manage_url, json=payload, timeout=10)
+                response.raise_for_status()
+                return response.json()
+
+            result = await asyncio.to_thread(send_manage)
+            logger.info(f"[SPEECH SERVICE] STT VRAM manage status: {result}")
+            return result
+        except requests.exceptions.RequestException as e:
+            logger.error(f"[SPEECH SERVICE ERROR] STT VRAM management network error: {e}")
+            raise e
+        except Exception as e:
+            logger.error(f"[SPEECH SERVICE ERROR] STT VRAM management failed: {e}")
             raise e
 
 whisper_client = WhisperClient()

@@ -1094,19 +1094,6 @@ if __name__ == "__main__":
         print(raw_data)
         print("-" * 50)
         
-        print("\n[Testing]")
-        summary, raw_data = get_occupancy.func(room="building", timeframe="now")
-        print(summary)
-        print("\n[Artifact Payload]")
-        print(raw_data)
-        print("-" * 50)
-        
-        print("\n[Testing]")
-        summary, raw_data = get_occupancy.func(room="building", timeframe="24h")
-        print(summary)
-        print("\n[Artifact Payload]")
-        print(raw_data)
-        print("-" * 50)
         
     except Exception as e:
         print(f"\nError during execution: {e}")

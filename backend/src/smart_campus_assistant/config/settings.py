@@ -1,6 +1,6 @@
 from typing import List
 from pathlib import Path
-from pydantic import Field, field_validator
+from pydantic import Field, AliasChoices, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent.parent
@@ -23,8 +23,8 @@ class Settings(BaseSettings):
     OLLAMA_EMBED_MODEL: str = "nomic-embed-text:latest"
     OLLAMA_NUM_CTX: int = 32000
     
-    # Whisper
-    WHISPER_API_URL: str
+    # Speech Service (STT)
+    SPEECH_API_URL: str
     WHISPER_MODEL: str = "large-v3-turbo"
     WHISPER_COMPUTE_TYPE: str = "int8_float16"
     WHISPER_LANGUAGE: str = "en"

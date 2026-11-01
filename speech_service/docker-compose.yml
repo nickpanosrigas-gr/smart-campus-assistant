@@ -1,12 +1,12 @@
 services:
-  whisper:
+  speech_service:
     build: .
-    image: whisper-service:latest
-    container_name: whisper-api
+    image: speech-service:latest
+    container_name: speech-api
     ports:
       - "8000:8000"
     volumes:
-      - whisper_cache:/root/.cache/huggingface
+      - speech_cache:/models
     restart: unless-stopped
     deploy:
       resources:
@@ -17,4 +17,4 @@ services:
               capabilities: [gpu]
 
 volumes:
-  whisper_cache:
+  speech_cache:
