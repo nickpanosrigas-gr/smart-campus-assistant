@@ -1,10 +1,16 @@
+import os
 from typing import List
 from pathlib import Path
 from pydantic import Field, AliasChoices, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent.parent
-ENV_FILE_PATH = ROOT_DIR.parent / ".env"
+
+# Check /app/.env first (inside Docker), fallback to project root .env (local dev)
+if (ROOT_DIR / ".env").exists():
+    ENV_FILE_PATH = ROOT_DIR / ".env"
+else:
+    ENV_FILE_PATH = ROOT_DIR.parent / ".env"
 
 class Settings(BaseSettings):
     # ThingsBoard
@@ -23,8 +29,11 @@ class Settings(BaseSettings):
     OLLAMA_EMBED_MODEL: str = "nomic-embed-text:latest"
     OLLAMA_NUM_CTX: int = 32000
     
-    # Speech Service (STT)
-    SPEECH_API_URL: str
+    # Speech Service (STT) - Accepts either SPEECH_API_URL or legacy WHISPER_API_URL
+    SPEECH_API_URL: str = Field(
+        default="http://localhost:8000",
+        validation_alias=AliasChoices("SPEECH_API_URL", "WHISPER_API_URL")
+    )
     WHISPER_MODEL: str = "large-v3-turbo"
     WHISPER_COMPUTE_TYPE: str = "int8_float16"
     WHISPER_LANGUAGE: str = "en"
@@ -43,12 +52,15 @@ class Settings(BaseSettings):
     # Defaults to the root /data directory for local development
     DATA_DIR: str = str(ROOT_DIR.parent / "data")
     
-    # Read from the .env file in the root directory
+    # Backward compatibility alias
+    @property
+    def WHISPER_API_URL(self) -> str:
+        return self.SPEECH_API_URL
+
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE_PATH), 
         env_file_encoding="utf-8", 
         extra="ignore"
     )
     
-# Instantiate settings to be imported across the project
 settings = Settings()
