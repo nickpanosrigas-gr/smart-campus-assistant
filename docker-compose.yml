@@ -27,7 +27,7 @@ services:
       - OLLAMA_EMBED_MODEL
       - OLLAMA_NUM_CTX
       - OLLAMA_TEMPERATURE
-      - WHISPER_API_URL
+      - SPEECH_API_URL
       - WHISPER_MODEL
       - WHISPER_LANGUAGE
       - LATITUDE
