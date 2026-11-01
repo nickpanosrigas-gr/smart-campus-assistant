@@ -30,10 +30,7 @@ class Settings(BaseSettings):
     OLLAMA_NUM_CTX: int = 32000
     
     # Speech Service (STT) - Accepts either SPEECH_API_URL or legacy WHISPER_API_URL
-    SPEECH_API_URL: str = Field(
-        default="http://localhost:8000",
-        validation_alias=AliasChoices("SPEECH_API_URL", "WHISPER_API_URL")
-    )
+    SPEECH_API_URL: str
     WHISPER_MODEL: str = "large-v3-turbo"
     WHISPER_COMPUTE_TYPE: str = "int8_float16"
     WHISPER_LANGUAGE: str = "en"
@@ -52,10 +49,6 @@ class Settings(BaseSettings):
     # Defaults to the root /data directory for local development
     DATA_DIR: str = str(ROOT_DIR.parent / "data")
     
-    # Backward compatibility alias
-    @property
-    def WHISPER_API_URL(self) -> str:
-        return self.SPEECH_API_URL
 
     model_config = SettingsConfigDict(
         env_file=str(ENV_FILE_PATH), 
