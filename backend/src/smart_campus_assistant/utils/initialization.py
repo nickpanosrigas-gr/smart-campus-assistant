@@ -66,7 +66,7 @@ def check_ollama() -> bool:
 
 def check_whisper() -> bool:
     """Verifies if the Whisper API container is online."""
-    base_whisper_url = settings.WHISPER_API_URL.split("/transcribe")[0].rstrip('/')
+    base_whisper_url = settings.SPEECH_API_URL.split("/transcribe")[0].rstrip('/')
     logger.info(f"Checking Whisper API at {base_whisper_url}...")
     try:
         response = requests.get(f"{base_whisper_url}/docs", timeout=5)
@@ -77,7 +77,7 @@ def check_whisper() -> bool:
         return True
     except RequestException as e:
         try:
-            requests.get(settings.WHISPER_API_URL, timeout=5)
+            requests.get(settings.SPEECH_API_URL, timeout=5)
             logger.info(
                 f"Whisper API is online (Model: {settings.WHISPER_MODEL}, Compute: {settings.WHISPER_COMPUTE_TYPE})."
             )
