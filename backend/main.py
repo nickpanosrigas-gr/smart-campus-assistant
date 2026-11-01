@@ -75,7 +75,7 @@ def sync_check_ollama(timeout_sec: int = 15):
 def sync_check_whisper(timeout_sec: int = 15):
     """Runs synchronously in a background thread to ping/warm Whisper."""
     try:
-        whisper_manage_url = settings.WHISPER_API_URL.replace("/transcribe", "/manage")
+        whisper_manage_url = settings.SPEECH_API_URL.replace("/transcribe", "/manage")
         res_whisper = requests.post(
             whisper_manage_url, 
             json={
@@ -177,7 +177,7 @@ async def execute_unload():
                 except Exception: pass
                 
                 try:
-                    whisper_manage_url = settings.WHISPER_API_URL.replace("/transcribe", "/manage")
+                    whisper_manage_url = settings.SPEECH_API_URL.replace("/transcribe", "/manage")
                     requests.post(whisper_manage_url, json={"keep_alive": 0}, timeout=5)
                 except Exception: pass
                 
