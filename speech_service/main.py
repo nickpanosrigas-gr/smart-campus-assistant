@@ -126,7 +126,7 @@ current_kokoro_lang = None
 
 def _ensure_whisper_worker(model_size: str, compute_type: str):
     global whisper_proc, whisper_cmd_q, whisper_res_q, current_whisper_size, current_whisper_compute
-    if whisper_proc is not None and (current_whisper_size != model_size or current_compute_type != compute_type):
+    if whisper_proc is not None and (current_whisper_size != model_size or current_whisper_compute != compute_type):
         unload_whisper()
 
     if whisper_proc is None or not whisper_proc.is_alive():
